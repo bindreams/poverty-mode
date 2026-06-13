@@ -9,11 +9,14 @@ pub mod error;
 pub mod logging;
 pub mod proxy;
 
-// `pub use error::{Error, Result};` is added in Task M1.2, once `error.rs`
-// defines those items (the M1.1 `error.rs` is a doc-comment-only stub).
+pub use error::{Error, Result};
 
-/// Binary entry point. Finalized in Task M1.6 to parse the CLI, init tracing,
-/// and dispatch. Until then it is a fail-loud stub so the crate compiles.
+/// Binary entry point. Parses the CLI, initializes tracing from the global
+/// `--log-file`, then dispatches the chosen subcommand. `main.rs` calls only
+/// this (R1: never `mod X` in `main.rs`).
 pub fn run() -> anyhow::Result<()> {
-    Err(anyhow::anyhow!("run() not yet wired"))
+    use clap::Parser;
+    let cli = cli::Cli::parse();
+    logging::init_tracing(cli.log_file.as_deref())?;
+    cli::dispatch(cli)
 }
