@@ -128,9 +128,13 @@ pub struct CommonProxyArgs {
     #[arg(long, value_name = "ULID")]
     pub run_id: String,
 
-    /// Tee request/response bodies to this log file.
+    /// Tee request/response bodies to this log file. Distinct from the global
+    /// `--log-file` (tracing destination): this is the per-proxy body-tee sink
+    /// that M3 wires into `EngineConfig.log_file` (R10). The field name (hence
+    /// the clap arg id) is `body_log_file`, not `log_file`, so it does not merge
+    /// with the global `Cli::log_file` arg when both appear on a `proxy` call.
     #[arg(long, value_name = "PATH")]
-    pub log_file: Option<PathBuf>,
+    pub body_log_file: Option<PathBuf>,
 }
 
 /// pino-only transform flags (flattened onto [`ProxyArgs`]; read by the

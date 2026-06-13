@@ -198,6 +198,72 @@ fn rejects_invalid_tail_ttl() {
 }
 
 #[test]
+fn proxy_body_log_file_is_independent_of_global_log_file() {
+    // The global `--log-file` (tracing destination, `Cli.log_file`) and the
+    // per-proxy body-tee (`CommonProxyArgs`) MUST be distinct sinks (preamble
+    // R10: `EngineConfig.log_file` is a separate body-tee log). They previously
+    // collided on the same clap arg id `log_file` / long flag `--log-file`, so a
+    // single `--log-file` on a `proxy` invocation populated BOTH fields. The
+    // body-tee now has its own `--body-log-file` flag; the two are independent.
+    let cli = Cli::try_parse_from([
+        "poverty-mode",
+        "--log-file",
+        "/tmp/tracing.log",
+        "proxy",
+        "pino",
+        "--listen",
+        "127.0.0.1:0",
+        "--upstream",
+        "https://api.anthropic.com",
+        "--run-id",
+        "x",
+        "--body-log-file",
+        "/tmp/bodies.log",
+    ])
+    .expect("proxy argv with both log flags should parse");
+    assert_eq!(cli.log_file.as_deref(), Some(std::path::Path::new("/tmp/tracing.log")));
+    match cli.command {
+        Command::Proxy(args) => {
+            assert_eq!(
+                args.common.body_log_file.as_deref(),
+                Some(std::path::Path::new("/tmp/bodies.log"))
+            );
+        }
+        other => panic!("expected Proxy, got {other:?}"),
+    }
+}
+
+#[test]
+fn proxy_body_log_file_does_not_set_global_log_file() {
+    // A `--body-log-file` on a `proxy` invocation sets ONLY the body-tee field;
+    // the global tracing destination stays unset.
+    let cli = Cli::try_parse_from([
+        "poverty-mode",
+        "proxy",
+        "pino",
+        "--listen",
+        "127.0.0.1:0",
+        "--upstream",
+        "https://api.anthropic.com",
+        "--run-id",
+        "x",
+        "--body-log-file",
+        "/tmp/bodies.log",
+    ])
+    .expect("proxy argv with body-log-file should parse");
+    assert_eq!(cli.log_file, None);
+    match cli.command {
+        Command::Proxy(args) => {
+            assert_eq!(
+                args.common.body_log_file.as_deref(),
+                Some(std::path::Path::new("/tmp/bodies.log"))
+            );
+        }
+        other => panic!("expected Proxy, got {other:?}"),
+    }
+}
+
+#[test]
 fn dispatch_run_returns_not_implemented() {
     let cli = Cli::try_parse_from(["poverty-mode", "run", "--", "claude"]).unwrap();
     let err = dispatch(cli).unwrap_err();
