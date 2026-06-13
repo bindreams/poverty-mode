@@ -20,6 +20,39 @@ pub struct ProxyEntry {
     pub settings: ProxySettings,
 }
 
+/// One proxy resolved for an actual run: its identity and the settings to apply,
+/// sourced from the config entry for that proxy.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResolvedProxy {
+    pub name: ProxyName,
+    pub settings: ProxySettings,
+}
+
+impl ProxyName {
+    /// Parse a lowercase proxy name as used in CSV chains / config.
+    fn parse_csv_token(s: &str) -> anyhow::Result<ProxyName> {
+        match s {
+            "pino" => Ok(ProxyName::Pino),
+            "headroom" => Ok(ProxyName::Headroom),
+            "central" => Ok(ProxyName::Central),
+            other => anyhow::bail!(
+                "unknown proxy name {other:?} (expected pino, headroom, or central)"
+            ),
+        }
+    }
+}
+
+fn parse_chain_csv(csv: &str) -> anyhow::Result<Vec<ProxyName>> {
+    let trimmed = csv.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    trimmed
+        .split(',')
+        .map(|tok| ProxyName::parse_csv_token(tok.trim()))
+        .collect()
+}
+
 /// Per-proxy settings. `untagged` so the `settings:` mapping is matched
 /// structurally; `deny_unknown_fields` on each variant's struct (declared on the
 /// settings types in `src/proxy/{pino,headroom}.rs` and on `CentralSettings`
@@ -120,6 +153,147 @@ impl Config {
             .map_err(|e| anyhow::anyhow!("serializing config: {e}"))?;
         crate::paths::atomic_write(&path, yaml.as_bytes())?;
         Ok(())
+    }
+
+    /// Resolve the ordered, enabled chain to run.
+    ///
+    /// Precedence: `cli_proxies` (explicit) > `env_chain` (POVERTY_PROXY_CHAIN
+    /// CSV) > config-file order (enabled entries only).
+    ///
+    /// `central` must be last on every source: the config-file source is checked
+    /// via `validate()` (which also enforces name/settings agreement), and the
+    /// explicit cli/env order is checked directly (a non-last central requested
+    /// explicitly is a hard error). For cli/env sources every requested name must
+    /// have a matching entry in this config (settings come from there) and names
+    /// must be unique.
+    pub fn resolve_chain(
+        &self,
+        cli_proxies: Option<&[ProxyName]>,
+        env_chain: Option<&str>,
+    ) -> anyhow::Result<Vec<ResolvedProxy>> {
+        // The config's own invariants (name/settings agreement, central-last) must
+        // hold for EVERY source, including a directly-constructed in-memory Config
+        // resolved via the file branch. Validate up front so the file source can
+        // never silently yield a central-not-last chain.
+        self.validate()?;
+
+        // 1. Pick the requested order by precedence.
+        let requested: Vec<ProxyName> = if let Some(cli) = cli_proxies {
+            cli.to_vec()
+        } else if let Some(env) = env_chain {
+            parse_chain_csv(env)?
+        } else {
+            // Config-file source: enabled entries in file order (central already
+            // validated last by self.validate()).
+            return Ok(self
+                .proxies
+                .iter()
+                .filter(|e| e.enabled)
+                .map(|e| ResolvedProxy {
+                    name: e.name,
+                    settings: e.settings.clone(),
+                })
+                .collect());
+        };
+
+        // 2. Reject duplicates.
+        let mut seen = std::collections::HashSet::new();
+        for name in &requested {
+            if !seen.insert(*name) {
+                anyhow::bail!("duplicate proxy {:?} in requested chain", name);
+            }
+        }
+
+        // 3. Central-last rule for explicit requests: a central anywhere but the
+        //    final slot is a user error.
+        if let Some(pos) = requested.iter().position(|n| n.must_be_last()) {
+            if pos != requested.len() - 1 {
+                anyhow::bail!(
+                    "central must be last in the chain; it was requested at position {} of {}",
+                    pos + 1,
+                    requested.len()
+                );
+            }
+        }
+
+        // 4. Map each requested name to its config settings (error if absent).
+        let mut resolved = Vec::with_capacity(requested.len());
+        for name in requested {
+            let entry = self
+                .proxies
+                .iter()
+                .find(|e| e.name == name)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "proxy {:?} was requested but has no entry in the config (no settings available)",
+                        name
+                    )
+                })?;
+            resolved.push(ResolvedProxy {
+                name,
+                settings: entry.settings.clone(),
+            });
+        }
+        Ok(resolved)
+    }
+
+    /// Persist a resolved chain back to disk: the canonical R22/R23i entry point
+    /// that M6's `--save` calls. Chain members become enabled (in chain order,
+    /// carrying the chain's settings); every other known proxy from the current
+    /// config follows disabled, keeping its existing settings so a later re-enable
+    /// does not lose user customizations. `central` is forced into the LAST slot
+    /// regardless of which bucket it fell in, so the written file always satisfies
+    /// the central-last invariant. The result is validated and atomically written
+    /// via `save`.
+    pub fn save_resolved_chain(&self, chain: &[ResolvedProxy]) -> anyhow::Result<()> {
+        let in_chain: std::collections::HashSet<ProxyName> =
+            chain.iter().map(|r| r.name).collect();
+
+        // Enabled chain members, in chain order; central deferred to the tail.
+        let mut proxies: Vec<ProxyEntry> = Vec::new();
+        let mut central: Option<ProxyEntry> = None;
+        for r in chain {
+            let entry = ProxyEntry {
+                name: r.name,
+                enabled: true,
+                settings: r.settings.clone(),
+            };
+            if r.name.must_be_last() {
+                central = Some(entry);
+            } else {
+                proxies.push(entry);
+            }
+        }
+
+        // Remaining known proxies (current config's relative order), disabled,
+        // keeping their existing settings; central among them is also deferred.
+        for entry in &self.proxies {
+            if in_chain.contains(&entry.name) {
+                continue;
+            }
+            let disabled = ProxyEntry {
+                name: entry.name,
+                enabled: false,
+                settings: entry.settings.clone(),
+            };
+            if entry.name.must_be_last() {
+                central = Some(disabled);
+            } else {
+                proxies.push(disabled);
+            }
+        }
+
+        // Central is always last (if the config knows about it at all).
+        if let Some(c) = central {
+            proxies.push(c);
+        }
+
+        let next = Config {
+            version: self.version,
+            proxies,
+            defaults: self.defaults.clone(),
+        };
+        next.save()
     }
 
     /// Validate the config invariants: each entry's settings variant matches its

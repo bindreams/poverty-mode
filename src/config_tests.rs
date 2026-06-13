@@ -338,3 +338,283 @@ fn save_writes_config_file_0600_on_unix() {
         & 0o777;
     assert_eq!(mode, 0o600, "config file must be owner-only on POSIX, got {mode:o}");
 }
+
+fn enabled_default() -> Config {
+    // pino + headroom + central all present and enabled, so file-order resolution
+    // returns all three (central last).
+    let mut c = Config::default_all_disabled();
+    for e in &mut c.proxies {
+        e.enabled = true;
+    }
+    c
+}
+
+fn names_of(chain: &[ResolvedProxy]) -> Vec<ProxyName> {
+    chain.iter().map(|r| r.name).collect()
+}
+
+#[test]
+fn resolve_uses_config_file_order_when_no_cli_no_env() {
+    let cfg = enabled_default();
+    let chain = cfg.resolve_chain(None, None).unwrap();
+    assert_eq!(names_of(&chain), vec![ProxyName::Pino, ProxyName::Headroom, ProxyName::Central]);
+}
+
+#[test]
+fn resolve_file_order_skips_disabled() {
+    let mut cfg = Config::default_all_disabled();
+    cfg.proxies[0].enabled = true; // pino
+    cfg.proxies[1].enabled = false; // headroom off
+    cfg.proxies[2].enabled = true; // central
+    let chain = cfg.resolve_chain(None, None).unwrap();
+    assert_eq!(names_of(&chain), vec![ProxyName::Pino, ProxyName::Central]);
+}
+
+#[test]
+fn resolve_empty_when_nothing_enabled() {
+    let cfg = Config::default_all_disabled(); // all disabled
+    let chain = cfg.resolve_chain(None, None).unwrap();
+    assert!(chain.is_empty());
+}
+
+#[test]
+fn resolve_cli_overrides_env_and_file() {
+    let cfg = enabled_default();
+    // CLI says headroom only; env says pino,central; file says all three.
+    let chain = cfg
+        .resolve_chain(Some(&[ProxyName::Headroom]), Some("pino,central"))
+        .unwrap();
+    assert_eq!(names_of(&chain), vec![ProxyName::Headroom]);
+}
+
+#[test]
+fn resolve_env_overrides_file_when_no_cli() {
+    let cfg = enabled_default();
+    let chain = cfg.resolve_chain(None, Some("headroom,pino")).unwrap();
+    // env order is honored (central not requested): headroom then pino.
+    assert_eq!(names_of(&chain), vec![ProxyName::Headroom, ProxyName::Pino]);
+}
+
+#[test]
+fn resolve_env_empty_string_is_empty_chain() {
+    let cfg = enabled_default();
+    let chain = cfg.resolve_chain(None, Some("")).unwrap();
+    assert!(chain.is_empty());
+}
+
+#[test]
+fn resolve_env_trims_whitespace_around_names() {
+    let cfg = enabled_default();
+    let chain = cfg.resolve_chain(None, Some("  pino , headroom ")).unwrap();
+    assert_eq!(names_of(&chain), vec![ProxyName::Pino, ProxyName::Headroom]);
+}
+
+#[test]
+fn resolve_cli_carries_settings_from_config_entry() {
+    let mut cfg = enabled_default();
+    // Customize pino settings in the config.
+    cfg.proxies[0].settings = ProxySettings::Pino(PinoSettings {
+        auto_cache: false,
+        tail_ttl: TailTtl::OneHour,
+        drop_tools: vec!["Bash".to_string()],
+        strip_ansi: false,
+        model_override: Some("claude-z".to_string()),
+    });
+    let chain = cfg.resolve_chain(Some(&[ProxyName::Pino]), None).unwrap();
+    assert_eq!(chain.len(), 1);
+    match &chain[0].settings {
+        ProxySettings::Pino(p) => {
+            assert_eq!(p.auto_cache, false);
+            assert_eq!(p.tail_ttl, TailTtl::OneHour);
+            assert_eq!(p.drop_tools, vec!["Bash".to_string()]);
+            assert_eq!(p.strip_ansi, false);
+            assert_eq!(p.model_override, Some("claude-z".to_string()));
+        }
+        other => panic!("expected pino settings, got {other:?}"),
+    }
+}
+
+#[test]
+fn resolve_coerces_central_last_when_cli_lists_it_last_already() {
+    let cfg = enabled_default();
+    let chain = cfg
+        .resolve_chain(Some(&[ProxyName::Pino, ProxyName::Central]), None)
+        .unwrap();
+    assert_eq!(names_of(&chain), vec![ProxyName::Pino, ProxyName::Central]);
+}
+
+#[test]
+fn resolve_errors_when_cli_requests_central_not_last() {
+    let cfg = enabled_default();
+    let err = cfg
+        .resolve_chain(Some(&[ProxyName::Central, ProxyName::Pino]), None)
+        .unwrap_err();
+    let msg = err.to_string().to_lowercase();
+    assert!(msg.contains("central"), "msg: {msg}");
+    assert!(msg.contains("last"), "msg: {msg}");
+}
+
+#[test]
+fn resolve_errors_when_env_requests_central_not_last() {
+    let cfg = enabled_default();
+    let err = cfg.resolve_chain(None, Some("central,pino")).unwrap_err();
+    let msg = err.to_string().to_lowercase();
+    assert!(msg.contains("central"));
+    assert!(msg.contains("last"));
+}
+
+#[test]
+fn resolve_errors_on_duplicate_in_cli() {
+    let cfg = enabled_default();
+    let err = cfg
+        .resolve_chain(Some(&[ProxyName::Pino, ProxyName::Pino]), None)
+        .unwrap_err();
+    assert!(err.to_string().to_lowercase().contains("duplicate"));
+}
+
+#[test]
+fn resolve_errors_on_duplicate_in_env() {
+    let cfg = enabled_default();
+    let err = cfg.resolve_chain(None, Some("pino,pino")).unwrap_err();
+    assert!(err.to_string().to_lowercase().contains("duplicate"));
+}
+
+#[test]
+fn resolve_errors_on_unknown_env_name() {
+    let cfg = enabled_default();
+    let err = cfg.resolve_chain(None, Some("pino,bogus")).unwrap_err();
+    assert!(err.to_string().to_lowercase().contains("bogus"));
+}
+
+#[test]
+fn resolve_errors_when_requested_central_missing_from_config() {
+    // Config with no central entry, but CLI requests central => no settings.
+    let mut cfg = Config::default_all_disabled();
+    cfg.proxies.retain(|e| e.name != ProxyName::Central);
+    let err = cfg.resolve_chain(Some(&[ProxyName::Central]), None).unwrap_err();
+    let msg = err.to_string().to_lowercase();
+    assert!(msg.contains("central"), "msg: {msg}");
+}
+
+#[test]
+fn resolve_errors_when_requested_pino_missing_from_config() {
+    // Config trimmed to only headroom+central, but CLI requests pino => no settings.
+    let mut cfg = enabled_default();
+    cfg.proxies.retain(|e| e.name != ProxyName::Pino);
+    let err = cfg.resolve_chain(Some(&[ProxyName::Pino]), None).unwrap_err();
+    let msg = err.to_string().to_lowercase();
+    assert!(msg.contains("pino"), "msg: {msg}");
+}
+
+#[test]
+fn resolve_file_source_rejects_central_not_last_invariant() {
+    // A directly-constructed Config (no load/validate) with central NOT last and
+    // everything enabled must NOT silently yield a central-not-last chain from the
+    // file source. resolve_chain validates the invariant on every source path.
+    let mut cfg = enabled_default();
+    cfg.proxies.rotate_right(1); // central -> front
+    assert_eq!(cfg.proxies[0].name, ProxyName::Central);
+
+    let err = cfg.resolve_chain(None, None).unwrap_err();
+    let msg = err.to_string().to_lowercase();
+    assert!(msg.contains("central"), "msg: {msg}");
+    assert!(msg.contains("last"), "msg: {msg}");
+}
+
+#[test]
+fn resolve_file_source_rejects_settings_name_mismatch_invariant() {
+    // A directly-constructed Config where pino's entry carries headroom settings
+    // must be rejected by the file source too (validate runs on every path).
+    let mut cfg = enabled_default();
+    cfg.proxies[0].settings = ProxySettings::Headroom(HeadroomSettings { compression: true });
+    let err = cfg.resolve_chain(None, None).unwrap_err();
+    let msg = err.to_string().to_lowercase();
+    assert!(msg.contains("pino"), "msg: {msg}");
+    assert!(
+        msg.contains("settings") || msg.contains("mismatch"),
+        "msg: {msg}"
+    );
+}
+
+#[test]
+fn save_resolved_chain_rewrites_order_and_enabled_set() {
+    // Start from a config where the file order is pino,headroom,central and only
+    // pino is enabled; persist a *resolved* chain of [headroom, central]. The
+    // on-disk config lists the enabled non-central chain members first (headroom),
+    // then the disabled remainder (pino), with central forced LAST so the
+    // central-last invariant holds. Exactly the chain members are enabled.
+    let _g = ConfigHomeGuard::new();
+    let mut cfg = Config::default_all_disabled();
+    cfg.proxies[0].enabled = true; // pino enabled in the original
+
+    let chain = cfg
+        .resolve_chain(Some(&[ProxyName::Headroom, ProxyName::Central]), None)
+        .unwrap();
+    cfg.save_resolved_chain(&chain).unwrap();
+
+    let reloaded = Config::load_or_create().unwrap();
+    let names: Vec<ProxyName> = reloaded.proxies.iter().map(|e| e.name).collect();
+    assert_eq!(
+        names,
+        vec![ProxyName::Headroom, ProxyName::Pino, ProxyName::Central]
+    );
+    let enabled: Vec<(ProxyName, bool)> =
+        reloaded.proxies.iter().map(|e| (e.name, e.enabled)).collect();
+    assert_eq!(
+        enabled,
+        vec![
+            (ProxyName::Headroom, true),
+            (ProxyName::Pino, false),
+            (ProxyName::Central, true),
+        ]
+    );
+    // central-last invariant holds, so the reload validated cleanly (above).
+    assert_eq!(reloaded.proxies.last().unwrap().name, ProxyName::Central);
+}
+
+#[test]
+fn save_resolved_chain_carries_resolved_settings_and_reloads_equal() {
+    let _g = ConfigHomeGuard::new();
+    let mut cfg = enabled_default();
+    cfg.proxies[0].settings = ProxySettings::Pino(PinoSettings {
+        auto_cache: false,
+        tail_ttl: TailTtl::OneHour,
+        drop_tools: vec!["Bash".to_string()],
+        strip_ansi: false,
+        model_override: Some("claude-z".to_string()),
+    });
+    let chain = cfg.resolve_chain(Some(&[ProxyName::Pino]), None).unwrap();
+    cfg.save_resolved_chain(&chain).unwrap();
+
+    let reloaded = Config::load_or_create().unwrap();
+    let pino = reloaded
+        .proxies
+        .iter()
+        .find(|e| e.name == ProxyName::Pino)
+        .unwrap();
+    assert_eq!(pino.enabled, true);
+    match &pino.settings {
+        ProxySettings::Pino(p) => {
+            assert_eq!(p.model_override, Some("claude-z".to_string()));
+            assert_eq!(p.tail_ttl, TailTtl::OneHour);
+        }
+        other => panic!("expected pino settings, got {other:?}"),
+    }
+    // The persisted file is valid (central-last holds) and reloads without error.
+    assert_eq!(reloaded, Config::load_or_create().unwrap());
+}
+
+#[test]
+fn save_resolved_chain_keeps_central_last() {
+    // A chain that ends in central must produce a central-last on-disk config that
+    // passes validation on reload.
+    let _g = ConfigHomeGuard::new();
+    let cfg = enabled_default();
+    let chain = cfg
+        .resolve_chain(Some(&[ProxyName::Pino, ProxyName::Central]), None)
+        .unwrap();
+    cfg.save_resolved_chain(&chain).unwrap();
+
+    let reloaded = Config::load_or_create().unwrap();
+    assert_eq!(reloaded.proxies.last().unwrap().name, ProxyName::Central);
+}
