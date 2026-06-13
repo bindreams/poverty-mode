@@ -14,6 +14,24 @@ use serde::{Deserialize, Serialize};
 pub mod headroom;
 pub mod pino;
 
+/// True for `/v1/messages`, `/v1/messages/count_tokens`, and either of those
+/// followed by a `?query`. Mirrors the upstream pino `isMessagesPath`
+/// (reference/pino/src/server.js:27-34).
+pub fn is_messages_path(path: &str) -> bool {
+    let base = path.split('?').next().unwrap_or("");
+    base == "/v1/messages" || base == "/v1/messages/count_tokens"
+}
+
+/// True when the `content-type` header contains `application/json`
+/// (case-insensitive). Mirrors the reference `isJsonRequest`.
+pub fn is_json_content_type(headers: &http::HeaderMap) -> bool {
+    headers
+        .get(http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_ascii_lowercase().contains("application/json"))
+        .unwrap_or(false)
+}
+
 /// First-party (compiled-in) vs external (downloaded) proxy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProxyKind {

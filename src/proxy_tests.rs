@@ -1,4 +1,50 @@
 use super::*;
+use http::HeaderMap;
+
+// ---- Request classification helpers (M3.1) ----
+
+#[test]
+fn messages_path_matches_exact_and_query_and_count_tokens() {
+    assert!(is_messages_path("/v1/messages"));
+    assert!(is_messages_path("/v1/messages?beta=true"));
+    assert!(is_messages_path("/v1/messages/count_tokens"));
+    assert!(is_messages_path("/v1/messages/count_tokens?x=1"));
+}
+
+#[test]
+fn messages_path_rejects_other_paths() {
+    assert!(!is_messages_path("/v1/complete"));
+    assert!(!is_messages_path("/__pm/health"));
+    assert!(!is_messages_path("/v1/messagesX"));
+    assert!(!is_messages_path("/v1/messages/count_tokensX"));
+    assert!(!is_messages_path("/"));
+    assert!(!is_messages_path(""));
+}
+
+#[test]
+fn json_content_type_detection() {
+    let mut h = HeaderMap::new();
+    h.insert("content-type", "application/json".parse().unwrap());
+    assert!(is_json_content_type(&h));
+
+    let mut h2 = HeaderMap::new();
+    h2.insert(
+        "content-type",
+        "application/json; charset=utf-8".parse().unwrap(),
+    );
+    assert!(is_json_content_type(&h2));
+
+    let mut h3 = HeaderMap::new();
+    h3.insert("content-type", "APPLICATION/JSON".parse().unwrap());
+    assert!(is_json_content_type(&h3), "case-insensitive");
+
+    let mut h4 = HeaderMap::new();
+    h4.insert("content-type", "text/event-stream".parse().unwrap());
+    assert!(!is_json_content_type(&h4));
+
+    let empty = HeaderMap::new();
+    assert!(!is_json_content_type(&empty));
+}
 
 // ---- ProxyName ----
 
