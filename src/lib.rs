@@ -5,6 +5,7 @@
 //! by adding `mod` to `main.rs`. Integration tests `use poverty_mode::...`.
 
 pub mod cli;
+pub mod config;
 pub mod error;
 pub mod logging;
 pub mod paths;
