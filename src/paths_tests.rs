@@ -158,3 +158,88 @@ fn new_run_id_has_fixed_canonical_length() {
     assert_eq!(b.len(), 26);
     assert_ne!(a, b);
 }
+
+use crate::test_support::{EnvVarGuard, XdgConfigGuard};
+
+#[test]
+fn config_path_honors_xdg_config_home_when_set() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let _g = XdgConfigGuard::set(Some(dir.path()));
+
+    let p = config_path().unwrap();
+    assert_eq!(p, dir.path().join("poverty-mode.yaml"));
+}
+
+#[test]
+fn config_path_falls_back_to_platform_dir_when_xdg_unset() {
+    let _g = XdgConfigGuard::set(None);
+
+    let p = config_path().unwrap();
+    // Whatever the platform dir is, the file name must be poverty-mode.yaml.
+    assert_eq!(p.file_name().unwrap(), "poverty-mode.yaml");
+    // And it must be an absolute path (every platform config dir is absolute).
+    assert!(p.is_absolute(), "config path must be absolute, got {}", p.display());
+}
+
+#[test]
+fn config_path_xdg_empty_is_treated_as_unset() {
+    // POSIX: an empty XDG var must be ignored, the same as unset.
+    let _g = XdgConfigGuard::set(Some(std::path::Path::new("")));
+    let p = config_path().unwrap();
+    assert_eq!(p.file_name().unwrap(), "poverty-mode.yaml");
+    assert!(p.is_absolute());
+}
+
+#[test]
+fn state_dir_and_cache_dir_are_absolute_and_distinct() {
+    // Pin to known overrides so this test does not depend on the host's real dirs
+    // (and is isolated from any ambient POVERTY_STATE_DIR/POVERTY_CACHE_DIR). Both
+    // vars are set under ONE `ENV_LOCK` acquisition via `set_pair` — taking two
+    // separate `EnvVarGuard`s would deadlock on the non-reentrant `ENV_LOCK`.
+    let s_dir = tempfile::TempDir::new().unwrap();
+    let c_dir = tempfile::TempDir::new().unwrap();
+    let _g = EnvVarGuard::set_pair(
+        ("POVERTY_STATE_DIR", Some(s_dir.path())),
+        ("POVERTY_CACHE_DIR", Some(c_dir.path())),
+    );
+
+    let s = state_dir().unwrap();
+    let c = cache_dir().unwrap();
+    assert!(s.is_absolute());
+    assert!(c.is_absolute());
+    assert_ne!(s, c);
+}
+
+#[test]
+fn state_dir_honors_poverty_state_dir_override() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let _g = EnvVarGuard::set("POVERTY_STATE_DIR", Some(dir.path()));
+    assert_eq!(state_dir().unwrap(), dir.path());
+}
+
+#[test]
+fn cache_dir_honors_poverty_cache_dir_override() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let _g = EnvVarGuard::set("POVERTY_CACHE_DIR", Some(dir.path()));
+    assert_eq!(cache_dir().unwrap(), dir.path());
+}
+
+#[test]
+fn state_dir_empty_override_is_treated_as_unset() {
+    // An empty override is ignored (falls back to the platform dir), like XDG.
+    let _g = EnvVarGuard::set("POVERTY_STATE_DIR", Some(std::path::Path::new("")));
+    let s = state_dir().unwrap();
+    assert!(s.is_absolute(), "fallback state dir must be absolute, got {}", s.display());
+}
+
+#[test]
+fn run_dir_is_state_runs_runid() {
+    // run_dir is state-relative; pin state via the override so the assertion is
+    // independent of the host's real state dir.
+    let dir = tempfile::TempDir::new().unwrap();
+    let _g = EnvVarGuard::set("POVERTY_STATE_DIR", Some(dir.path()));
+    let id = "01hxyzrunid0000000000000abc";
+    let rd = run_dir(id).unwrap();
+    let expected = state_dir().unwrap().join("runs").join(id);
+    assert_eq!(rd, expected);
+}

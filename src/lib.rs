@@ -10,6 +10,10 @@ pub mod logging;
 pub mod paths;
 pub mod proxy;
 
+#[cfg(test)]
+#[path = "test_support.rs"]
+pub(crate) mod test_support;
+
 pub use error::{Error, Result};
 
 /// Binary entry point. Parses the CLI, initializes tracing from the global

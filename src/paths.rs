@@ -1,7 +1,7 @@
 use anyhow::Context;
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Write `bytes` to `path` atomically: write to a uniquely-named temp file in the
 /// SAME directory, fsync it, harden its permissions on POSIX, then rename it over
@@ -85,6 +85,64 @@ pub fn with_file_lock<T>(
 /// 26 chars, lexicographically monotonic by creation time, collision-resistant.
 pub fn new_run_id() -> String {
     ulid::Ulid::new().to_string().to_lowercase()
+}
+
+const APP_QUALIFIER: &str = "";
+const APP_ORG: &str = "poverty-mode";
+const APP_NAME: &str = "poverty-mode";
+const CONFIG_FILE_NAME: &str = "poverty-mode.yaml";
+const STATE_DIR_ENV: &str = "POVERTY_STATE_DIR";
+const CACHE_DIR_ENV: &str = "POVERTY_CACHE_DIR";
+
+fn project_dirs() -> anyhow::Result<directories::ProjectDirs> {
+    directories::ProjectDirs::from(APP_QUALIFIER, APP_ORG, APP_NAME)
+        .context("could not determine platform application directories")
+}
+
+/// Read an env override, returning `Some(PathBuf)` only when the var is set to a
+/// non-empty value (an empty value is treated as unset, like `XDG_CONFIG_HOME`).
+fn env_dir_override(var: &str) -> Option<PathBuf> {
+    std::env::var_os(var)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+}
+
+/// Absolute path to the config file. Honors `XDG_CONFIG_HOME` on every OS when it
+/// is set to a non-empty value (`<XDG_CONFIG_HOME>/poverty-mode.yaml`); otherwise
+/// the platform config directory.
+pub fn config_path() -> anyhow::Result<PathBuf> {
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        if !xdg.is_empty() {
+            return Ok(PathBuf::from(xdg).join(CONFIG_FILE_NAME));
+        }
+    }
+    Ok(project_dirs()?.config_dir().join(CONFIG_FILE_NAME))
+}
+
+/// Absolute path to the per-user state directory (holds `runs/`). Honors the
+/// `POVERTY_STATE_DIR` env override (non-empty value wins) for hermetic tests
+/// (R23j); otherwise the platform `data_dir`.
+pub fn state_dir() -> anyhow::Result<PathBuf> {
+    if let Some(dir) = env_dir_override(STATE_DIR_ENV) {
+        return Ok(dir);
+    }
+    Ok(project_dirs()?.data_dir().to_path_buf())
+}
+
+/// Absolute path to the per-user cache directory (holds downloaded binaries).
+/// Honors the `POVERTY_CACHE_DIR` env override (non-empty value wins) for hermetic
+/// tests (R23j); otherwise the platform `cache_dir`.
+pub fn cache_dir() -> anyhow::Result<PathBuf> {
+    if let Some(dir) = env_dir_override(CACHE_DIR_ENV) {
+        return Ok(dir);
+    }
+    Ok(project_dirs()?.cache_dir().to_path_buf())
+}
+
+/// Absolute path to a single run's directory: `<state>/runs/<run_id>`. Pure path
+/// math; this does not create the directory (see `ensure_run_dir`).
+pub fn run_dir(run_id: &str) -> anyhow::Result<PathBuf> {
+    Ok(state_dir()?.join("runs").join(run_id))
 }
 
 #[cfg(test)]
