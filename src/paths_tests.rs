@@ -243,3 +243,71 @@ fn run_dir_is_state_runs_runid() {
     let expected = state_dir().unwrap().join("runs").join(id);
     assert_eq!(rd, expected);
 }
+
+#[test]
+fn ensure_run_dir_creates_state_runs_runid() {
+    // Redirect state under XDG by setting XDG_CONFIG_HOME is not enough (state uses
+    // data_dir, not config_dir); instead assert the path shape and existence
+    // relative to the real state_dir, then clean up the created run dir.
+    let id = new_run_id();
+    let created = ensure_run_dir(&id).unwrap();
+    assert_eq!(created, run_dir(&id).unwrap());
+    assert!(created.is_dir(), "ensure_run_dir must create the directory");
+    // Cleanup so repeated test runs do not accumulate dirs under the real state dir.
+    std::fs::remove_dir_all(&created).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn ensure_run_dir_hardens_dir_to_0700_on_unix() {
+    use std::os::unix::fs::PermissionsExt;
+    let id = new_run_id();
+    let created = ensure_run_dir(&id).unwrap();
+    let mode = std::fs::metadata(&created).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o700, "run dir must be owner-only on POSIX, got {mode:o}");
+    std::fs::remove_dir_all(&created).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn harden_dir_perms_sets_0700_on_unix() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::TempDir::new().unwrap();
+    let sub = dir.path().join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    // Loosen it first so the assertion proves harden_dir_perms tightened it.
+    std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    harden_dir_perms(&sub).unwrap();
+
+    let mode = std::fs::metadata(&sub).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o700, "got {mode:o}");
+}
+
+#[cfg(unix)]
+#[test]
+fn harden_file_perms_sets_0600_on_unix() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::TempDir::new().unwrap();
+    let f = dir.path().join("log");
+    std::fs::write(&f, b"x").unwrap();
+    std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    harden_file_perms(&f).unwrap();
+
+    let mode = std::fs::metadata(&f).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "got {mode:o}");
+}
+
+#[cfg(not(unix))]
+#[test]
+fn harden_perms_are_noop_on_non_unix() {
+    // On Windows these must succeed without changing anything observable.
+    let dir = tempfile::TempDir::new().unwrap();
+    let f = dir.path().join("log");
+    std::fs::write(&f, b"x").unwrap();
+    harden_file_perms(&f).unwrap();
+    let sub = dir.path().join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    harden_dir_perms(&sub).unwrap();
+}

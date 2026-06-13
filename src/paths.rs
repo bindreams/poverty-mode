@@ -145,6 +145,32 @@ pub fn run_dir(run_id: &str) -> anyhow::Result<PathBuf> {
     Ok(state_dir()?.join("runs").join(run_id))
 }
 
+/// Restrict `path` to owner-only directory access (0700) on POSIX. No-op on
+/// non-Unix targets.
+#[cfg(unix)]
+pub fn harden_dir_perms(path: &Path) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+        .with_context(|| format!("setting 0700 on {}", path.display()))
+}
+
+/// No-op on non-Unix targets.
+#[cfg(not(unix))]
+pub fn harden_dir_perms(_path: &Path) -> anyhow::Result<()> {
+    Ok(())
+}
+
+/// Create `<state>/runs/<run_id>` (and any missing parents), then harden it to
+/// 0700 on POSIX, and return its absolute path. Idempotent: an existing run dir is
+/// re-hardened and returned. Per-run unique paths mean concurrent sessions never
+/// share a directory (spec 5.11).
+pub fn ensure_run_dir(run_id: &str) -> anyhow::Result<PathBuf> {
+    let dir = run_dir(run_id)?;
+    fs::create_dir_all(&dir).with_context(|| format!("creating run dir {}", dir.display()))?;
+    harden_dir_perms(&dir)?;
+    Ok(dir)
+}
+
 #[cfg(test)]
 #[path = "paths_tests.rs"]
 mod paths_tests;
