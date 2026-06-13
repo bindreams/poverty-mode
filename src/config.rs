@@ -90,6 +90,53 @@ impl Config {
             },
         }
     }
+
+    /// Load the config from `paths::config_path()`. On first run (file absent),
+    /// write `default_all_disabled` atomically and return it. On subsequent runs,
+    /// parse and validate (settings variant matches `name`; `central` is last).
+    pub fn load_or_create() -> anyhow::Result<Config> {
+        let path = crate::paths::config_path()?;
+        if !path.exists() {
+            let cfg = Config::default_all_disabled();
+            let yaml = serde_yaml::to_string(&cfg)
+                .map_err(|e| anyhow::anyhow!("serializing default config: {e}"))?;
+            crate::paths::atomic_write(&path, yaml.as_bytes())?;
+            return Ok(cfg);
+        }
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| anyhow::anyhow!("reading config {}: {e}", path.display()))?;
+        let cfg: Config = serde_yaml::from_str(&text)
+            .map_err(|e| anyhow::anyhow!("parsing config {}: {e}", path.display()))?;
+        cfg.validate()?;
+        Ok(cfg)
+    }
+
+    /// Validate the config invariants: each entry's settings variant matches its
+    /// declared `name`, and `central` (if present) is the last entry. This is the
+    /// single source of truth for the invariants enforced by `load_or_create`,
+    /// `save`, and the file-source branch of `resolve_chain`.
+    fn validate(&self) -> anyhow::Result<()> {
+        for entry in &self.proxies {
+            let ok = matches!(
+                (entry.name, &entry.settings),
+                (ProxyName::Pino, ProxySettings::Pino(_))
+                    | (ProxyName::Headroom, ProxySettings::Headroom(_))
+                    | (ProxyName::Central, ProxySettings::Central(_))
+            );
+            if !ok {
+                anyhow::bail!(
+                    "config error: proxy {:?} has settings that do not match its name (settings mismatch)",
+                    entry.name
+                );
+            }
+        }
+        if let Some(pos) = self.proxies.iter().position(|e| e.name == ProxyName::Central) {
+            if pos != self.proxies.len() - 1 {
+                anyhow::bail!("config error: central must be last in the proxies list");
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

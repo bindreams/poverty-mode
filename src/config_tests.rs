@@ -158,3 +158,120 @@ fn tail_ttl_invalid_value_deserializes_to_five_min() {
     assert_eq!(serde_yaml::from_str::<TailTtl>("5m\n").unwrap(), TailTtl::FiveMin);
     assert_eq!(serde_yaml::from_str::<TailTtl>("1h\n").unwrap(), TailTtl::OneHour);
 }
+
+use crate::test_support::ConfigHomeGuard;
+use std::path::Path;
+
+fn write_file(path: &Path, contents: &str) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, contents).unwrap();
+}
+
+#[test]
+fn load_or_create_writes_default_when_absent() {
+    let g = ConfigHomeGuard::new();
+    assert!(!g.config_file().exists());
+
+    let cfg = Config::load_or_create().unwrap();
+    assert_eq!(cfg, Config::default_all_disabled());
+    // It actually wrote the file.
+    assert!(g.config_file().exists());
+
+    // The written bytes parse back to the same config.
+    let on_disk = std::fs::read_to_string(g.config_file()).unwrap();
+    let parsed: Config = serde_yaml::from_str(&on_disk).unwrap();
+    assert_eq!(parsed, Config::default_all_disabled());
+}
+
+#[test]
+fn load_or_create_is_idempotent_and_does_not_overwrite_user_edits() {
+    let g = ConfigHomeGuard::new();
+    // First call creates the default.
+    let _ = Config::load_or_create().unwrap();
+
+    // User enables pino by hand (tail_ttl 1h).
+    let edited = r#"version: 1
+proxies:
+  - name: pino
+    enabled: true
+    settings:
+      auto_cache: true
+      tail_ttl: 1h
+      drop_tools: []
+      strip_ansi: true
+      model_override: null
+  - name: headroom
+    enabled: false
+    settings:
+      compression: false
+  - name: central
+    enabled: false
+    settings:
+      port: null
+      pinned_version: null
+defaults:
+  enable_tool_search: true
+"#;
+    write_file(&g.config_file(), edited);
+
+    let cfg = Config::load_or_create().unwrap();
+    assert_eq!(cfg.proxies[0].name, ProxyName::Pino);
+    assert_eq!(cfg.proxies[0].enabled, true);
+    match &cfg.proxies[0].settings {
+        ProxySettings::Pino(p) => assert_eq!(p.tail_ttl, TailTtl::OneHour),
+        other => panic!("expected pino, got {other:?}"),
+    }
+}
+
+#[test]
+fn load_or_create_errors_when_settings_variant_mismatches_name() {
+    let g = ConfigHomeGuard::new();
+    // `name: pino` but settings are headroom-shaped (compression).
+    let bad = r#"version: 1
+proxies:
+  - name: pino
+    enabled: true
+    settings:
+      compression: true
+defaults:
+  enable_tool_search: true
+"#;
+    write_file(&g.config_file(), bad);
+
+    let err = Config::load_or_create().unwrap_err();
+    let msg = err.to_string().to_lowercase();
+    assert!(msg.contains("pino"), "error should mention the proxy name: {msg}");
+    assert!(
+        msg.contains("settings") || msg.contains("mismatch"),
+        "error should mention settings mismatch: {msg}"
+    );
+}
+
+#[test]
+fn load_or_create_errors_when_central_not_last() {
+    let g = ConfigHomeGuard::new();
+    let bad = r#"version: 1
+proxies:
+  - name: central
+    enabled: true
+    settings:
+      port: null
+      pinned_version: null
+  - name: pino
+    enabled: true
+    settings:
+      auto_cache: true
+      tail_ttl: 5m
+      drop_tools: []
+      strip_ansi: true
+      model_override: null
+defaults:
+  enable_tool_search: true
+"#;
+    write_file(&g.config_file(), bad);
+
+    let err = Config::load_or_create().unwrap_err();
+    let msg = err.to_string().to_lowercase();
+    assert!(msg.contains("central"), "error should mention central: {msg}");
+    assert!(msg.contains("last"), "error should mention last-position rule: {msg}");
+}

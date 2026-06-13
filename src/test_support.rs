@@ -107,11 +107,8 @@ pub(crate) struct ConfigHomeGuard {
     dir: tempfile::TempDir,
 }
 
-// `ConfigHomeGuard` is created in Task M2.4 so Task M2.9's `config_tests` can reuse
-// it without reaching into a sibling test module (R13). Until that consumer lands,
-// its constructor is unreferenced; the `dead_code` allow is the sanctioned cost of
-// authoring the shared seam ahead of its first caller.
-#[allow(dead_code)]
+// `ConfigHomeGuard` lets `config_tests` isolate the config path without reaching
+// into a sibling test module (R13). `config_tests::load_or_create_*` are its callers.
 impl ConfigHomeGuard {
     pub(crate) fn new() -> Self {
         let lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());

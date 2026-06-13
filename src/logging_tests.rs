@@ -63,8 +63,14 @@ fn build_subscriber_with_ansi_emits_escapes() {
 /// is one-shot). Keep exactly one such test in this file.
 #[test]
 fn init_tracing_to_file_creates_parent_and_writes() {
-    let dir = tempfile::tempdir().unwrap();
-    let log_path = dir.path().join("nested").join("run.log");
+    // `init_tracing` installs the PROCESS-GLOBAL subscriber, which is permanent
+    // (`set_global_default` is one-shot). Its file `MakeWriter` opens this path
+    // per event for the rest of the process — including events from later tests
+    // (e.g. the lenient `TailTtl` warn path). So the backing dir must outlive the
+    // global: `keep()` persists it (disables delete-on-drop) instead of removing
+    // it when this test returns, which would make every later log event panic.
+    let dir = tempfile::tempdir().unwrap().keep();
+    let log_path = dir.join("nested").join("run.log");
 
     init_tracing(Some(log_path.as_path())).unwrap();
     tracing::info!("file target line");
