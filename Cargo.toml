@@ -1,0 +1,60 @@
+[package]
+name = "poverty-mode"
+version = "0.1.0"
+edition = "2021"
+description = "Run an AI coding agent behind a user-chosen chain of local HTTP proxies."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/bindreams/poverty-mode"
+readme = "README.md"
+keywords = ["proxy", "anthropic", "claude", "cache", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+
+[lib]
+name = "poverty_mode"
+path = "src/lib.rs"
+
+[[bin]]
+name = "poverty-mode"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.6", features = ["derive", "env"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = { version = "1.0", features = ["preserve_order", "arbitrary_precision", "raw_value"] }
+tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "signal", "process", "net", "io-util", "time", "sync", "fs"] }
+hyper = { version = "1.10", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "server-graceful"] }
+http = "1.4"
+http-body-util = "0.1"
+bytes = "1.11"
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "stream", "blocking"] }
+url = { version = "2.5", features = ["serde"] }
+percent-encoding = "2.3"
+directories = "6.0"
+fs2 = "0.4"
+ulid = "1.2"
+regex = "1.12"
+ratatui = "0.30"
+crossterm = "0.29"
+anyhow = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+flate2 = "1.1"
+tar = "0.4"
+zip = "8.6"
+sha2 = "0.11"
+tempfile = "3.27"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Threading", "Win32_System_JobObjects", "Win32_Foundation", "Win32_Security", "Win32_System_Pipes", "Win32_System_Console"] }
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.1"
+toml = "1.1"
