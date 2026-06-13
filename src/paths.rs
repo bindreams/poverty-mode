@@ -171,6 +171,52 @@ pub fn ensure_run_dir(run_id: &str) -> anyhow::Result<PathBuf> {
     Ok(dir)
 }
 
+/// Keep the `keep` most-recent run directories under `<state>/runs/` and remove
+/// the rest. Called once on startup by the orchestrator (M6). Thin wrapper over
+/// `prune_run_dirs_in` against the real state-derived runs directory.
+pub fn prune_run_dirs(keep: usize) -> anyhow::Result<()> {
+    let runs = state_dir()?.join("runs");
+    prune_run_dirs_in(&runs, keep)
+}
+
+/// Keep the `keep` most-recent run directories in `runs_dir` and remove the rest.
+/// Recency is by directory-name lexical order (ULID run-ids sort by creation
+/// time — no mtime/timer is consulted). Non-directory entries are ignored. A
+/// missing `runs_dir` is a no-op. Removal errors are surfaced (not swallowed).
+fn prune_run_dirs_in(runs_dir: &Path, keep: usize) -> anyhow::Result<()> {
+    let read = match fs::read_dir(runs_dir) {
+        Ok(r) => r,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => {
+            return Err(anyhow::Error::from(e))
+                .with_context(|| format!("reading runs dir {}", runs_dir.display()));
+        }
+    };
+
+    let mut dirs: Vec<(String, PathBuf)> = Vec::new();
+    for entry in read {
+        let entry = entry
+            .with_context(|| format!("reading entry under {}", runs_dir.display()))?;
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("stat {}", entry.path().display()))?;
+        if file_type.is_dir() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            dirs.push((name, entry.path()));
+        }
+    }
+
+    // Sort ascending by name: oldest first, newest last.
+    dirs.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let remove_count = dirs.len().saturating_sub(keep);
+    for (_name, path) in dirs.into_iter().take(remove_count) {
+        fs::remove_dir_all(&path)
+            .with_context(|| format!("pruning old run dir {}", path.display()))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "paths_tests.rs"]
 mod paths_tests;

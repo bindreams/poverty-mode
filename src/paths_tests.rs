@@ -311,3 +311,78 @@ fn harden_perms_are_noop_on_non_unix() {
     std::fs::create_dir(&sub).unwrap();
     harden_dir_perms(&sub).unwrap();
 }
+
+#[test]
+fn prune_run_dirs_keeps_newest_n_by_ulid_order() {
+    // Build an isolated runs/ dir and seed it with known-ordered ULID-like ids.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let runs = tmp.path().join("runs");
+    std::fs::create_dir_all(&runs).unwrap();
+    // Lexicographically ascending ids => last is "newest".
+    let ids = [
+        "01000000000000000000000001",
+        "01000000000000000000000002",
+        "01000000000000000000000003",
+        "01000000000000000000000004",
+        "01000000000000000000000005",
+    ];
+    for id in ids {
+        std::fs::create_dir(runs.join(id)).unwrap();
+    }
+    // A stray non-directory entry must be ignored, not crash pruning.
+    std::fs::write(runs.join("stray.txt"), b"x").unwrap();
+
+    prune_run_dirs_in(&runs, 2).unwrap();
+
+    let mut kept: Vec<String> = std::fs::read_dir(&runs)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n != "stray.txt")
+        .collect();
+    kept.sort();
+    assert_eq!(
+        kept,
+        vec![
+            "01000000000000000000000004".to_string(),
+            "01000000000000000000000005".to_string()
+        ]
+    );
+    // The stray file is left untouched (pruning only removes run *directories*).
+    assert!(runs.join("stray.txt").exists());
+}
+
+#[test]
+fn prune_run_dirs_keep_zero_removes_all_run_dirs() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let runs = tmp.path().join("runs");
+    std::fs::create_dir_all(&runs).unwrap();
+    for id in ["01000000000000000000000001", "01000000000000000000000002"] {
+        std::fs::create_dir(runs.join(id)).unwrap();
+    }
+
+    prune_run_dirs_in(&runs, 0).unwrap();
+
+    let remaining: Vec<_> = std::fs::read_dir(&runs).unwrap().collect();
+    assert!(remaining.is_empty(), "keep=0 must remove every run dir");
+}
+
+#[test]
+fn prune_run_dirs_no_op_when_fewer_than_keep() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let runs = tmp.path().join("runs");
+    std::fs::create_dir_all(&runs).unwrap();
+    std::fs::create_dir(runs.join("01000000000000000000000001")).unwrap();
+
+    prune_run_dirs_in(&runs, 10).unwrap();
+
+    assert!(runs.join("01000000000000000000000001").is_dir());
+}
+
+#[test]
+fn prune_run_dirs_no_op_when_runs_dir_absent() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let runs = tmp.path().join("runs"); // never created
+    // Must succeed (Ok) without error and without creating anything.
+    prune_run_dirs_in(&runs, 3).unwrap();
+    assert!(!runs.exists());
+}
