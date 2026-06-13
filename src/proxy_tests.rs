@@ -194,6 +194,52 @@ fn health_body_serializes_with_run_id_and_upstream() {
     assert_eq!(json["run_id"], serde_json::json!("01ARZ"));
 }
 
+// CHARACTERIZATION GUARD (not TDD): pins the EXACT compact wire string the M3
+// engine prints as its READY line (a single serde_json::to_string with the
+// documented field order). The neighboring `ready_line_serializes_with_run_id`
+// only checks fields via to_value; this guards the byte-exact line shape the
+// orchestrator parses (R10/§9). Added after the M1 type already exists.
+#[test]
+fn ready_line_serializes_compactly_with_run_id() {
+    let rl = ReadyLine {
+        ready: true,
+        port: 54321,
+        proxy: "pino".to_string(),
+        run_id: "01J0RUNID".to_string(),
+    };
+    let s = serde_json::to_string(&rl).unwrap();
+    assert_eq!(
+        s,
+        r#"{"ready":true,"port":54321,"proxy":"pino","run_id":"01J0RUNID"}"#
+    );
+    let back: ReadyLine = serde_json::from_str(&s).unwrap();
+    assert_eq!(back.port, 54321);
+    assert_eq!(back.proxy, "pino");
+    assert_eq!(back.run_id, "01J0RUNID");
+    assert!(back.ready);
+}
+
+// CHARACTERIZATION GUARD (not TDD): full string round-trip of the health body
+// the M3 engine serves at `/__pm/health` (R10/§5.4). The neighboring
+// `health_body_serializes_with_run_id_and_upstream` only checks to_value; this
+// guards that to_string -> from_str preserves every field. Added after the M1
+// type already exists.
+#[test]
+fn health_body_round_trips_with_run_id() {
+    let hb = HealthBody {
+        proxy: "headroom".to_string(),
+        port: 8080,
+        upstream: "api.anthropic.com".to_string(),
+        run_id: "01J0RUNID".to_string(),
+    };
+    let s = serde_json::to_string(&hb).unwrap();
+    let back: HealthBody = serde_json::from_str(&s).unwrap();
+    assert_eq!(back.proxy, "headroom");
+    assert_eq!(back.port, 8080);
+    assert_eq!(back.upstream, "api.anthropic.com");
+    assert_eq!(back.run_id, "01J0RUNID");
+}
+
 #[test]
 fn engine_config_holds_run_id_and_transform_kind() {
     let cfg = EngineConfig {
