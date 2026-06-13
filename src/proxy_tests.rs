@@ -209,3 +209,70 @@ fn engine_config_holds_run_id_and_transform_kind() {
     assert_eq!(cfg.transform, TransformKind::Pino);
     assert_eq!(cfg.upstream.host_header(), "api.anthropic.com");
 }
+
+// ---- upstream_target_uri (M3.2) ----
+
+fn up(s: &str) -> Upstream {
+    Upstream {
+        url: url::Url::parse(s).unwrap(),
+    }
+}
+
+#[test]
+fn target_uri_prepends_path_prefix_for_secret_wire_path() {
+    let u = up("http://127.0.0.1:9999/wire/SECRET/claude-code/anthropic");
+    let got = upstream_target_uri(&u, "/v1/messages").unwrap();
+    assert_eq!(
+        got.to_string(),
+        "http://127.0.0.1:9999/wire/SECRET/claude-code/anthropic/v1/messages"
+    );
+}
+
+#[test]
+fn target_uri_bare_upstream_has_no_prefix() {
+    let u = up("https://api.anthropic.com");
+    let got = upstream_target_uri(&u, "/v1/messages").unwrap();
+    assert_eq!(got.to_string(), "https://api.anthropic.com/v1/messages");
+}
+
+#[test]
+fn target_uri_strips_trailing_slash_and_elides_default_port() {
+    // http default port :80 is elided by host_header() (JS URL.host parity), and
+    // the prefix's trailing slash is stripped by path_prefix().
+    let u = up("http://127.0.0.1:80/prefix/");
+    let got = upstream_target_uri(&u, "/v1/messages/count_tokens").unwrap();
+    assert_eq!(
+        got.to_string(),
+        "http://127.0.0.1/prefix/v1/messages/count_tokens"
+    );
+}
+
+#[test]
+fn target_uri_preserves_inbound_query_string() {
+    let u = up("https://api.anthropic.com");
+    let got = upstream_target_uri(&u, "/v1/messages?beta=true").unwrap();
+    assert_eq!(
+        got.to_string(),
+        "https://api.anthropic.com/v1/messages?beta=true"
+    );
+}
+
+#[test]
+fn target_uri_rejects_upstream_with_userinfo() {
+    let u = up("http://user:pass@127.0.0.1:9999/prefix");
+    let err = upstream_target_uri(&u, "/v1/messages").unwrap_err();
+    assert!(
+        err.to_string().contains("userinfo"),
+        "upstream with userinfo must be rejected, got: {err}"
+    );
+}
+
+#[test]
+fn target_uri_rejects_upstream_with_query() {
+    let u = up("http://127.0.0.1:9999/prefix?leftover=1");
+    let err = upstream_target_uri(&u, "/v1/messages").unwrap_err();
+    assert!(
+        err.to_string().contains("query"),
+        "upstream with a query string must be rejected, got: {err}"
+    );
+}

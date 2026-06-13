@@ -32,6 +32,45 @@ pub fn is_json_content_type(headers: &http::HeaderMap) -> bool {
         .unwrap_or(false)
 }
 
+/// Compose the absolute upstream URI from the upstream (scheme/host/port +
+/// path prefix) and the inbound request's path-and-query.
+///
+/// The inbound path is appended after the upstream's `path_prefix()` (trailing
+/// slash already stripped, `""` for a bare upstream). The scheme and authority
+/// come from `host_header()` (default ports elided, explicit ports preserved —
+/// JS `URL.host` parity, reference/pino/src/config.js:30). The inbound query is
+/// preserved.
+///
+/// Precondition (validated here): the upstream URL has NO userinfo and NO query.
+/// `Upstream` only ever wraps a wire URL (`http://127.0.0.1:<port>/wire/<secret>/…`)
+/// or `https://api.anthropic.com`; neither carries userinfo/query. Validating
+/// here guarantees the string composition below cannot produce a malformed URI.
+pub fn upstream_target_uri(
+    upstream: &Upstream,
+    inbound_path_and_query: &str,
+) -> anyhow::Result<http::Uri> {
+    if !upstream.url.username().is_empty() || upstream.url.password().is_some() {
+        anyhow::bail!("upstream URL must not contain userinfo");
+    }
+    if upstream.url.query().is_some() {
+        anyhow::bail!("upstream URL must not contain a query string");
+    }
+    debug_assert!(
+        upstream.url.username().is_empty()
+            && upstream.url.password().is_none()
+            && upstream.url.query().is_none(),
+        "Upstream invariant: no userinfo / no query"
+    );
+
+    let scheme = upstream.url.scheme();
+    let authority = upstream.host_header();
+    let prefix = upstream.path_prefix(); // trailing slash stripped, "" for bare
+    let composed = format!("{scheme}://{authority}{prefix}{inbound_path_and_query}");
+    composed
+        .parse::<http::Uri>()
+        .map_err(|e| anyhow::anyhow!("failed to build upstream URI: {e}"))
+}
+
 /// First-party (compiled-in) vs external (downloaded) proxy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProxyKind {
