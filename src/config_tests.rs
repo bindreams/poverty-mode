@@ -275,3 +275,66 @@ defaults:
     assert!(msg.contains("central"), "error should mention central: {msg}");
     assert!(msg.contains("last"), "error should mention last-position rule: {msg}");
 }
+
+#[test]
+fn save_writes_atomically_and_reloads_equal() {
+    let g = ConfigHomeGuard::new();
+    let mut cfg = Config::default_all_disabled();
+    // Enable headroom with compression on.
+    cfg.proxies[1].enabled = true;
+    cfg.proxies[1].settings = ProxySettings::Headroom(HeadroomSettings { compression: true });
+
+    cfg.save().unwrap();
+    assert!(g.config_file().exists());
+
+    let reloaded = Config::load_or_create().unwrap();
+    assert_eq!(reloaded, cfg);
+    assert_eq!(reloaded.proxies[1].enabled, true);
+    match &reloaded.proxies[1].settings {
+        ProxySettings::Headroom(h) => assert_eq!(h.compression, true),
+        other => panic!("expected headroom, got {other:?}"),
+    }
+}
+
+#[test]
+fn save_leaves_no_temp_files_in_config_dir() {
+    let g = ConfigHomeGuard::new();
+    let cfg = Config::default_all_disabled();
+    cfg.save().unwrap();
+
+    let entries: Vec<String> = std::fs::read_dir(g.config_file().parent().unwrap())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(entries, vec!["poverty-mode.yaml".to_string()]);
+}
+
+#[test]
+fn save_rejects_central_not_last() {
+    let _g = ConfigHomeGuard::new();
+    let mut cfg = Config::default_all_disabled();
+    // Move central to the front => invalid.
+    cfg.proxies.rotate_right(1);
+    assert_eq!(cfg.proxies[0].name, ProxyName::Central);
+
+    let err = cfg.save().unwrap_err();
+    let msg = err.to_string().to_lowercase();
+    assert!(msg.contains("central"));
+    assert!(msg.contains("last"));
+}
+
+#[cfg(unix)]
+#[test]
+fn save_writes_config_file_0600_on_unix() {
+    use std::os::unix::fs::PermissionsExt;
+    let g = ConfigHomeGuard::new();
+    let cfg = Config::default_all_disabled();
+    cfg.save().unwrap();
+
+    let mode = std::fs::metadata(g.config_file())
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600, "config file must be owner-only on POSIX, got {mode:o}");
+}

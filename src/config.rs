@@ -111,6 +111,17 @@ impl Config {
         Ok(cfg)
     }
 
+    /// Validate invariants, then atomically write this config to
+    /// `paths::config_path()` as YAML (temp file + same-dir rename; 0600 on POSIX).
+    pub fn save(&self) -> anyhow::Result<()> {
+        self.validate()?;
+        let path = crate::paths::config_path()?;
+        let yaml = serde_yaml::to_string(self)
+            .map_err(|e| anyhow::anyhow!("serializing config: {e}"))?;
+        crate::paths::atomic_write(&path, yaml.as_bytes())?;
+        Ok(())
+    }
+
     /// Validate the config invariants: each entry's settings variant matches its
     /// declared `name`, and `central` (if present) is the last entry. This is the
     /// single source of truth for the invariants enforced by `load_or_create`,
