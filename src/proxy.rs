@@ -204,16 +204,41 @@ impl Upstream {
     }
 }
 
-/// Selects which body transform the engine applies. The concrete transform is
-/// chosen from this tag (M3 wires the dispatch; M4/M5 fill the transforms).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Selects which body transform the engine applies, carrying the chosen
+/// transform's settings. The concrete `BodyTransform` is materialized from this
+/// tag via [`TransformKind::as_body_transform`] (M3 wires the dispatch; M4/M5
+/// fill the transforms).
+#[derive(Clone, Debug, PartialEq)]
 pub enum TransformKind {
     /// Byte-faithful pass-through (no transform).
     None,
-    /// pino cache-breakpoint injection.
-    Pino,
-    /// headroom context compression.
-    Headroom,
+    /// pino cache-breakpoint injection, configured by [`pino::PinoSettings`].
+    Pino(pino::PinoSettings),
+    /// headroom context compression, configured by [`headroom::HeadroomSettings`].
+    Headroom(headroom::HeadroomSettings),
+}
+
+impl TransformKind {
+    /// Construct the concrete `Arc`-shared transform for this kind, or `None`
+    /// for `TransformKind::None`. The transform is stored as
+    /// `Arc<dyn BodyTransform + Send + Sync>` (R22/R23d) so the engine can clone
+    /// the `Arc` into a `spawn_blocking` closure (covers pino's cheap mutation
+    /// and headroom's CPU-heavy compress, R20). The transform's `transform` may
+    /// currently return `Err` (M1 fail-loud stubs until M4/M5); the engine
+    /// forwards the original body and warns on `Err`, never silently corrupting it.
+    pub fn as_body_transform(&self) -> Option<std::sync::Arc<dyn BodyTransform + Send + Sync>> {
+        match self {
+            TransformKind::None => None,
+            TransformKind::Pino(settings) => Some(std::sync::Arc::new(pino::PinoTransform {
+                settings: settings.clone(),
+            })),
+            TransformKind::Headroom(settings) => {
+                Some(std::sync::Arc::new(headroom::HeadroomTransform {
+                    settings: settings.clone(),
+                }))
+            }
+        }
+    }
 }
 
 /// A request-body mutation applied to a transformed `POST /v1/messages`.

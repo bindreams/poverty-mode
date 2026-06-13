@@ -135,10 +135,18 @@ fn path_prefix_root_is_empty() {
 
 #[test]
 fn transform_kind_variants_exist() {
+    use crate::proxy::headroom::HeadroomSettings;
+    use crate::proxy::pino::{PinoSettings, TailTtl};
     let kinds = [
         TransformKind::None,
-        TransformKind::Pino,
-        TransformKind::Headroom,
+        TransformKind::Pino(PinoSettings {
+            auto_cache: false,
+            tail_ttl: TailTtl::FiveMin,
+            drop_tools: vec![],
+            strip_ansi: false,
+            model_override: None,
+        }),
+        TransformKind::Headroom(HeadroomSettings { compression: false }),
     ];
     assert_eq!(kinds.len(), 3);
 }
@@ -242,17 +250,25 @@ fn health_body_round_trips_with_run_id() {
 
 #[test]
 fn engine_config_holds_run_id_and_transform_kind() {
+    use crate::proxy::pino::{PinoSettings, TailTtl};
+    let settings = PinoSettings {
+        auto_cache: false,
+        tail_ttl: TailTtl::FiveMin,
+        drop_tools: vec![],
+        strip_ansi: false,
+        model_override: None,
+    };
     let cfg = EngineConfig {
         name: ProxyName::Pino,
         listen: "127.0.0.1:0".parse().unwrap(),
         upstream: Upstream::parse("https://api.anthropic.com").unwrap(),
         run_id: "01ARZ".to_string(),
         log_file: None,
-        transform: TransformKind::Pino,
+        transform: TransformKind::Pino(settings.clone()),
     };
     assert_eq!(cfg.name, ProxyName::Pino);
     assert_eq!(cfg.run_id, "01ARZ");
-    assert_eq!(cfg.transform, TransformKind::Pino);
+    assert_eq!(cfg.transform, TransformKind::Pino(settings));
     assert_eq!(cfg.upstream.host_header(), "api.anthropic.com");
 }
 
@@ -381,4 +397,62 @@ fn upstream_client_builds_and_clone_is_cheap() {
     let client = build_upstream_client().expect("client builds");
     // Cloning shares the connection pool; assert it is cheap/valid.
     let _clone = client.clone();
+}
+
+// ---- TransformKind::as_body_transform (M3.5) ----
+
+#[test]
+fn transform_kind_none_yields_no_transform() {
+    let k = TransformKind::None;
+    assert!(k.as_body_transform().is_none());
+}
+
+#[test]
+fn transform_kind_pino_yields_a_boxed_transform() {
+    use crate::proxy::pino::{PinoSettings, TailTtl};
+    // M1's PinoTransform stub fails loud until M4; the materializer must still
+    // hand back an Arc-shared transform (the engine decides what to do with an Err).
+    let settings = PinoSettings {
+        auto_cache: false,
+        tail_ttl: TailTtl::FiveMin,
+        drop_tools: vec![],
+        strip_ansi: false,
+        model_override: None,
+    };
+    let k = TransformKind::Pino(settings);
+    assert!(
+        k.as_body_transform().is_some(),
+        "pino kind yields a transform"
+    );
+}
+
+#[test]
+fn transform_kind_pino_stub_fails_loud_until_m4() {
+    use crate::proxy::pino::{PinoSettings, TailTtl};
+    // Per R9 the M1 pino stub returns an explicit Err (NOT a silent no-op), so
+    // M3 cannot accidentally ship a lying no-op. M4 makes this Ok.
+    let settings = PinoSettings {
+        auto_cache: true,
+        tail_ttl: TailTtl::FiveMin,
+        drop_tools: vec![],
+        strip_ansi: true,
+        model_override: None,
+    };
+    let t = TransformKind::Pino(settings).as_body_transform().unwrap();
+    let mut body = serde_json::json!({"model": "claude-x", "messages": []});
+    let err = t.transform(&mut body).unwrap_err();
+    assert!(
+        err.to_string().contains("pino transform not implemented"),
+        "M1 pino stub must fail loud, got: {err}"
+    );
+}
+
+#[test]
+fn transform_kind_headroom_yields_a_boxed_transform() {
+    use crate::proxy::headroom::HeadroomSettings;
+    let k = TransformKind::Headroom(HeadroomSettings { compression: false });
+    assert!(
+        k.as_body_transform().is_some(),
+        "headroom kind yields a transform"
+    );
 }
