@@ -618,3 +618,31 @@ fn save_resolved_chain_keeps_central_last() {
     let reloaded = Config::load_or_create().unwrap();
     assert_eq!(reloaded.proxies.last().unwrap().name, ProxyName::Central);
 }
+
+#[test]
+fn characterization_default_yaml_has_spec_5_2_shape() {
+    // Pure characterization guard (R12): pins the spec 5.2 first-run YAML so a
+    // future serde-attribute drift in the shared settings structs is caught here.
+    let yaml = serde_yaml::to_string(&Config::default_all_disabled()).unwrap();
+
+    // version + defaults block.
+    assert!(yaml.contains("version: 1"), "yaml:\n{yaml}");
+    assert!(yaml.contains("enable_tool_search: true"), "yaml:\n{yaml}");
+
+    // Three named proxies, all disabled, in canonical order.
+    let pino_at = yaml.find("name: pino").expect("pino present");
+    let headroom_at = yaml.find("name: headroom").expect("headroom present");
+    let central_at = yaml.find("name: central").expect("central present");
+    assert!(pino_at < headroom_at && headroom_at < central_at, "order; yaml:\n{yaml}");
+    assert_eq!(yaml.matches("enabled: false").count(), 3, "all disabled; yaml:\n{yaml}");
+
+    // Pino settings shape.
+    assert!(yaml.contains("auto_cache: true"), "yaml:\n{yaml}");
+    assert!(yaml.contains("tail_ttl: 5m"), "yaml:\n{yaml}");
+    assert!(yaml.contains("strip_ansi: true"), "yaml:\n{yaml}");
+    // Headroom + central settings shape.
+    assert!(yaml.contains("compression: false"), "yaml:\n{yaml}");
+    // central's null fields round-trip; re-parsing yields the canonical default.
+    let back: Config = serde_yaml::from_str(&yaml).unwrap();
+    assert_eq!(back, Config::default_all_disabled());
+}
