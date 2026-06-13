@@ -81,6 +81,12 @@ pub fn with_file_lock<T>(
     f()
 }
 
+/// A fresh, time-sortable run id: a ULID rendered in lowercase Crockford base32.
+/// 26 chars, lexicographically monotonic by creation time, collision-resistant.
+pub fn new_run_id() -> String {
+    ulid::Ulid::new().to_string().to_lowercase()
+}
+
 #[cfg(test)]
 #[path = "paths_tests.rs"]
 mod paths_tests;

@@ -124,3 +124,37 @@ fn with_file_lock_serializes_concurrent_holders() {
 
     assert_eq!(max_seen.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn new_run_id_is_lowercase_crockford_base32_len_26() {
+    let id = new_run_id();
+    assert_eq!(id.len(), 26, "ULID canonical form is 26 chars");
+    // Crockford base32 excludes I, L, O, U; lowercase per contract.
+    let allowed = "0123456789abcdefghjkmnpqrstvwxyz";
+    for c in id.chars() {
+        assert!(
+            c.is_ascii_lowercase() || c.is_ascii_digit(),
+            "char {c:?} not lowercase/digit"
+        );
+        assert!(allowed.contains(c), "char {c:?} not in Crockford base32 alphabet");
+    }
+}
+
+#[test]
+fn new_run_id_is_unique_across_calls() {
+    let a = new_run_id();
+    let b = new_run_id();
+    assert_ne!(a, b);
+}
+
+#[test]
+fn new_run_id_has_fixed_canonical_length() {
+    // Guards against accidental non-canonical formatting: every id is the same
+    // 26-char length, and two consecutive ids are never equal (uniqueness is
+    // asserted above).
+    let a = new_run_id();
+    let b = new_run_id();
+    assert_eq!(a.len(), 26);
+    assert_eq!(b.len(), 26);
+    assert_ne!(a, b);
+}
