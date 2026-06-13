@@ -28,6 +28,9 @@ pub struct Cli {
 }
 
 #[derive(Subcommand, Debug)]
+// R23b mandates the unboxed tuple variant `Command::Proxy(ProxyArgs)` as the canonical
+// cross-milestone shape (M3/M6 match `Command::Proxy(args)`); boxing would diverge from it.
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
     /// Run an agent behind the resolved proxy chain.
     Run {
