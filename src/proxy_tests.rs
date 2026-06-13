@@ -276,3 +276,51 @@ fn target_uri_rejects_upstream_with_query() {
         "upstream with a query string must be rejected, got: {err}"
     );
 }
+
+// ---- Upstream host_header/path_prefix characterization guard (M3.2b) ----
+
+// CHARACTERIZATION GUARD (not TDD): re-pins the M1 Upstream contract that the
+// M3 engine depends on. Grounded in reference/pino/src/config.js:24-30 —
+// `hostHeader = url.host` (JS URL.host elides default ports, keeps explicit
+// non-default ports) and `pathPrefix = url.pathname.replace(/\/+$/, "")` with
+// "/" normalized to "". Expected to pass on first run because M1 already
+// implements and tests this; here it guards M3's reliance on it.
+#[test]
+fn guard_host_header_elides_default_ports_keeps_explicit() {
+    assert_eq!(
+        up("http://api.anthropic.com").host_header(),
+        "api.anthropic.com"
+    );
+    assert_eq!(
+        up("https://api.anthropic.com").host_header(),
+        "api.anthropic.com"
+    );
+    assert_eq!(
+        up("http://api.anthropic.com:80").host_header(),
+        "api.anthropic.com"
+    );
+    assert_eq!(
+        up("https://api.anthropic.com:443").host_header(),
+        "api.anthropic.com"
+    );
+    assert_eq!(up("http://127.0.0.1:9999").host_header(), "127.0.0.1:9999");
+    assert_eq!(
+        up("https://example.com:8443").host_header(),
+        "example.com:8443"
+    );
+}
+
+#[test]
+fn guard_path_prefix_strips_trailing_slash_and_normalizes_root() {
+    assert_eq!(up("https://api.anthropic.com").path_prefix(), "");
+    assert_eq!(up("https://api.anthropic.com/").path_prefix(), "");
+    assert_eq!(up("http://127.0.0.1:9999/prefix/").path_prefix(), "/prefix");
+    assert_eq!(
+        up("http://127.0.0.1:9999/wire/SECRET/claude-code/anthropic").path_prefix(),
+        "/wire/SECRET/claude-code/anthropic"
+    );
+    assert_eq!(
+        up("http://127.0.0.1:9999/wire/SECRET/claude-code/anthropic/").path_prefix(),
+        "/wire/SECRET/claude-code/anthropic"
+    );
+}
