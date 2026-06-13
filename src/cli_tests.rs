@@ -79,7 +79,10 @@ fn parses_proxy_pino_with_transform_flags() {
                 Some(vec!["WebFetch".to_string(), "WebSearch".to_string()])
             );
             assert_eq!(args.pino.strip_ansi, Some(true));
-            assert_eq!(args.pino.model_override.as_deref(), Some("claude-3-5-haiku"));
+            assert_eq!(
+                args.pino.model_override.as_deref(),
+                Some("claude-3-5-haiku")
+            );
         }
         other => panic!("expected Proxy, got {other:?}"),
     }
@@ -221,7 +224,10 @@ fn proxy_body_log_file_is_independent_of_global_log_file() {
         "/tmp/bodies.log",
     ])
     .expect("proxy argv with both log flags should parse");
-    assert_eq!(cli.log_file.as_deref(), Some(std::path::Path::new("/tmp/tracing.log")));
+    assert_eq!(
+        cli.log_file.as_deref(),
+        Some(std::path::Path::new("/tmp/tracing.log"))
+    );
     match cli.command {
         Command::Proxy(args) => {
             assert_eq!(

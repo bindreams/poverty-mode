@@ -27,7 +27,10 @@ fn proxy_name_health_path_first_party_vs_central() {
 #[test]
 fn proxy_name_from_str_roundtrip_and_reject() {
     assert_eq!("pino".parse::<ProxyName>().unwrap(), ProxyName::Pino);
-    assert_eq!("headroom".parse::<ProxyName>().unwrap(), ProxyName::Headroom);
+    assert_eq!(
+        "headroom".parse::<ProxyName>().unwrap(),
+        ProxyName::Headroom
+    );
     assert_eq!("central".parse::<ProxyName>().unwrap(), ProxyName::Central);
     assert!("nope".parse::<ProxyName>().is_err());
 }
@@ -69,8 +72,7 @@ fn path_prefix_strips_single_trailing_slash() {
     let u = Upstream::parse("https://api.anthropic.com/").unwrap();
     assert_eq!(u.path_prefix(), "");
 
-    let u = Upstream::parse("http://127.0.0.1:9000/wire/SECRET/claude-code/anthropic")
-        .unwrap();
+    let u = Upstream::parse("http://127.0.0.1:9000/wire/SECRET/claude-code/anthropic").unwrap();
     assert_eq!(u.path_prefix(), "/wire/SECRET/claude-code/anthropic");
 
     let u = Upstream::parse("http://127.0.0.1:9000/wire/SECRET/anthropic/").unwrap();
@@ -87,7 +89,11 @@ fn path_prefix_root_is_empty() {
 
 #[test]
 fn transform_kind_variants_exist() {
-    let kinds = [TransformKind::None, TransformKind::Pino, TransformKind::Headroom];
+    let kinds = [
+        TransformKind::None,
+        TransformKind::Pino,
+        TransformKind::Headroom,
+    ];
     assert_eq!(kinds.len(), 3);
 }
 

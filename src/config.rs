@@ -35,9 +35,9 @@ impl ProxyName {
             "pino" => Ok(ProxyName::Pino),
             "headroom" => Ok(ProxyName::Headroom),
             "central" => Ok(ProxyName::Central),
-            other => anyhow::bail!(
-                "unknown proxy name {other:?} (expected pino, headroom, or central)"
-            ),
+            other => {
+                anyhow::bail!("unknown proxy name {other:?} (expected pino, headroom, or central)")
+            }
         }
     }
 }
@@ -105,9 +105,7 @@ impl Config {
                 ProxyEntry {
                     name: ProxyName::Headroom,
                     enabled: false,
-                    settings: ProxySettings::Headroom(HeadroomSettings {
-                        compression: false,
-                    }),
+                    settings: ProxySettings::Headroom(HeadroomSettings { compression: false }),
                 },
                 ProxyEntry {
                     name: ProxyName::Central,
@@ -149,8 +147,8 @@ impl Config {
     pub fn save(&self) -> anyhow::Result<()> {
         self.validate()?;
         let path = crate::paths::config_path()?;
-        let yaml = serde_yaml::to_string(self)
-            .map_err(|e| anyhow::anyhow!("serializing config: {e}"))?;
+        let yaml =
+            serde_yaml::to_string(self).map_err(|e| anyhow::anyhow!("serializing config: {e}"))?;
         crate::paths::atomic_write(&path, yaml.as_bytes())?;
         Ok(())
     }
@@ -246,8 +244,7 @@ impl Config {
     /// the central-last invariant. The result is validated and atomically written
     /// via `save`.
     pub fn save_resolved_chain(&self, chain: &[ResolvedProxy]) -> anyhow::Result<()> {
-        let in_chain: std::collections::HashSet<ProxyName> =
-            chain.iter().map(|r| r.name).collect();
+        let in_chain: std::collections::HashSet<ProxyName> = chain.iter().map(|r| r.name).collect();
 
         // Enabled chain members, in chain order; central deferred to the tail.
         let mut proxies: Vec<ProxyEntry> = Vec::new();
@@ -315,7 +312,11 @@ impl Config {
                 );
             }
         }
-        if let Some(pos) = self.proxies.iter().position(|e| e.name == ProxyName::Central) {
+        if let Some(pos) = self
+            .proxies
+            .iter()
+            .position(|e| e.name == ProxyName::Central)
+        {
             if pos != self.proxies.len() - 1 {
                 anyhow::bail!("config error: central must be last in the proxies list");
             }

@@ -16,8 +16,14 @@ fn pino_settings_default_round_trips_yaml() {
 
 #[test]
 fn tail_ttl_serializes_as_short_strings() {
-    assert_eq!(serde_yaml::to_string(&TailTtl::FiveMin).unwrap().trim(), "5m");
-    assert_eq!(serde_yaml::to_string(&TailTtl::OneHour).unwrap().trim(), "1h");
+    assert_eq!(
+        serde_yaml::to_string(&TailTtl::FiveMin).unwrap().trim(),
+        "5m"
+    );
+    assert_eq!(
+        serde_yaml::to_string(&TailTtl::OneHour).unwrap().trim(),
+        "1h"
+    );
     let five: TailTtl = serde_yaml::from_str("\"5m\"").unwrap();
     let hour: TailTtl = serde_yaml::from_str("\"1h\"").unwrap();
     assert_eq!(five, TailTtl::FiveMin);

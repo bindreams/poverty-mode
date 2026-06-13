@@ -60,7 +60,10 @@ impl EnvVarGuard {
         let lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let prev = std::env::var_os(key);
         apply_env(key, value);
-        EnvVarGuard { saved: vec![(key, prev)], _lock: lock }
+        EnvVarGuard {
+            saved: vec![(key, prev)],
+            _lock: lock,
+        }
     }
 
     /// Set two env vars under a SINGLE `ENV_LOCK` acquisition (avoids the deadlock
@@ -74,7 +77,10 @@ impl EnvVarGuard {
         let prev_b = std::env::var_os(b.0);
         apply_env(a.0, a.1);
         apply_env(b.0, b.1);
-        EnvVarGuard { saved: vec![(a.0, prev_a), (b.0, prev_b)], _lock: lock }
+        EnvVarGuard {
+            saved: vec![(a.0, prev_a), (b.0, prev_b)],
+            _lock: lock,
+        }
     }
 }
 
@@ -115,7 +121,11 @@ impl ConfigHomeGuard {
         let dir = tempfile::TempDir::new().unwrap();
         let prev = std::env::var_os("XDG_CONFIG_HOME");
         std::env::set_var("XDG_CONFIG_HOME", dir.path());
-        ConfigHomeGuard { prev, _lock: lock, dir }
+        ConfigHomeGuard {
+            prev,
+            _lock: lock,
+            dir,
+        }
     }
 
     /// The `poverty-mode.yaml` path inside the isolated config home.

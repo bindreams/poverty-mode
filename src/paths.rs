@@ -195,8 +195,7 @@ fn prune_run_dirs_in(runs_dir: &Path, keep: usize) -> anyhow::Result<()> {
 
     let mut dirs: Vec<(String, PathBuf)> = Vec::new();
     for entry in read {
-        let entry = entry
-            .with_context(|| format!("reading entry under {}", runs_dir.display()))?;
+        let entry = entry.with_context(|| format!("reading entry under {}", runs_dir.display()))?;
         let file_type = entry
             .file_type()
             .with_context(|| format!("stat {}", entry.path().display()))?;

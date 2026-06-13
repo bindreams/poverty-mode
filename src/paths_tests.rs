@@ -59,7 +59,10 @@ fn atomic_write_hardens_file_perms_to_0600_on_unix() {
     atomic_write(&target, b"secret").unwrap();
 
     let mode = fs::metadata(&target).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode, 0o600, "config writes must be owner-only on POSIX, got {mode:o}");
+    assert_eq!(
+        mode, 0o600,
+        "config writes must be owner-only on POSIX, got {mode:o}"
+    );
 }
 
 #[test]
@@ -136,7 +139,10 @@ fn new_run_id_is_lowercase_crockford_base32_len_26() {
             c.is_ascii_lowercase() || c.is_ascii_digit(),
             "char {c:?} not lowercase/digit"
         );
-        assert!(allowed.contains(c), "char {c:?} not in Crockford base32 alphabet");
+        assert!(
+            allowed.contains(c),
+            "char {c:?} not in Crockford base32 alphabet"
+        );
     }
 }
 
@@ -178,7 +184,11 @@ fn config_path_falls_back_to_platform_dir_when_xdg_unset() {
     // Whatever the platform dir is, the file name must be poverty-mode.yaml.
     assert_eq!(p.file_name().unwrap(), "poverty-mode.yaml");
     // And it must be an absolute path (every platform config dir is absolute).
-    assert!(p.is_absolute(), "config path must be absolute, got {}", p.display());
+    assert!(
+        p.is_absolute(),
+        "config path must be absolute, got {}",
+        p.display()
+    );
 }
 
 #[test]
@@ -229,7 +239,11 @@ fn state_dir_empty_override_is_treated_as_unset() {
     // An empty override is ignored (falls back to the platform dir), like XDG.
     let _g = EnvVarGuard::set("POVERTY_STATE_DIR", Some(std::path::Path::new("")));
     let s = state_dir().unwrap();
-    assert!(s.is_absolute(), "fallback state dir must be absolute, got {}", s.display());
+    assert!(
+        s.is_absolute(),
+        "fallback state dir must be absolute, got {}",
+        s.display()
+    );
 }
 
 #[test]
@@ -264,7 +278,10 @@ fn ensure_run_dir_hardens_dir_to_0700_on_unix() {
     let id = new_run_id();
     let created = ensure_run_dir(&id).unwrap();
     let mode = std::fs::metadata(&created).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode, 0o700, "run dir must be owner-only on POSIX, got {mode:o}");
+    assert_eq!(
+        mode, 0o700,
+        "run dir must be owner-only on POSIX, got {mode:o}"
+    );
     std::fs::remove_dir_all(&created).unwrap();
 }
 
@@ -382,7 +399,7 @@ fn prune_run_dirs_no_op_when_fewer_than_keep() {
 fn prune_run_dirs_no_op_when_runs_dir_absent() {
     let tmp = tempfile::TempDir::new().unwrap();
     let runs = tmp.path().join("runs"); // never created
-    // Must succeed (Ok) without error and without creating anything.
+                                        // Must succeed (Ok) without error and without creating anything.
     prune_run_dirs_in(&runs, 3).unwrap();
     assert!(!runs.exists());
 }

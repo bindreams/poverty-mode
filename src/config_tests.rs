@@ -34,7 +34,10 @@ fn default_all_disabled_lists_three_proxies_all_disabled_in_order() {
     assert_eq!(cfg.defaults.enable_tool_search, true);
 
     let names: Vec<ProxyName> = cfg.proxies.iter().map(|e| e.name).collect();
-    assert_eq!(names, vec![ProxyName::Pino, ProxyName::Headroom, ProxyName::Central]);
+    assert_eq!(
+        names,
+        vec![ProxyName::Pino, ProxyName::Headroom, ProxyName::Central]
+    );
 
     for e in &cfg.proxies {
         assert_eq!(e.enabled, false, "proxy {:?} must default disabled", e.name);
@@ -76,7 +79,10 @@ fn yaml_uses_lowercase_proxy_names_and_5m_tail_ttl() {
     assert!(yaml.contains("name: pino"), "yaml was:\n{yaml}");
     assert!(yaml.contains("name: headroom"), "yaml was:\n{yaml}");
     assert!(yaml.contains("name: central"), "yaml was:\n{yaml}");
-    assert!(yaml.contains("5m"), "tail_ttl should serialize as 5m; yaml was:\n{yaml}");
+    assert!(
+        yaml.contains("5m"),
+        "tail_ttl should serialize as 5m; yaml was:\n{yaml}"
+    );
 }
 
 #[test]
@@ -155,8 +161,14 @@ fn tail_ttl_invalid_value_deserializes_to_five_min() {
         .expect("invalid TailTtl must deserialize leniently to FiveMin");
     assert_eq!(t, TailTtl::FiveMin);
     // And the valid tokens still parse exactly.
-    assert_eq!(serde_yaml::from_str::<TailTtl>("5m\n").unwrap(), TailTtl::FiveMin);
-    assert_eq!(serde_yaml::from_str::<TailTtl>("1h\n").unwrap(), TailTtl::OneHour);
+    assert_eq!(
+        serde_yaml::from_str::<TailTtl>("5m\n").unwrap(),
+        TailTtl::FiveMin
+    );
+    assert_eq!(
+        serde_yaml::from_str::<TailTtl>("1h\n").unwrap(),
+        TailTtl::OneHour
+    );
 }
 
 use crate::test_support::ConfigHomeGuard;
@@ -240,7 +252,10 @@ defaults:
 
     let err = Config::load_or_create().unwrap_err();
     let msg = err.to_string().to_lowercase();
-    assert!(msg.contains("pino"), "error should mention the proxy name: {msg}");
+    assert!(
+        msg.contains("pino"),
+        "error should mention the proxy name: {msg}"
+    );
     assert!(
         msg.contains("settings") || msg.contains("mismatch"),
         "error should mention settings mismatch: {msg}"
@@ -272,8 +287,14 @@ defaults:
 
     let err = Config::load_or_create().unwrap_err();
     let msg = err.to_string().to_lowercase();
-    assert!(msg.contains("central"), "error should mention central: {msg}");
-    assert!(msg.contains("last"), "error should mention last-position rule: {msg}");
+    assert!(
+        msg.contains("central"),
+        "error should mention central: {msg}"
+    );
+    assert!(
+        msg.contains("last"),
+        "error should mention last-position rule: {msg}"
+    );
 }
 
 #[test]
@@ -336,7 +357,10 @@ fn save_writes_config_file_0600_on_unix() {
         .permissions()
         .mode()
         & 0o777;
-    assert_eq!(mode, 0o600, "config file must be owner-only on POSIX, got {mode:o}");
+    assert_eq!(
+        mode, 0o600,
+        "config file must be owner-only on POSIX, got {mode:o}"
+    );
 }
 
 fn enabled_default() -> Config {
@@ -357,7 +381,10 @@ fn names_of(chain: &[ResolvedProxy]) -> Vec<ProxyName> {
 fn resolve_uses_config_file_order_when_no_cli_no_env() {
     let cfg = enabled_default();
     let chain = cfg.resolve_chain(None, None).unwrap();
-    assert_eq!(names_of(&chain), vec![ProxyName::Pino, ProxyName::Headroom, ProxyName::Central]);
+    assert_eq!(
+        names_of(&chain),
+        vec![ProxyName::Pino, ProxyName::Headroom, ProxyName::Central]
+    );
 }
 
 #[test]
@@ -491,7 +518,9 @@ fn resolve_errors_when_requested_central_missing_from_config() {
     // Config with no central entry, but CLI requests central => no settings.
     let mut cfg = Config::default_all_disabled();
     cfg.proxies.retain(|e| e.name != ProxyName::Central);
-    let err = cfg.resolve_chain(Some(&[ProxyName::Central]), None).unwrap_err();
+    let err = cfg
+        .resolve_chain(Some(&[ProxyName::Central]), None)
+        .unwrap_err();
     let msg = err.to_string().to_lowercase();
     assert!(msg.contains("central"), "msg: {msg}");
 }
@@ -501,7 +530,9 @@ fn resolve_errors_when_requested_pino_missing_from_config() {
     // Config trimmed to only headroom+central, but CLI requests pino => no settings.
     let mut cfg = enabled_default();
     cfg.proxies.retain(|e| e.name != ProxyName::Pino);
-    let err = cfg.resolve_chain(Some(&[ProxyName::Pino]), None).unwrap_err();
+    let err = cfg
+        .resolve_chain(Some(&[ProxyName::Pino]), None)
+        .unwrap_err();
     let msg = err.to_string().to_lowercase();
     assert!(msg.contains("pino"), "msg: {msg}");
 }
@@ -558,8 +589,11 @@ fn save_resolved_chain_rewrites_order_and_enabled_set() {
         names,
         vec![ProxyName::Headroom, ProxyName::Pino, ProxyName::Central]
     );
-    let enabled: Vec<(ProxyName, bool)> =
-        reloaded.proxies.iter().map(|e| (e.name, e.enabled)).collect();
+    let enabled: Vec<(ProxyName, bool)> = reloaded
+        .proxies
+        .iter()
+        .map(|e| (e.name, e.enabled))
+        .collect();
     assert_eq!(
         enabled,
         vec![
@@ -633,8 +667,15 @@ fn characterization_default_yaml_has_spec_5_2_shape() {
     let pino_at = yaml.find("name: pino").expect("pino present");
     let headroom_at = yaml.find("name: headroom").expect("headroom present");
     let central_at = yaml.find("name: central").expect("central present");
-    assert!(pino_at < headroom_at && headroom_at < central_at, "order; yaml:\n{yaml}");
-    assert_eq!(yaml.matches("enabled: false").count(), 3, "all disabled; yaml:\n{yaml}");
+    assert!(
+        pino_at < headroom_at && headroom_at < central_at,
+        "order; yaml:\n{yaml}"
+    );
+    assert_eq!(
+        yaml.matches("enabled: false").count(),
+        3,
+        "all disabled; yaml:\n{yaml}"
+    );
 
     // Pino settings shape.
     assert!(yaml.contains("auto_cache: true"), "yaml:\n{yaml}");
