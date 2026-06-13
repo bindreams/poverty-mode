@@ -61,3 +61,66 @@ fn atomic_write_hardens_file_perms_to_0600_on_unix() {
     let mode = fs::metadata(&target).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600, "config writes must be owner-only on POSIX, got {mode:o}");
 }
+
+#[test]
+fn with_file_lock_runs_closure_and_returns_value() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let lock = dir.path().join("cache.lock");
+
+    let out = with_file_lock(&lock, || Ok(42u32)).unwrap();
+    assert_eq!(out, 42);
+    // The lock file is created as a side effect.
+    assert!(lock.exists());
+}
+
+#[test]
+fn with_file_lock_propagates_closure_error() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let lock = dir.path().join("cache.lock");
+
+    let err = with_file_lock::<()>(&lock, || Err(anyhow::anyhow!("boom"))).unwrap_err();
+    assert!(err.to_string().contains("boom"));
+}
+
+#[test]
+fn with_file_lock_serializes_concurrent_holders() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::thread;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let lock = Arc::new(dir.path().join("cache.lock"));
+
+    // `inside` counts how many threads are in the critical section at once.
+    // If the lock works, the observed maximum is always 1.
+    let inside = Arc::new(AtomicUsize::new(0));
+    let max_seen = Arc::new(AtomicUsize::new(0));
+
+    let mut handles = Vec::new();
+    for _ in 0..8 {
+        let lock = Arc::clone(&lock);
+        let inside = Arc::clone(&inside);
+        let max_seen = Arc::clone(&max_seen);
+        handles.push(thread::spawn(move || {
+            with_file_lock(&lock, || {
+                let now = inside.fetch_add(1, Ordering::SeqCst) + 1;
+                max_seen.fetch_max(now, Ordering::SeqCst);
+                // A bounded amount of real CPU work (NOT a timed sleep) so that
+                // overlap would be observable if the lock failed.
+                let mut acc = 0u64;
+                for i in 0..200_000u64 {
+                    acc = acc.wrapping_add(i);
+                }
+                std::hint::black_box(acc);
+                inside.fetch_sub(1, Ordering::SeqCst);
+                Ok(())
+            })
+            .unwrap();
+        }));
+    }
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    assert_eq!(max_seen.load(Ordering::SeqCst), 1);
+}

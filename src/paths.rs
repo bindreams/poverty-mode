@@ -47,6 +47,40 @@ pub fn harden_file_perms(_path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+use fs2::FileExt;
+
+/// Run `f` while holding an advisory EXCLUSIVE lock on `lock_path`. The lock file
+/// is created if missing and is never deleted (the lock is the open handle, not
+/// the file's existence). The lock is released when the handle is dropped, which
+/// happens on every exit path — normal return, `?` early-return, or panic — so no
+/// explicit unlock is needed.
+pub fn with_file_lock<T>(
+    lock_path: &Path,
+    f: impl FnOnce() -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    if let Some(parent) = lock_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating lock dir {}", parent.display()))?;
+    }
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        // Never truncate: the lock is the open handle, not the file's contents, and
+        // truncation would needlessly mutate a file shared across processes.
+        .truncate(false)
+        .open(lock_path)
+        .with_context(|| format!("opening lock file {}", lock_path.display()))?;
+    file.lock_exclusive()
+        .with_context(|| format!("locking {}", lock_path.display()))?;
+    // `file` is a named local: it lives until the end of this function, so the lock
+    // is held across `f()` and released when the handle is dropped on return — on
+    // every exit path (normal, `?` early-return, or panic). We rely on close-on-drop
+    // rather than an explicit RAII unlock guard, whose only effect would be releasing
+    // microseconds earlier — fully overlapped by the guaranteed close-on-drop.
+    f()
+}
+
 #[cfg(test)]
 #[path = "paths_tests.rs"]
 mod paths_tests;
