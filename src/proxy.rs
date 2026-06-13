@@ -71,6 +71,20 @@ pub fn upstream_target_uri(
         .map_err(|e| anyhow::anyhow!("failed to build upstream URI: {e}"))
 }
 
+/// Build the reqwest client used for all upstream forwarding.
+///
+/// TLS uses the `rustls-tls-native-roots` feature pinned in Cargo.toml (R2),
+/// which loads the OS / corporate trust store so the final HTTPS hop works
+/// behind corporate CAs. We deliberately do NOT use rustls-platform-verifier or
+/// `use_preconfigured_tls` (R2). Auto-redirect is disabled: we never want auth
+/// headers (`x-api-key`, `authorization`) replayed to a redirected host.
+pub fn build_upstream_client() -> anyhow::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| anyhow::anyhow!("failed to build upstream client: {e}"))
+}
+
 /// First-party (compiled-in) vs external (downloaded) proxy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProxyKind {

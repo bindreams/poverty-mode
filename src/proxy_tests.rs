@@ -370,3 +370,15 @@ fn guard_path_prefix_strips_trailing_slash_and_normalizes_root() {
         "/wire/SECRET/claude-code/anthropic"
     );
 }
+
+// ---- build_upstream_client (M3.4) ----
+
+#[test]
+fn upstream_client_builds_and_clone_is_cheap() {
+    // We do not perform a TLS handshake here; only assert that constructing the
+    // native-roots-backed, no-redirect client succeeds. A real http forward is
+    // covered by the integration tests in tests/proxy_engine.rs.
+    let client = build_upstream_client().expect("client builds");
+    // Cloning shares the connection pool; assert it is cheap/valid.
+    let _clone = client.clone();
+}
