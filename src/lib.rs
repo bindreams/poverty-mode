@@ -7,6 +7,7 @@
 pub mod cli;
 pub mod error;
 pub mod logging;
+pub mod paths;
 pub mod proxy;
 
 pub use error::{Error, Result};
