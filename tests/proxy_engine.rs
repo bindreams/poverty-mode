@@ -755,3 +755,78 @@ async fn drain_completes_in_flight_request_before_exit() {
         .expect("join")
         .expect("engine drained ok");
 }
+
+use poverty_mode::proxy::run_proxy_with_shutdown;
+
+// R5 guard: drive the engine through a healthy fake on the multi-thread runtime,
+// serving a REAL request before draining, then drive the public async entry to
+// completion. `flavor = "multi_thread"` ensures any accidental blocking call
+// surfaces as a hang/panic the suite would catch, not a single-threaded deadlock
+// that masks it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn run_proxy_entry_serves_and_drains_without_blocking_panic() {
+    let stub = start_stub_async(r#"{"ok":true}"#).await;
+
+    // Part 1 — the engine path (the body run_proxy_with_shutdown runs): bind via
+    // bind_engine (returns the port), serve a REAL POST that reaches the healthy
+    // fake, then drain. This is the real-forward R5 demands.
+    let shutdown = std::sync::Arc::new(Notify::new());
+    let shutdown_fut = {
+        let s = shutdown.clone();
+        async move { s.notified().await }
+    };
+    let cfg = EngineConfig {
+        name: ProxyName::Pino,
+        listen: "127.0.0.1:0".parse().unwrap(),
+        upstream: upstream(&format!("http://127.0.0.1:{}", stub.port)),
+        run_id: "01J0R5A".to_string(),
+        log_file: None,
+        transform: TransformKind::None,
+    };
+    let bound = bind_engine(cfg, shutdown_fut).await.expect("bind");
+    let port = bound.local_addr.port();
+
+    let (status, body) = raw_post(port, "/v1/messages", r#"{"messages":[]}"#).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "engine must serve a real forward without blocking panic"
+    );
+    assert_eq!(body, r#"{"ok":true}"#);
+    assert_eq!(stub.count(), 1, "the real request reached the healthy fake");
+
+    shutdown.notify_waiters();
+    bound
+        .handle
+        .await
+        .expect("join")
+        .expect("engine drained ok");
+
+    // Part 2 — the public async entry: bind + drain to completion with no
+    // blocking-call panic. It prints its READY line to process stdout (not
+    // readable in-process), so we synchronize on the run task finishing after we
+    // signal shutdown; with no in-flight connection the drain completes at once.
+    // `notify_one` (not `notify_waiters`) stores a permit when no waiter is yet
+    // registered, so the wakeup is never lost to the spawn-vs-notify race: the
+    // engine's `notified().await` consumes the stored permit and drains. With
+    // `notify_waiters` the signal would be dropped whenever the spawned run task
+    // had not yet polled its shutdown future, hanging the drain forever.
+    let shutdown2 = std::sync::Arc::new(Notify::new());
+    let shutdown2_fut = {
+        let s = shutdown2.clone();
+        async move { s.notified().await }
+    };
+    let cfg2 = EngineConfig {
+        name: ProxyName::Pino,
+        listen: "127.0.0.1:0".parse().unwrap(),
+        upstream: upstream(&format!("http://127.0.0.1:{}", stub.port)),
+        run_id: "01J0R5B".to_string(),
+        log_file: None,
+        transform: TransformKind::None,
+    };
+    let run = tokio::spawn(async move { run_proxy_with_shutdown(cfg2, shutdown2_fut).await });
+    shutdown2.notify_one();
+    run.await
+        .expect("run task join")
+        .expect("run_proxy_with_shutdown ok");
+}
