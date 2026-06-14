@@ -189,9 +189,9 @@ async fn build_via_manager(
     argv: &[String],
 ) -> anyhow::Result<std::process::ExitStatus> {
     let run_id = crate::paths::new_run_id();
-    let run_dir = crate::paths::run_dir(&run_id)?;
-    std::fs::create_dir_all(&run_dir)
-        .map_err(|e| anyhow::anyhow!("creating run dir {}: {e}", run_dir.display()))?;
+    // `ensure_run_dir` hardens the dir to 0700 on POSIX (the run dir holds proxy
+    // body-log files with full request/response bodies), unlike a raw create.
+    let run_dir = crate::paths::ensure_run_dir(&run_id)?;
 
     // Carry STRUCTURED hop fields; the manager renders the exact argv via the
     // single source of truth `proxy_child_args` once it knows each hop's real
