@@ -4,13 +4,20 @@
 //! 1. `--interactive` dispatches into `tui::run_picker` instead of the old M6
 //!    `anyhow::bail!("--interactive requires the TUI (milestone M9)")` placeholder.
 //! 2. The non-TTY guard fails loudly with a typed [`TuiError::NotATerminal`] when
-//!    stdio is not a terminal (always true under `assert_cmd`, which pipes stdio),
-//!    rather than hanging on `event::read`.
+//!    stdio is not a terminal, rather than hanging on `event::read`.
 //!
 //! Both are observed via the binary: `assert_cmd` spawns the child with piped
 //! (non-TTY) stdin/stdout, so the guard fires deterministically and the process
 //! exits with the terminal-required message — proving the request reached
 //! `run_picker` and not the removed bail.
+//!
+//! These are deliberately binary-level (not in-process) checks. `run_picker`'s
+//! guard queries the real OS file descriptors via `IsTerminal`; libtest's output
+//! capture only redirects the Rust-level `Stdout` writer, NOT fds 0/1, so an
+//! in-process `run_picker` call would see a live TTY under an interactive
+//! `cargo test`, skip the guard, and hang on `event::read`. The piped assert_cmd
+//! child is non-TTY regardless of the parent terminal, so it is the portable way
+//! to exercise the `NotATerminal` path.
 
 use assert_cmd::Command;
 use predicates::prelude::PredicateBooleanExt;
@@ -39,25 +46,6 @@ fn interactive_run_reaches_picker_and_hits_non_tty_guard() {
         // The old placeholder must be gone: a milestone-M9 bail means the request
         // never reached run_picker.
         .stderr(contains("milestone M9").not());
-}
-
-/// The library symbol `tui::run_picker` returns the typed
-/// `TuiError::NotATerminal` when stdio is not a terminal. Under `cargo test` the
-/// child stdio is captured (not a TTY), so the guard fires; this asserts the
-/// typed error variant directly, independent of the binary path.
-#[test]
-fn run_picker_returns_typed_not_a_terminal_off_tty() {
-    use poverty_mode::config::Config;
-    use poverty_mode::tui::{run_picker, TuiError};
-
-    let config = Config::default_all_disabled();
-    let err =
-        run_picker(&config, &[]).expect_err("non-TTY stdio must error, not proceed to render");
-    assert!(
-        err.downcast_ref::<TuiError>()
-            .is_some_and(|e| matches!(e, TuiError::NotATerminal)),
-        "expected TuiError::NotATerminal, got: {err:?}"
-    );
 }
 
 /// `--interactive` must NOT silently drop `--proxies` (spec §5.10: the TUI is
