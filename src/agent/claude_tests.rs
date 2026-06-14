@@ -13,18 +13,16 @@ fn build_command_uses_argv_program_and_args() {
     let std = cmd.as_std();
     // Generic model (M6): program is argv[0].
     assert_eq!(std.get_program(), std::ffi::OsStr::new("/usr/bin/claude"));
-    // M7.2 inserts `--settings <json>` between the program and argv[1..]; the
-    // user's args (argv[1..]) follow verbatim and in order.
-    let args: Vec<_> = std.get_args().collect();
-    assert_eq!(
-        args,
-        vec![
-            std::ffi::OsStr::new("--settings"),
-            std::ffi::OsStr::new("{}"),
-            std::ffi::OsStr::new("--print"),
-            std::ffi::OsStr::new("hi"),
-        ]
-    );
+    // M7.2/M7.4 insert `--settings <json>` between the program and argv[1..]; the
+    // user's args (argv[1..]) follow verbatim and in order. (We assert the flag's
+    // position and the trailing user args here; the JSON value's *contents* are
+    // characterized by the M7.4 `settings_*` tests, so we do not hardcode them.)
+    let args: Vec<_> = std
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(args[0], "--settings");
+    assert_eq!(&args[2..], &["--print".to_string(), "hi".to_string()]);
 }
 
 #[test]
@@ -229,4 +227,123 @@ fn anthropic_tail_has_no_auth_token_override() {
     let extra = vec![("ENABLE_TOOL_SEARCH".to_string(), "true".to_string())];
     let cmd = ClaudeAgent.build_command(&[], &base, &extra);
     assert_eq!(env_of(&cmd, "ANTHROPIC_AUTH_TOKEN"), None);
+}
+
+// M7.4 (the real new work: belt 2's `--settings {"env":{...}}` contents) =====
+//
+// The `--settings` JSON env block must carry exactly belt 1's pairs:
+// ANTHROPIC_BASE_URL plus every extra_env entry — so the two belts cannot
+// disagree (design §8). These tests parse the JSON back and assert per-field.
+
+use serde_json::Value;
+
+// Extract and parse the JSON value passed to `--settings`.
+fn settings_json(cmd: &tokio::process::Command) -> Value {
+    let args = args_of(cmd);
+    let pos = args
+        .iter()
+        .position(|a| a == "--settings")
+        .expect("--settings present");
+    let raw = &args[pos + 1];
+    serde_json::from_str(raw).expect("--settings value must be valid JSON")
+}
+
+#[test]
+fn settings_env_block_carries_base_url() {
+    let base = Url::parse("http://127.0.0.1:4100").unwrap();
+    let v = settings_json(&ClaudeAgent.build_command(&[], &base, &[]));
+    assert_eq!(
+        v["env"]["ANTHROPIC_BASE_URL"],
+        Value::String("http://127.0.0.1:4100/".to_string())
+    );
+}
+
+#[test]
+fn settings_env_mirrors_extra_env_exactly() {
+    let base = Url::parse("http://127.0.0.1:4100").unwrap();
+    let extra = vec![
+        (
+            "POVERTY_PROXY_CHAIN".to_string(),
+            "pino,central".to_string(),
+        ),
+        ("ENABLE_TOOL_SEARCH".to_string(), "true".to_string()),
+        ("ANTHROPIC_AUTH_TOKEN".to_string(), "wire-proxy".to_string()),
+    ];
+    let v = settings_json(&ClaudeAgent.build_command(&[], &base, &extra));
+    let env = v["env"].as_object().expect("env is an object");
+
+    // Exactly base_url + the three extra entries: 4 keys, no more.
+    assert_eq!(env.len(), 4, "env block has exactly base_url + extra_env");
+    assert_eq!(
+        env["ANTHROPIC_BASE_URL"],
+        Value::String("http://127.0.0.1:4100/".to_string())
+    );
+    assert_eq!(
+        env["POVERTY_PROXY_CHAIN"],
+        Value::String("pino,central".to_string())
+    );
+    assert_eq!(env["ENABLE_TOOL_SEARCH"], Value::String("true".to_string()));
+    assert_eq!(
+        env["ANTHROPIC_AUTH_TOKEN"],
+        Value::String("wire-proxy".to_string())
+    );
+}
+
+#[test]
+fn anthropic_tail_settings_omits_auth_token() {
+    // No central tail => no ANTHROPIC_AUTH_TOKEN in extra_env => absent from the
+    // settings env block too (user auth flows through verbatim).
+    let base = Url::parse("http://127.0.0.1:4100").unwrap();
+    let extra = vec![("ENABLE_TOOL_SEARCH".to_string(), "true".to_string())];
+    let v = settings_json(&ClaudeAgent.build_command(&[], &base, &extra));
+    let env = v["env"].as_object().unwrap();
+    assert!(!env.contains_key("ANTHROPIC_AUTH_TOKEN"));
+    assert_eq!(env.len(), 2); // base_url + ENABLE_TOOL_SEARCH
+}
+
+#[test]
+fn settings_env_matches_process_env_for_every_key() {
+    // The dual-belt invariant: every key in the settings env block has the same
+    // value as the process env, and vice versa.
+    let base = Url::parse("http://127.0.0.1:4100").unwrap();
+    let extra = vec![
+        ("POVERTY_PROXY_CHAIN".to_string(), "headroom".to_string()),
+        ("ENABLE_TOOL_SEARCH".to_string(), "true".to_string()),
+        ("ANTHROPIC_AUTH_TOKEN".to_string(), "wire-proxy".to_string()),
+    ];
+    let cmd = ClaudeAgent.build_command(&[], &base, &extra);
+    let v = settings_json(&cmd);
+    let env = v["env"].as_object().unwrap();
+
+    for (k, val) in env {
+        let from_proc = env_of(&cmd, k);
+        let expected = val.as_str().unwrap().to_string();
+        assert_eq!(
+            from_proc,
+            Some(expected),
+            "settings key {k} must equal the process-env value"
+        );
+    }
+    // ANTHROPIC_BASE_URL is in process env too even though the orchestrator
+    // does not include it in extra_env.
+    assert_eq!(
+        env_of(&cmd, "ANTHROPIC_BASE_URL"),
+        Some("http://127.0.0.1:4100/".to_string())
+    );
+}
+
+#[test]
+fn settings_value_escapes_special_characters() {
+    // A value with quotes/backslashes/newlines must round-trip through JSON,
+    // proving we serialize with serde_json rather than string concatenation.
+    // Note: cross-platform safety (spec 12) — the arg is passed via the
+    // std::process arg vector (no shell), so Rust handles OS-level quoting on
+    // both Unix and Windows; only JSON-level escaping is our concern here.
+    let base = Url::parse("http://127.0.0.1:4100").unwrap();
+    let extra = vec![
+        ("ENABLE_TOOL_SEARCH".to_string(), "true".to_string()),
+        ("WEIRD".to_string(), "a\"b\\c\nd".to_string()),
+    ];
+    let v = settings_json(&ClaudeAgent.build_command(&[], &base, &extra));
+    assert_eq!(v["env"]["WEIRD"], Value::String("a\"b\\c\nd".to_string()));
 }

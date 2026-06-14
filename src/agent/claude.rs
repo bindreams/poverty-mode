@@ -11,6 +11,8 @@
 //! JSON and the `ENABLE_TOOL_SEARCH`-origin cross-check; it does not re-type the
 //! [`Agent`] trait or replace the process-env wiring this milestone establishes.
 
+use std::collections::BTreeMap;
+
 use url::Url;
 
 use crate::agent::Agent;
@@ -18,6 +20,25 @@ use crate::agent::Agent;
 /// The v1 agent implementation. Zero-sized: all per-run state arrives through
 /// `build_command`'s arguments (the resolved chain head and `extra_env`).
 pub struct ClaudeAgent;
+
+impl ClaudeAgent {
+    /// Build the inline `--settings` JSON: `{"env": { ... }}` whose env map is
+    /// ANTHROPIC_BASE_URL plus every `extra_env` entry — byte-for-byte the same
+    /// pairs as the process-env belt (belt 1), so the two belts cannot disagree
+    /// (design §8). A `BTreeMap` iterates in sorted key order; with serde_json's
+    /// `preserve_order` feature that sorted order is preserved in the emitted
+    /// JSON, giving deterministic, cache-friendly output. We serialize with
+    /// serde_json (never string concatenation) for escaping-safe JSON.
+    fn settings_json(base_url: &Url, extra_env: &[(String, String)]) -> String {
+        let mut env: BTreeMap<&str, &str> = BTreeMap::new();
+        env.insert("ANTHROPIC_BASE_URL", base_url.as_str());
+        for (k, v) in extra_env {
+            env.insert(k.as_str(), v.as_str());
+        }
+        let settings = serde_json::json!({ "env": env });
+        serde_json::to_string(&settings).expect("settings JSON serializes")
+    }
+}
 
 impl Agent for ClaudeAgent {
     fn name(&self) -> &str {
@@ -39,11 +60,11 @@ impl Agent for ClaudeAgent {
         extra_env: &[(String, String)],
     ) -> tokio::process::Command {
         // Generic model (M6): the program is argv[0]; argv[1..] are its args.
-        // Belt 2 (M7.2): a single `--settings <json>` pair is inserted between the
-        // program and argv[1..], so it lands at CLI-arg precedence ahead of the
-        // user's own flags. The JSON's `{"env":{...}}` contents — mirroring belt 1
-        // (ANTHROPIC_BASE_URL + extra_env) — are filled in M7.4; M7.2 only fixes
-        // the program/argv ordering and the presence/position of `--settings`.
+        // Belt 2 (M7.2/M7.4): a single `--settings <json>` pair is inserted
+        // between the program and argv[1..], so it lands at CLI-arg precedence
+        // ahead of the user's own flags. The JSON's `{"env":{...}}` mirrors belt 1
+        // (ANTHROPIC_BASE_URL + extra_env) exactly, so the two belts cannot
+        // disagree (design §8).
         let (program, rest): (&str, &[String]) = match argv.split_first() {
             Some((program, rest)) => (program.as_str(), rest),
             // Empty argv: invoke the default agent binary, still emitting belt 2.
@@ -53,7 +74,7 @@ impl Agent for ClaudeAgent {
 
         // Belt 2: inline --settings env block, inserted BEFORE the user's args.
         cmd.arg("--settings");
-        cmd.arg("{}"); // placeholder JSON; real env block added in M7.4.
+        cmd.arg(Self::settings_json(base_url, extra_env));
 
         // User args (argv[1..]) last.
         cmd.args(rest);
