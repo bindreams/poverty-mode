@@ -1,11 +1,27 @@
 //! JB Central: the downloaded shared singleton that always runs last in the
 //! chain. M8 fills install / login / start / health / stop; this module currently
-//! provides only the two items the orchestrator (M6) consumes — the started
-//! `CentralInfo` (port + wire secret) and `central_wire_upstream`, which renders
-//! the JetBrains wire URL the pre-central hop (or a central-only agent) targets.
+//! provides the items the orchestrator (M6) consumes — the started `CentralInfo`
+//! (port + wire secret) and `central_wire_upstream`, which renders the JetBrains
+//! wire URL the pre-central hop (or a central-only agent) targets — plus the M8.5
+//! constants (R4) and `~/.wire/config.json` parsing.
+//!
+//! **R5 contract:** every function here that does filesystem I/O (`read_wire_config`)
+//! — and, as later M8 tasks fill them, every function that shells out or hits the
+//! network — is synchronous/blocking. Callers in an async context (the orchestrator,
+//! M6) MUST invoke them via `tokio::task::spawn_blocking`.
+
+use std::path::PathBuf;
+
+use anyhow::{anyhow, bail, Context};
+use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 
 use crate::proxy::Upstream;
-use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
+
+/// The default jbcentral version this build manages (R4). Single source of truth.
+pub const DEFAULT_JBCENTRAL_VERSION: &str = "0.2.9";
+
+/// The install-dir name under `<cache>/bin/` (R4). Shared with M10 status/clean — never `central`.
+pub const INSTALL_TOOL_DIR: &str = "jbcentral";
 
 /// Characters that must be percent-encoded so the wire secret stays a single,
 /// faithful path segment (R20). Beyond the C0 controls, this encodes the path
@@ -60,6 +76,56 @@ pub fn central_wire_upstream(info: &CentralInfo) -> Upstream {
     ))
     .expect("central wire URL is well-formed");
     Upstream { url }
+}
+
+/// Parse the contents of `~/.wire/config.json` into a [`CentralInfo`].
+///
+/// Fails closed (error, never a default) when the file is unparseable or missing fields, so the
+/// caller never silently bypasses wire. The error message never echoes the raw JSON (it may carry the
+/// secret): on a parse failure we emit a fixed string and do NOT interpolate the serde error, which
+/// could contain a fragment of the input. Some jbcentral builds write `proxy_port` as a string, so a
+/// numeric-string port is coerced.
+pub fn parse_wire_config(contents: &str) -> anyhow::Result<CentralInfo> {
+    let value: serde_json::Value = serde_json::from_str(contents)
+        .map_err(|_| anyhow!("~/.wire/config.json is not valid JSON"))?;
+
+    let port = match value.get("proxy_port") {
+        Some(serde_json::Value::Number(n)) => n
+            .as_u64()
+            .and_then(|v| u16::try_from(v).ok())
+            .ok_or_else(|| anyhow!("proxy_port out of u16 range"))?,
+        Some(serde_json::Value::String(s)) => s
+            .trim()
+            .parse::<u16>()
+            .map_err(|_| anyhow!("proxy_port string is not a u16"))?,
+        Some(_) => bail!("proxy_port has an unexpected type"),
+        None => bail!("~/.wire/config.json missing \"proxy_port\""),
+    };
+
+    let secret = match value.get("proxy_secret") {
+        Some(serde_json::Value::String(s)) if !s.is_empty() => s.clone(),
+        Some(_) => bail!("proxy_secret has an unexpected type or is empty"),
+        None => bail!("~/.wire/config.json missing \"proxy_secret\""),
+    };
+
+    Ok(CentralInfo { port, secret })
+}
+
+/// Default location of the wire config: `~/.wire/config.json`.
+pub fn wire_config_path() -> anyhow::Result<PathBuf> {
+    let home = directories::BaseDirs::new()
+        .ok_or_else(|| anyhow!("cannot determine home directory"))?
+        .home_dir()
+        .to_path_buf();
+    Ok(home.join(".wire").join("config.json"))
+}
+
+/// Read + parse `~/.wire/config.json`. Blocking filesystem I/O (R5).
+pub fn read_wire_config() -> anyhow::Result<CentralInfo> {
+    let path = wire_config_path()?;
+    let contents =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    parse_wire_config(&contents)
 }
 
 #[cfg(test)]
