@@ -13,8 +13,10 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use http_body_util::Full;
-use hyper::body::Incoming;
+use futures_util::TryStreamExt;
+use http_body_util::combinators::BoxBody;
+use http_body_util::{BodyExt, Full, StreamBody};
+use hyper::body::{Frame, Incoming};
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
@@ -318,7 +320,6 @@ struct EngineState {
     port: u16,
     upstream: Upstream,
     run_id: String,
-    #[allow(dead_code)] // M3.9 wires this into the forward path.
     client: reqwest::Client,
     // R22/R23d: the engine stores `Arc<dyn BodyTransform + Send + Sync>` so the
     // forward path can clone the `Arc` into a `tokio::task::spawn_blocking`
@@ -326,9 +327,8 @@ struct EngineState {
     // R20). M5 reuses this exact field and does NOT re-type it. A `Box` would
     // foreclose that design (it cannot be moved into a 'static blocking closure
     // and still be reused), so M3 authors `Arc` now.
-    #[allow(dead_code)] // M3.9 wires this into the forward path.
     transform: Option<Arc<dyn BodyTransform + Send + Sync>>,
-    #[allow(dead_code)] // M3.9 wires this into the forward path.
+    #[allow(dead_code)] // M3.11 wires this into the response log-tee.
     log_file: Option<std::path::PathBuf>,
 }
 
@@ -435,6 +435,22 @@ async fn serve_loop(
     Ok(())
 }
 
+/// The engine's response/forward body type: a boxed body streaming `Bytes`
+/// with `std::io::Error` as its error, so we can mix buffered (`Full`) and
+/// streamed (`StreamBody`) bodies behind one type.
+type EngineBody = BoxBody<Bytes, std::io::Error>;
+
+fn full_body(bytes: Bytes) -> EngineBody {
+    Full::new(bytes).map_err(|never| match never {}).boxed()
+}
+
+/// Stream a request body (`Incoming`) through untouched as a `reqwest::Body`,
+/// without buffering. Used on the non-transform path (R11).
+fn stream_request_body(body: Incoming) -> reqwest::Body {
+    let stream = body.into_data_stream().map_err(std::io::Error::other);
+    reqwest::Body::wrap_stream(stream)
+}
+
 /// Request handler: answer the local health probe; otherwise forward upstream.
 ///
 /// Returns `Result<_, Infallible>` (R23e): hyper-util's `serve_connection`
@@ -444,7 +460,7 @@ async fn serve_loop(
 async fn handle_request(
     state: Arc<EngineState>,
     req: Request<Incoming>,
-) -> Result<Response<Full<Bytes>>, Infallible> {
+) -> Result<Response<EngineBody>, Infallible> {
     if req.method() == hyper::Method::GET && is_health_path(req.uri().path(), state.name) {
         return Ok(health_response(&state));
     }
@@ -457,7 +473,7 @@ fn is_health_path(path: &str, name: ProxyName) -> bool {
     path == name.health_path()
 }
 
-fn health_response(state: &EngineState) -> Response<Full<Bytes>> {
+fn health_response(state: &EngineState) -> Response<EngineBody> {
     let body = HealthBody {
         proxy: state.name.as_str().to_string(),
         port: state.port,
@@ -469,23 +485,202 @@ fn health_response(state: &EngineState) -> Response<Full<Bytes>> {
         .status(StatusCode::OK)
         .header("content-type", "application/json")
         .header("x-pm-proxy", state.name.as_str())
-        .body(Full::new(Bytes::from(json)))
+        .body(full_body(Bytes::from(json)))
         .unwrap()
 }
 
-/// Placeholder forward — returns 502 so the scaffolding compiles and binds. M3.9
-/// replaces this with the real streaming/buffering forward; M3.9's tests assert
-/// 200, which this placeholder cannot satisfy (its genuine red phase). Returns
-/// `Result<_, Infallible>` (R23e); M3.9 keeps the `Infallible` error and only
-/// switches the body type to `EngineBody`.
-async fn forward(
-    _state: Arc<EngineState>,
-    _req: Request<Incoming>,
-) -> Result<Response<Full<Bytes>>, Infallible> {
-    Ok(Response::builder()
+/// Build a local 502 response carrying an explanatory plaintext body. Used to
+/// convert EVERY internal `forward` error into a response (R23e) — the hyper
+/// service error type is `Infallible`, so we never `?`-propagate.
+fn bad_gateway(detail: impl std::fmt::Display) -> Response<EngineBody> {
+    Response::builder()
         .status(StatusCode::BAD_GATEWAY)
-        .body(Full::new(Bytes::from_static(b"not yet implemented")))
-        .unwrap())
+        .header("content-type", "text/plain")
+        .body(full_body(Bytes::from(format!(
+            "proxy upstream error: {detail}"
+        ))))
+        .unwrap()
+}
+
+/// Forward an inbound request to the upstream. Non-transform requests stream the
+/// body through untouched (R11); only `should_transform` (POST + messages path +
+/// JSON) buffers, runs the transform on a `spawn_blocking` worker (R22/R23d/R20),
+/// and recomputes Content-Length. Host is rewritten and auth headers pass through
+/// verbatim. Every internal error becomes a local 502 (R23e) — nothing is
+/// `?`-propagated as the hyper service error.
+async fn forward(
+    state: Arc<EngineState>,
+    req: Request<Incoming>,
+) -> Result<Response<EngineBody>, Infallible> {
+    let method = req.method().clone();
+    let path_and_query = req
+        .uri()
+        .path_and_query()
+        .map(|pq| pq.as_str().to_string())
+        .unwrap_or_else(|| req.uri().path().to_string());
+    let inbound_headers = req.headers().clone();
+
+    let should_transform = method == hyper::Method::POST
+        && is_messages_path(&path_and_query)
+        && is_json_content_type(&inbound_headers);
+
+    // Convert each fallible step into a local 502 (R23e); never `?`-propagate.
+    let target = match upstream_target_uri(&state.upstream, &path_and_query) {
+        Ok(t) => t,
+        Err(e) => return Ok(bad_gateway(format!("bad upstream URI: {e}"))),
+    };
+    let reqwest_method = match reqwest::Method::from_bytes(method.as_str().as_bytes()) {
+        Ok(m) => m,
+        Err(e) => return Ok(bad_gateway(format!("bad method: {e}"))),
+    };
+
+    // Build upstream headers: copy inbound verbatim, then rewrite Host. Auth
+    // headers (x-api-key, authorization, anthropic-beta) are copied as-is.
+    let mut headers = inbound_headers.clone();
+    headers.remove(http::header::HOST);
+    let host_value = match http::HeaderValue::from_str(&state.upstream.host_header()) {
+        Ok(v) => v,
+        Err(e) => return Ok(bad_gateway(format!("bad host header: {e}"))),
+    };
+    headers.insert(http::header::HOST, host_value);
+
+    let req_builder = if should_transform {
+        // Buffer + (optionally) transform, then recompute Content-Length exactly.
+        let body_bytes = match req.into_body().collect().await {
+            Ok(b) => b.to_bytes(),
+            Err(e) => return Ok(bad_gateway(format!("reading request body: {e}"))),
+        };
+        let mut out_body: Vec<u8> = body_bytes.to_vec();
+        let mut did_transform = false;
+
+        if !out_body.is_empty() {
+            if let Some(transform) = state.transform.as_ref() {
+                match serde_json::from_slice::<serde_json::Value>(&out_body) {
+                    Ok(value) => {
+                        // R22/R23d/R20: run the transform on a blocking worker via
+                        // an `Arc` clone so CPU-heavy transforms (M5 compress)
+                        // never block the executor. The closure returns the
+                        // transformed JSON on success or the transform error.
+                        let transform = transform.clone();
+                        let outcome = tokio::task::spawn_blocking(move || {
+                            let mut value = value;
+                            transform.transform(&mut value).map(|()| value)
+                        })
+                        .await;
+                        match outcome {
+                            Ok(Ok(value)) => match serde_json::to_vec(&value) {
+                                Ok(bytes) => {
+                                    out_body = bytes;
+                                    did_transform = true;
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "serialize after transform failed, forwarding original body: {e}"
+                                    );
+                                }
+                            },
+                            Ok(Err(e)) => {
+                                // Fail-loud-in-logs, byte-faithful body (matches
+                                // reference "WARN transform threw, skipping").
+                                // Never forwards a half-transformed body, never
+                                // `?`-propagates a transform error to the client.
+                                tracing::warn!("transform failed, forwarding original body: {e}");
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "transform task join failed, forwarding original body: {e}"
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("JSON parse failed, forwarding original body: {e}");
+                    }
+                }
+            }
+        }
+
+        headers.remove(http::header::CONTENT_LENGTH);
+        let cl = match http::HeaderValue::from_str(&out_body.len().to_string()) {
+            Ok(v) => v,
+            Err(e) => return Ok(bad_gateway(format!("bad content-length: {e}"))),
+        };
+        headers.insert(http::header::CONTENT_LENGTH, cl);
+
+        // R6 header hook: only on a transformed POST /v1/messages, AFTER the
+        // body transform and AFTER the Host/Content-Length rewrite.
+        if did_transform {
+            if let Some(transform) = state.transform.as_ref() {
+                transform.apply_headers(&mut headers);
+            }
+        }
+
+        let mut b = state
+            .client
+            .request(reqwest_method, target.to_string())
+            .body(out_body);
+        for (name, value) in headers.iter() {
+            b = b.header(name.as_str(), value.as_bytes());
+        }
+        b
+    } else {
+        // Stream-through (R11): forward the request body untouched, no buffering.
+        // Drop any inbound content-length so reqwest sets the correct framing for
+        // the streamed body (it may be chunked).
+        headers.remove(http::header::CONTENT_LENGTH);
+        let streamed = stream_request_body(req.into_body());
+        let mut b = state
+            .client
+            .request(reqwest_method, target.to_string())
+            .body(streamed);
+        for (name, value) in headers.iter() {
+            b = b.header(name.as_str(), value.as_bytes());
+        }
+        b
+    };
+
+    match req_builder.send().await {
+        Ok(up_resp) => Ok(build_downstream_response(state, up_resp).await),
+        Err(e) => {
+            tracing::warn!("upstream error: {e}");
+            Ok(bad_gateway(e))
+        }
+    }
+}
+
+/// Stream the upstream response back to the client, forwarding ALL upstream
+/// response headers verbatim (reference server.js:149) and streaming the body
+/// (SSE-safe). Infallible: a malformed status/header is logged and skipped, never
+/// `?`-propagated (R23e). Async so M3.11 can open the optional log-tee file here.
+async fn build_downstream_response(
+    _state: Arc<EngineState>,
+    up_resp: reqwest::Response,
+) -> Response<EngineBody> {
+    let status = up_resp.status();
+    let resp_headers = up_resp.headers().clone();
+
+    let framed = up_resp
+        .bytes_stream()
+        .map_ok(Frame::data)
+        .map_err(std::io::Error::other);
+    let body = StreamBody::new(framed).boxed();
+
+    let status = StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let mut builder = Response::builder().status(status);
+    for (name, value) in resp_headers.iter() {
+        // Forward upstream response headers verbatim. We intentionally do NOT
+        // selectively drop content-length/transfer-encoding (R11): hyper
+        // re-frames the streamed body and ignores a stale content-length we
+        // pass, and forwarding verbatim matches the reference pino. Strip only
+        // the genuinely connection-scoped `connection` header.
+        if name.as_str().eq_ignore_ascii_case("connection") {
+            continue;
+        }
+        builder = builder.header(name.as_str(), value.as_bytes());
+    }
+    builder
+        .body(body)
+        .unwrap_or_else(|_| bad_gateway("failed to build downstream response"))
 }
 
 /// Run the engine to completion, draining on OS signal. Public entry per contract.

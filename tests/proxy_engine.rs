@@ -150,3 +150,217 @@ async fn health_is_answered_locally_with_identity_and_not_forwarded() {
     shutdown.notify_waiters();
     bound.handle.await.expect("join").expect("engine ok");
 }
+
+async fn raw_get_with_auth(
+    port: u16,
+    path: &str,
+    api_key: &str,
+    authorization: &str,
+) -> StatusCode {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let stream = TcpStream::connect(addr).await.expect("connect");
+    let io = TokioIo::new(stream);
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
+        .await
+        .expect("handshake");
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+    let req = Request::builder()
+        .method("GET")
+        .uri(path)
+        .header("host", format!("127.0.0.1:{port}"))
+        .header("x-api-key", api_key)
+        .header("authorization", authorization)
+        .body(Full::<Bytes>::from(Vec::new()))
+        .unwrap();
+    let resp = sender.send_request(req).await.expect("send");
+    resp.status()
+}
+
+// raw_post variant that also returns the upstream response headers so we can
+// assert verbatim forwarding.
+async fn raw_post_with_resp_header(
+    port: u16,
+    path: &str,
+    body: &str,
+    header_name: &str,
+) -> (StatusCode, Option<String>) {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let stream = TcpStream::connect(addr).await.expect("connect");
+    let io = TokioIo::new(stream);
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
+        .await
+        .expect("handshake");
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("host", format!("127.0.0.1:{port}"))
+        .header("content-type", "application/json")
+        .body(Full::<Bytes>::from(body.to_string()))
+        .unwrap();
+    let resp = sender.send_request(req).await.expect("send");
+    let status = resp.status();
+    let hv = resp
+        .headers()
+        .get(header_name)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    let _ = resp.into_body().collect().await;
+    (status, hv)
+}
+
+fn fwd_cfg(name: ProxyName, run_id: &str, upstream_url: &str) -> EngineConfig {
+    EngineConfig {
+        name,
+        listen: "127.0.0.1:0".parse().unwrap(),
+        upstream: upstream(upstream_url),
+        run_id: run_id.to_string(),
+        log_file: None,
+        transform: TransformKind::None,
+    }
+}
+
+#[tokio::test]
+async fn forward_streams_get_applies_prefix_rewrites_host_passes_auth() {
+    let stub = start_stub_async(r#"{"ok":true}"#).await;
+    let shutdown = std::sync::Arc::new(Notify::new());
+    let shutdown_fut = {
+        let s = shutdown.clone();
+        async move { s.notified().await }
+    };
+    let secret = format!(
+        "http://127.0.0.1:{}/wire/SECRET/claude-code/anthropic",
+        stub.port
+    );
+    let bound = bind_engine(fwd_cfg(ProxyName::Pino, "01J0FWD", &secret), shutdown_fut)
+        .await
+        .expect("bind");
+    let port = bound.local_addr.port();
+
+    // Non-/v1/messages GET -> stream-through forward path.
+    let status = raw_get_with_auth(port, "/v1/models", "sk-ant-test-key", "Bearer tok-123").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let cap = stub.last().expect("captured");
+    assert_eq!(cap.uri, "/wire/SECRET/claude-code/anthropic/v1/models");
+    assert_eq!(
+        cap.host.as_deref(),
+        Some(format!("127.0.0.1:{}", stub.port).as_str())
+    );
+    assert_eq!(cap.x_api_key.as_deref(), Some("sk-ant-test-key"));
+    assert_eq!(cap.authorization.as_deref(), Some("Bearer tok-123"));
+
+    shutdown.notify_waiters();
+    bound.handle.await.expect("join").expect("engine ok");
+}
+
+#[tokio::test]
+async fn forward_count_tokens_reaches_upstream() {
+    let stub = start_stub_async(r#"{"ok":true}"#).await;
+    let shutdown = std::sync::Arc::new(Notify::new());
+    let shutdown_fut = {
+        let s = shutdown.clone();
+        async move { s.notified().await }
+    };
+    let bound = bind_engine(
+        fwd_cfg(
+            ProxyName::Pino,
+            "01J0CT",
+            &format!("http://127.0.0.1:{}", stub.port),
+        ),
+        shutdown_fut,
+    )
+    .await
+    .expect("bind");
+    let port = bound.local_addr.port();
+
+    let body = r#"{"model":"claude-x","messages":[]}"#;
+    let (status, _resp) = raw_post(port, "/v1/messages/count_tokens", body).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let cap = stub.last().expect("captured");
+    assert_eq!(cap.uri, "/v1/messages/count_tokens");
+    assert_eq!(cap.body, body.as_bytes().to_vec());
+
+    shutdown.notify_waiters();
+    bound.handle.await.expect("join").expect("engine ok");
+}
+
+#[tokio::test]
+async fn forward_post_messages_recomputes_content_length() {
+    let stub = start_stub_async(r#"{"ok":true}"#).await;
+    let shutdown = std::sync::Arc::new(Notify::new());
+    let shutdown_fut = {
+        let s = shutdown.clone();
+        async move { s.notified().await }
+    };
+    let bound = bind_engine(
+        fwd_cfg(
+            ProxyName::Pino,
+            "01J0CL",
+            &format!("http://127.0.0.1:{}", stub.port),
+        ),
+        shutdown_fut,
+    )
+    .await
+    .expect("bind");
+    let port = bound.local_addr.port();
+
+    // TransformKind::None -> no transform runs -> body byte-faithful.
+    let body = r#"{"model":"claude-x","messages":[{"role":"user","content":"hi"}]}"#;
+    let (status, resp_body) = raw_post(port, "/v1/messages", body).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(resp_body, r#"{"ok":true}"#);
+
+    let cap = stub.last().expect("captured");
+    assert_eq!(cap.uri, "/v1/messages");
+    assert_eq!(cap.body, body.as_bytes().to_vec());
+    assert_eq!(
+        cap.content_length.as_deref(),
+        Some(body.len().to_string().as_str()),
+        "content-length must equal the forwarded body length"
+    );
+
+    shutdown.notify_waiters();
+    bound.handle.await.expect("join").expect("engine ok");
+}
+
+#[tokio::test]
+async fn forward_passes_upstream_response_headers_verbatim() {
+    // Stub that returns a distinctive response header alongside JSON.
+    let stub = start_stub_async(r#"{"ok":true}"#).await;
+    let shutdown = std::sync::Arc::new(Notify::new());
+    let shutdown_fut = {
+        let s = shutdown.clone();
+        async move { s.notified().await }
+    };
+    let bound = bind_engine(
+        fwd_cfg(
+            ProxyName::Pino,
+            "01J0RH",
+            &format!("http://127.0.0.1:{}", stub.port),
+        ),
+        shutdown_fut,
+    )
+    .await
+    .expect("bind");
+    let port = bound.local_addr.port();
+
+    // The canonical stub always sets content-type: application/json; assert it
+    // reaches the client verbatim (verbatim-response-header forwarding).
+    let (status, ct) =
+        raw_post_with_resp_header(port, "/v1/messages", r#"{"messages":[]}"#, "content-type").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        ct.as_deref(),
+        Some("application/json"),
+        "upstream response headers must pass through"
+    );
+
+    shutdown.notify_waiters();
+    bound.handle.await.expect("join").expect("engine ok");
+}
