@@ -8,6 +8,7 @@ pub mod agent;
 pub mod central;
 pub mod cli;
 pub mod config;
+pub mod doctor;
 pub mod download;
 pub mod error;
 pub mod logging;
