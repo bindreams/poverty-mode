@@ -88,3 +88,42 @@ fn cursor_movement_never_changes_order_or_selection() {
     st.apply(TuiAction::Up);
     assert_eq!(st.items, before);
 }
+
+#[test]
+fn toggle_flips_enabled_at_cursor() {
+    let mut st = seed_all_disabled(); // cursor 0 -> pino
+    assert!(!st.items[0].enabled);
+    assert_eq!(st.apply(TuiAction::Toggle), TuiOutcome::Continue);
+    assert!(st.items[0].enabled);
+    // Toggle again disables it.
+    assert_eq!(st.apply(TuiAction::Toggle), TuiOutcome::Continue);
+    assert!(!st.items[0].enabled);
+}
+
+#[test]
+fn toggle_only_affects_row_under_cursor() {
+    let mut st = seed_all_disabled();
+    st.cursor = 1; // headroom
+    st.apply(TuiAction::Toggle);
+    assert!(!st.items[0].enabled); // pino untouched
+    assert!(st.items[1].enabled); // headroom flipped
+    assert!(!st.items[2].enabled); // central untouched
+}
+
+#[test]
+fn toggle_does_not_move_cursor() {
+    let mut st = seed_all_disabled();
+    st.cursor = 1;
+    st.apply(TuiAction::Toggle);
+    assert_eq!(st.cursor, 1);
+}
+
+#[test]
+fn toggle_central_in_place_when_already_last() {
+    let mut st = seed_all_disabled();
+    st.cursor = 2; // central, already last
+    st.apply(TuiAction::Toggle);
+    assert!(st.items[2].enabled);
+    assert_eq!(st.items[2].name, ProxyName::Central);
+    assert_eq!(st.cursor, 2);
+}

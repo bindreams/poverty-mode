@@ -108,11 +108,15 @@ impl TuiState {
                 }
                 TuiOutcome::Continue
             }
-            TuiAction::Toggle
-            | TuiAction::MoveUp
-            | TuiAction::MoveDown
-            | TuiAction::Confirm
-            | TuiAction::Cancel => TuiOutcome::Continue,
+            TuiAction::Toggle => {
+                if let Some(item) = self.items.get_mut(self.cursor) {
+                    item.enabled = !item.enabled;
+                }
+                TuiOutcome::Continue
+            }
+            TuiAction::MoveUp | TuiAction::MoveDown | TuiAction::Confirm | TuiAction::Cancel => {
+                TuiOutcome::Continue
+            }
         }
     }
 
