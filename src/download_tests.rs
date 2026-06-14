@@ -260,3 +260,34 @@ fn verify_and_extract_replaces_existing_dest_without_stale_leftovers() {
     let got = std::fs::read(dest.join("bin").join("jbcentral")).unwrap();
     assert_eq!(got, b"payload-E");
 }
+
+// pin coverage (R14) =====
+
+#[test]
+fn pin_table_covers_all_supported_targets_for_default_version() {
+    let v = crate::central::DEFAULT_JBCENTRAL_VERSION;
+    // Every supported (os, arch) EXCEPT windows-arm64 (no asset) must have a pin for the default ver.
+    let supported = [
+        ("darwin", "x86_64"),
+        ("darwin", "arm64"),
+        ("linux", "x86_64"),
+        ("linux", "arm64"),
+        ("windows", "x86_64"),
+    ];
+    for (os, arch) in supported {
+        let sum = pinned_sha256(v, os, arch)
+            .unwrap_or_else(|| panic!("missing sha256 pin for {v} {os}/{arch}"));
+        assert_eq!(
+            sum.len(),
+            64,
+            "pin for {os}/{arch} must be 64 hex chars: {sum}"
+        );
+        assert!(
+            sum.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "pin for {os}/{arch} must be lowercase hex: {sum}"
+        );
+    }
+    // windows-arm64 has no asset, hence no pin.
+    assert!(pinned_sha256(v, "windows", "arm64").is_none());
+}

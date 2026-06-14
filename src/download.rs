@@ -90,9 +90,36 @@ pub fn extract_archive(bytes: &[u8], name: &str, dest_dir: &Path) -> anyhow::Res
 /// `os ∈ {darwin,linux,windows}`, `arch ∈ {x86_64,arm64}`; there is no windows-arm64 row (no asset).
 /// `download_verify_extract` fails closed when a pin is required but absent or mismatched.
 pub const PINNED_SHA256: &[(&str, &str, &str, &str)] = &[
-    // (version, os, arch, sha256-hex) — filled by Task M8.12. Example row shape (do not ship this
-    // placeholder; M8.12 replaces this whole array with the real 5 rows for 0.2.9):
-    // ("0.2.9", "linux",   "x86_64", "<64-hex from sha256sum>"),
+    (
+        "0.2.9",
+        "darwin",
+        "x86_64",
+        "5609f05baedd8e279c8dfe2cd6b19e225e6a45d1e458a0c9a424842b6e473ce9",
+    ),
+    (
+        "0.2.9",
+        "darwin",
+        "arm64",
+        "b54a0ed341d492389901065720b42d09c73e69f2ed5ddd9bc7f67c1a5aa57d4a",
+    ),
+    (
+        "0.2.9",
+        "linux",
+        "x86_64",
+        "82c4ee0f4e7468fb2f7945a413fbe7b8ad63634b2ca10e3956f37ac0cfdb318d",
+    ),
+    (
+        "0.2.9",
+        "linux",
+        "arm64",
+        "dc5d634809f2650c8d25421222cce2e4f3678871d03d04f5000b6f064120c25a",
+    ),
+    (
+        "0.2.9",
+        "windows",
+        "x86_64",
+        "d7b56d88c2373ba9168209d8243b60208abcd1693e4c5818ba91e42bd4000616",
+    ),
 ];
 
 /// Look up the pinned sha256 for an exact `(version, os, arch)`.
