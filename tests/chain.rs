@@ -243,3 +243,74 @@ async fn trailing_central_strips_hop_and_carries_secret_path_to_tail() {
         "exactly one hop (pino) forwarded to the stub"
     );
 }
+
+// Post-READY stdout contract (R12 characterization guard) =====
+//
+// The orchestrator's manager reads each hop's stdout only long enough to consume
+// the single READY line; after that it relies on the engine writing nothing more
+// to stdout (all other output goes to `--log-file`). This guard documents and
+// proves that inter-milestone contract: M3's engine emits exactly one READY line
+// to stdout and is then silent there. It is added AFTER the behavior exists (the
+// engine has shipped since M3), so it is an invariant guard, not a red->green step.
+
+use poverty_mode::orchestrator::read_ready_line;
+use poverty_mode::orchestrator::teardown::ProxyGroup;
+use tokio::io::AsyncReadExt;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hop_emits_exactly_one_ready_line_then_silence_on_stdout() {
+    // Spawn a real `poverty-mode proxy pino` against a stub upstream; read the
+    // READY line; then assert the child writes NOTHING more to stdout before EOF
+    // (the "one READY line then silence" contract M6 relies on; proves M3's
+    // engine sends all other logs to --log-file).
+    let stub = start_stub(r#"{"ok":true}"#);
+    let exe = std::path::PathBuf::from(env!("CARGO_BIN_EXE_poverty-mode"));
+    let mut group = ProxyGroup::new().expect("group");
+
+    let run_id = "rid-silence".to_string();
+    let log = std::env::temp_dir().join("pm-silence-pino.log");
+    // `--strip-ansi` is a presence flag (no value); "off" is the `--no-strip-ansi`
+    // companion, matching how `proxy_child_args` encodes a false `strip_ansi`.
+    // The pino value is irrelevant to the stdout-silence contract; this just keeps
+    // the spawned arg list a valid clap invocation. `--log-file` is the GLOBAL
+    // tracing destination: routing it to a file is exactly the behavior under test
+    // (non-READY output must never land on stdout).
+    let args = vec![
+        "--log-file".to_string(),
+        log.to_string_lossy().into_owned(),
+        "proxy".to_string(),
+        "pino".to_string(),
+        "--listen".to_string(),
+        "127.0.0.1:0".to_string(),
+        "--run-id".to_string(),
+        run_id.clone(),
+        "--tail-ttl".to_string(),
+        "5m".to_string(),
+        "--no-strip-ansi".to_string(),
+        "--upstream".to_string(),
+        format!("http://127.0.0.1:{}", stub.port),
+    ];
+    let spawned = group.spawn(&exe, &args, &[]).expect("spawn pino");
+    let stdout = spawned.stdout.expect("piped stdout");
+    let mut reader = tokio::io::BufReader::new(stdout);
+
+    let ready = read_ready_line(&mut reader, ProxyName::Pino, &run_id)
+        .await
+        .expect("READY line");
+    assert!(ready.ready && ready.proxy == "pino");
+
+    // Tear the child down; its stdout must then reach EOF with no extra bytes
+    // having been written between READY and shutdown.
+    group.kill_all().expect("kill");
+    group.wait_all_exited().await.expect("await exit");
+
+    // Drain whatever remains on stdout. After a single READY line, the engine
+    // writes nothing more to stdout, so the remaining bytes are empty (EOF).
+    let mut rest = Vec::new();
+    let _ = reader.read_to_end(&mut rest).await;
+    let rest = String::from_utf8_lossy(&rest);
+    assert!(
+        rest.trim().is_empty(),
+        "hop wrote to stdout after the READY line (contract violation): {rest:?}"
+    );
+}
