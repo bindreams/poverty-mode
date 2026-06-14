@@ -87,27 +87,6 @@ impl TuiState {
         st
     }
 
-    /// Seed the reducer from a loaded [`Config`], preserving file order and each
-    /// entry's `enabled` flag and settings. The central-last invariant is
-    /// re-asserted by `new` (config load already enforces it, but seeding is
-    /// defensive).
-    pub fn from_config(config: &Config) -> Self {
-        let seed = config
-            .proxies
-            .iter()
-            .map(|entry| {
-                (
-                    TuiItem {
-                        name: entry.name,
-                        enabled: entry.enabled,
-                    },
-                    entry.settings.clone(),
-                )
-            })
-            .collect();
-        TuiState::new(seed)
-    }
-
     /// Seed the reducer from the RESOLVED chain (spec §5.10: "Seeded from the
     /// resolved chain"), overlaid onto the full set of known proxies from
     /// `config` so every proxy stays togglable.

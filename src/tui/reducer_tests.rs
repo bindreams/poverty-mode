@@ -490,35 +490,6 @@ fn cfg_pino_headroom_central(pino_on: bool, central_on: bool) -> Config {
     }
 }
 
-#[test]
-fn from_config_maps_entries_in_order_with_enabled_flags() {
-    let cfg = cfg_pino_headroom_central(true, false);
-    let st = TuiState::from_config(&cfg);
-    assert_eq!(st.items.len(), 3);
-    assert_eq!(st.items[0].name, ProxyName::Pino);
-    assert!(st.items[0].enabled);
-    assert_eq!(st.items[1].name, ProxyName::Headroom);
-    assert!(!st.items[1].enabled);
-    assert_eq!(st.items[2].name, ProxyName::Central);
-    assert!(!st.items[2].enabled);
-    assert_eq!(st.cursor, 0);
-    assert_eq!(st.hint(), None);
-}
-
-#[test]
-fn from_config_then_confirm_yields_enabled_chain() {
-    let cfg = cfg_pino_headroom_central(true, true);
-    let mut st = TuiState::from_config(&cfg);
-    match st.apply(TuiAction::Confirm) {
-        TuiOutcome::Run(resolved) => {
-            assert_eq!(resolved.len(), 2);
-            assert_eq!(resolved[0].name, ProxyName::Pino);
-            assert_eq!(resolved[1].name, ProxyName::Central);
-        }
-        other => panic!("expected Run, got {other:?}"),
-    }
-}
-
 // --- from_config_and_resolved: TUI seeded from the RESOLVED chain (spec §5.10) -----
 
 #[test]
