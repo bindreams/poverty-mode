@@ -300,6 +300,51 @@ pub fn health_chain_id(base: &url::Url) -> Option<String> {
     health_probe(base).map(|h| h.run_id)
 }
 
+/// Pure nested-reuse decision (design §7 / R10). Reuse the live chain iff:
+/// the desired chain signature is non-empty, the env `POVERTY_PROXY_CHAIN`
+/// equals it, the env `ANTHROPIC_BASE_URL` parses, and that base is LIVE
+/// (probe returns true). Returns `Some(base)` to reuse, else `None`.
+///
+/// The chain-signature match is against the env value (the live chain's
+/// signature), NOT the `/__pm/health` body — the body carries the per-run
+/// `run_id` (R10), so `is_live` is a pure liveness check.
+pub fn nested_reuse_decision(
+    desired_chain_sig: &str,
+    env_chain: Option<String>,
+    env_base: Option<String>,
+    is_live: impl Fn(&url::Url) -> bool,
+) -> Option<url::Url> {
+    let desired = desired_chain_sig.trim();
+    if desired.is_empty() {
+        return None;
+    }
+    let env_chain = env_chain?;
+    if env_chain.trim() != desired {
+        return None;
+    }
+    let base_raw = env_base?;
+    let base = url::Url::parse(base_raw.trim()).ok()?;
+    if is_live(&base) {
+        Some(base)
+    } else {
+        None
+    }
+}
+
+/// Design §7 nested-invocation guard. If our env has `POVERTY_PROXY_CHAIN` equal
+/// to `desired_chain`'s signature and `ANTHROPIC_BASE_URL` set to a LIVE
+/// `/__pm/health`, return `Some(base)` so the caller execs the agent against the
+/// live chain (no second chain). Else `None`. SYNCHRONOUS (calls `health_probe`)
+/// — invoke via `spawn_blocking` from async (R5; see `run_command`).
+pub fn nested_reuse_check(desired_chain: &[ResolvedProxy]) -> Option<url::Url> {
+    let desired_sig = serialize_chain(desired_chain);
+    let env_chain = std::env::var("POVERTY_PROXY_CHAIN").ok();
+    let env_base = std::env::var("ANTHROPIC_BASE_URL").ok();
+    nested_reuse_decision(&desired_sig, env_chain, env_base, |u| {
+        health_probe(u).is_some()
+    })
+}
+
 #[cfg(test)]
 #[path = "orchestrator_tests.rs"]
 mod orchestrator_tests;

@@ -546,3 +546,91 @@ async fn read_ready_line_errors_when_ready_false() {
         .unwrap_err();
     assert!(err.to_string().to_lowercase().contains("ready"), "{err}");
 }
+
+// nested_reuse_decision =====
+
+use url::Url;
+
+#[test]
+fn nested_reuse_decision_some_when_sig_matches_and_live() {
+    let live = |_u: &Url| true;
+    let got = nested_reuse_decision(
+        "pino,headroom",                           // desired signature
+        Some("pino,headroom".to_string()),         // env POVERTY_PROXY_CHAIN
+        Some("http://127.0.0.1:4100".to_string()), // env ANTHROPIC_BASE_URL
+        live,
+    );
+    assert_eq!(
+        got.map(|u| u.to_string()),
+        Some("http://127.0.0.1:4100/".to_string())
+    );
+}
+
+#[test]
+fn nested_reuse_decision_none_when_chain_env_unset() {
+    let live = |_u: &Url| true;
+    let got = nested_reuse_decision(
+        "pino",
+        None,
+        Some("http://127.0.0.1:4100".to_string()),
+        live,
+    );
+    assert!(got.is_none());
+}
+
+#[test]
+fn nested_reuse_decision_none_when_base_env_unset() {
+    let live = |_u: &Url| true;
+    let got = nested_reuse_decision("pino", Some("pino".to_string()), None, live);
+    assert!(got.is_none());
+}
+
+#[test]
+fn nested_reuse_decision_none_when_not_live() {
+    let dead = |_u: &Url| false; // health probe failed
+    let got = nested_reuse_decision(
+        "pino",
+        Some("pino".to_string()),
+        Some("http://127.0.0.1:4100".to_string()),
+        dead,
+    );
+    assert!(got.is_none());
+}
+
+#[test]
+fn nested_reuse_decision_none_when_env_sig_differs_from_desired() {
+    let live = |_u: &Url| true;
+    // env says the live chain is "headroom" but we WANT "pino" -> do not reuse.
+    let got = nested_reuse_decision(
+        "pino",
+        Some("headroom".to_string()),
+        Some("http://127.0.0.1:4100".to_string()),
+        live,
+    );
+    assert!(got.is_none(), "differing chain signature must NOT reuse");
+}
+
+#[test]
+fn nested_reuse_decision_none_when_base_url_unparseable() {
+    let live = |_u: &Url| true;
+    let got = nested_reuse_decision(
+        "pino",
+        Some("pino".to_string()),
+        Some("::::not a url".to_string()),
+        live,
+    );
+    assert!(got.is_none());
+}
+
+#[test]
+fn nested_reuse_decision_none_when_desired_chain_empty() {
+    // An empty desired chain never reuses (there is nothing to compose with).
+    let live = |_u: &Url| true;
+    let got = nested_reuse_decision(
+        "",
+        Some("".to_string()),
+        Some("http://127.0.0.1:4100".to_string()),
+        live,
+    );
+    assert!(got.is_none(), "empty desired chain must not short-circuit");
+}
