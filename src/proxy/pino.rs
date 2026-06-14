@@ -129,7 +129,9 @@ impl BodyTransform for PinoTransform {
 // flag => replace_all). Note: no end-anchor; matches anywhere.
 fn source_id_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"claude-opus-4-7(?:-\d{8})?").unwrap())
+    // JS `\d` (no `u` flag) is ASCII-only; the Rust regex crate's `\d` is
+    // Unicode-aware by default, so use `[0-9]` for Node parity (R18).
+    RE.get_or_init(|| Regex::new(r"claude-opus-4-7(?:-[0-9]{8})?").unwrap())
 }
 
 // SOURCE_NAME_PATTERN /Opus 4\.7/g.
@@ -141,7 +143,8 @@ fn source_name_re() -> &'static Regex {
 // /-\d{8}$/ — strips a trailing date suffix from the override to get the base id.
 fn date_suffix_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"-\d{8}$").unwrap())
+    // ASCII-only `[0-9]` matches JS `\d` (no `u` flag); see source_id_re (R18).
+    RE.get_or_init(|| Regex::new(r"-[0-9]{8}$").unwrap())
 }
 
 /// Maps a target model base id to its friendly display name. Mirrors
