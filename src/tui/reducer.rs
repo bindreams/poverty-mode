@@ -108,6 +108,47 @@ impl TuiState {
         TuiState::new(seed)
     }
 
+    /// Seed the reducer from the RESOLVED chain (spec §5.10: "Seeded from the
+    /// resolved chain"), overlaid onto the full set of known proxies from
+    /// `config` so every proxy stays togglable.
+    ///
+    /// The resolved chain (the caller's cli>env>file resolution — honoring
+    /// `--proxies` / `POVERTY_PROXY_CHAIN`) supplies the enabled rows, in chain
+    /// order and carrying the chain's settings. Every other known proxy from
+    /// `config` follows disabled, in the config's relative order, keeping its
+    /// existing settings so toggling it on later does not lose customizations.
+    /// `new` re-asserts central-last, so an Enter that leaves the seed unmodified
+    /// reproduces the resolved chain.
+    pub fn from_config_and_resolved(config: &Config, resolved: &[ResolvedProxy]) -> Self {
+        let in_chain: std::collections::HashSet<ProxyName> =
+            resolved.iter().map(|r| r.name).collect();
+        let mut seed: Vec<(TuiItem, ProxySettings)> = Vec::with_capacity(config.proxies.len());
+        // Enabled resolved members first, in chain order, with resolved settings.
+        for r in resolved {
+            seed.push((
+                TuiItem {
+                    name: r.name,
+                    enabled: true,
+                },
+                r.settings.clone(),
+            ));
+        }
+        // Remaining known proxies, disabled, in config order, keeping settings.
+        for entry in &config.proxies {
+            if in_chain.contains(&entry.name) {
+                continue;
+            }
+            seed.push((
+                TuiItem {
+                    name: entry.name,
+                    enabled: false,
+                },
+                entry.settings.clone(),
+            ));
+        }
+        TuiState::new(seed)
+    }
+
     /// The transient UX hint from the last action, if any. Read by the render
     /// layer; pure so it is unit-testable.
     pub fn hint(&self) -> Option<&'static str> {

@@ -342,13 +342,35 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
         } => {
             let config = crate::config::Config::load_or_create()?;
 
-            // Interactive picker overrides CLI/env/file chain resolution (spec
-            // §5.10). The picker is synchronous (crossterm blocking reads), so it
-            // runs before the Tokio runtime is built. Otherwise resolve the chain
-            // from CLI > env > file (M2 precedence).
+            // Resolve the chain from CLI > env > file (M2 precedence) FIRST, so
+            // `--proxies` / `POVERTY_PROXY_CHAIN` are honored on EVERY path,
+            // including `--interactive` (spec line 79: they share the highest
+            // precedence tier). A bad name here is a hard error, never silently
+            // dropped.
+            let cli_names: Option<Vec<ProxyName>> = match proxies {
+                Some(csv) => Some(
+                    csv.iter()
+                        .map(|s| match s.as_str() {
+                            "pino" => Ok(ProxyName::Pino),
+                            "headroom" => Ok(ProxyName::Headroom),
+                            "central" => Ok(ProxyName::Central),
+                            other => Err(anyhow::anyhow!("unknown proxy name '{other}'")),
+                        })
+                        .collect::<anyhow::Result<Vec<_>>>()?,
+                ),
+                None => None,
+            };
+            let env_chain = std::env::var("POVERTY_PROXY_CHAIN").ok();
+            let resolved = config.resolve_chain(cli_names.as_deref(), env_chain.as_deref())?;
+
+            // The interactive picker is SEEDED from that resolved chain (spec
+            // §5.10), letting the user adjust it; its confirmed chain overrides.
+            // The picker is synchronous (crossterm blocking reads), so it runs
+            // before the Tokio runtime is built. Without `--interactive`, the
+            // resolved chain is used as-is.
             let chain: Vec<crate::config::ResolvedProxy> = if interactive {
-                match crate::tui::run_picker(&config)? {
-                    crate::tui::reducer::TuiOutcome::Run(resolved) => resolved,
+                match crate::tui::run_picker(&config, &resolved)? {
+                    crate::tui::reducer::TuiOutcome::Run(picked) => picked,
                     crate::tui::reducer::TuiOutcome::Cancel => {
                         println!("cancelled");
                         return Ok(());
@@ -360,21 +382,7 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
                     }
                 }
             } else {
-                let cli_names: Option<Vec<ProxyName>> = match proxies {
-                    Some(csv) => Some(
-                        csv.iter()
-                            .map(|s| match s.as_str() {
-                                "pino" => Ok(ProxyName::Pino),
-                                "headroom" => Ok(ProxyName::Headroom),
-                                "central" => Ok(ProxyName::Central),
-                                other => Err(anyhow::anyhow!("unknown proxy name '{other}'")),
-                            })
-                            .collect::<anyhow::Result<Vec<_>>>()?,
-                    ),
-                    None => None,
-                };
-                let env_chain = std::env::var("POVERTY_PROXY_CHAIN").ok();
-                config.resolve_chain(cli_names.as_deref(), env_chain.as_deref())?
+                resolved
             };
 
             if save {

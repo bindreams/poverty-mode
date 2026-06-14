@@ -20,7 +20,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::{DefaultTerminal, Frame};
 
-use crate::config::Config;
+use crate::config::{Config, ResolvedProxy};
 use crate::proxy::ProxyName;
 use reducer::{TuiAction, TuiOutcome, TuiState};
 
@@ -36,20 +36,23 @@ pub enum TuiError {
 
 /// Run the interactive proxy picker, returning the user's terminal choice.
 ///
-/// Seeds a [`TuiState`] from `config`, runs the ratatui event loop, and returns
-/// the reducer's terminal [`TuiOutcome`] (`Run(..)` on Enter, `Cancel` on
-/// Esc/Ctrl-C).
+/// Seeds a [`TuiState`] from the RESOLVED chain (spec §5.10: "Seeded from the
+/// resolved chain"), overlaid onto `config` so every known proxy stays togglable.
+/// `resolved` is the caller's cli>env>file resolution — so `--proxies` and
+/// `POVERTY_PROXY_CHAIN` feed the picker's initial selection/order rather than
+/// being silently dropped. Runs the ratatui event loop and returns the reducer's
+/// terminal [`TuiOutcome`] (`Run(..)` on Enter, `Cancel` on Esc/Ctrl-C).
 ///
 /// Terminal lifecycle: `ratatui::init()` enters raw mode + the alternate screen
 /// and installs a panic hook that restores the terminal if the loop panics; the
 /// explicit `ratatui::restore()` below runs on the normal and `?`-error return
 /// paths (a panic is covered by that installed hook instead). If stdio is not a
 /// TTY this returns [`TuiError::NotATerminal`] without touching the terminal.
-pub fn run_picker(config: &Config) -> anyhow::Result<TuiOutcome> {
+pub fn run_picker(config: &Config, resolved: &[ResolvedProxy]) -> anyhow::Result<TuiOutcome> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         return Err(TuiError::NotATerminal.into());
     }
-    let mut state = TuiState::from_config(config);
+    let mut state = TuiState::from_config_and_resolved(config, resolved);
     let mut terminal = ratatui::init();
     let result = event_loop(&mut terminal, &mut state);
     ratatui::restore();

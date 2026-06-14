@@ -51,10 +51,59 @@ fn run_picker_returns_typed_not_a_terminal_off_tty() {
     use poverty_mode::tui::{run_picker, TuiError};
 
     let config = Config::default_all_disabled();
-    let err = run_picker(&config).expect_err("non-TTY stdio must error, not proceed to render");
+    let err =
+        run_picker(&config, &[]).expect_err("non-TTY stdio must error, not proceed to render");
     assert!(
         err.downcast_ref::<TuiError>()
             .is_some_and(|e| matches!(e, TuiError::NotATerminal)),
         "expected TuiError::NotATerminal, got: {err:?}"
     );
+}
+
+/// `--interactive` must NOT silently drop `--proxies` (spec §5.10: the TUI is
+/// seeded from the RESOLVED chain; spec line 79 puts `--proxies`/`--interactive`
+/// at the same precedence tier). A bogus `--proxies` value is resolved BEFORE the
+/// picker, so it fails with an "unknown proxy" error — not the non-TTY guard. The
+/// silent-drop defect would instead ignore `--proxies` entirely and reach the
+/// picker, surfacing the terminal error.
+#[test]
+fn interactive_resolves_proxies_before_picker_so_bogus_proxies_errors() {
+    let cfg_home = tempfile::tempdir().unwrap();
+
+    let mut cmd = Command::cargo_bin("poverty-mode").unwrap();
+    cmd.env("XDG_CONFIG_HOME", cfg_home.path())
+        .env_remove("POVERTY_PROXY_CHAIN")
+        .env_remove("ANTHROPIC_BASE_URL")
+        .arg("run")
+        .arg("--interactive")
+        .args(["--proxies", "bogus"])
+        .args(["--", "true"]);
+
+    cmd.assert()
+        .failure()
+        .stderr(contains("unknown proxy name"))
+        // `--proxies` must be consumed by resolution, NOT silently dropped and the
+        // picker reached (which would surface the non-TTY guard instead).
+        .stderr(contains("is not a TTY").not());
+}
+
+/// Likewise, `POVERTY_PROXY_CHAIN` must feed the interactive picker's seed. A
+/// bogus env chain is resolved before the picker and errors, proving the env is
+/// not silently dropped under `--interactive`.
+#[test]
+fn interactive_resolves_env_chain_before_picker_so_bogus_env_errors() {
+    let cfg_home = tempfile::tempdir().unwrap();
+
+    let mut cmd = Command::cargo_bin("poverty-mode").unwrap();
+    cmd.env("XDG_CONFIG_HOME", cfg_home.path())
+        .env("POVERTY_PROXY_CHAIN", "bogus")
+        .env_remove("ANTHROPIC_BASE_URL")
+        .arg("run")
+        .arg("--interactive")
+        .args(["--", "true"]);
+
+    cmd.assert()
+        .failure()
+        .stderr(contains("unknown proxy name"))
+        .stderr(contains("is not a TTY").not());
 }

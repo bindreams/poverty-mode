@@ -519,6 +519,121 @@ fn from_config_then_confirm_yields_enabled_chain() {
     }
 }
 
+// --- from_config_and_resolved: TUI seeded from the RESOLVED chain (spec §5.10) -----
+
+#[test]
+fn from_resolved_enables_and_orders_resolved_members_first() {
+    // Config has all rows disabled in canonical order. The resolved chain
+    // (e.g. from `--proxies headroom,pino` or POVERTY_PROXY_CHAIN) enables
+    // headroom then pino, in THAT order — the TUI must reflect it, not the
+    // config-file order/enabled flags.
+    let cfg = cfg_pino_headroom_central(false, false);
+    let resolved = vec![
+        ResolvedProxy {
+            name: ProxyName::Headroom,
+            settings: ProxySettings::Headroom(HeadroomSettings { compression: false }),
+        },
+        ResolvedProxy {
+            name: ProxyName::Pino,
+            settings: ProxySettings::Pino(PinoSettings {
+                auto_cache: true,
+                tail_ttl: crate::proxy::pino::TailTtl::FiveMin,
+                drop_tools: vec![],
+                strip_ansi: true,
+                model_override: None,
+            }),
+        },
+    ];
+    let st = TuiState::from_config_and_resolved(&cfg, &resolved);
+    // Resolved members come first, enabled, in chain order: headroom, pino.
+    assert_eq!(st.items[0].name, ProxyName::Headroom);
+    assert!(st.items[0].enabled);
+    assert_eq!(st.items[1].name, ProxyName::Pino);
+    assert!(st.items[1].enabled);
+    // The remaining known proxy (central) follows, disabled, and is last.
+    assert_eq!(st.items[2].name, ProxyName::Central);
+    assert!(!st.items[2].enabled);
+    assert_eq!(st.items.len(), 3);
+    assert_eq!(st.cursor, 0);
+    assert_eq!(st.hint(), None);
+}
+
+#[test]
+fn from_resolved_keeps_all_known_rows_togglable() {
+    // Even with an empty resolved chain, every known proxy is present as a
+    // (disabled) row so the user can still toggle it on.
+    let cfg = cfg_pino_headroom_central(false, false);
+    let st = TuiState::from_config_and_resolved(&cfg, &[]);
+    assert_eq!(st.items.len(), 3);
+    assert!(st.items.iter().all(|i| !i.enabled));
+    // Disabled-and-absent rows keep the config's relative order.
+    assert_eq!(st.items[0].name, ProxyName::Pino);
+    assert_eq!(st.items[1].name, ProxyName::Headroom);
+    assert_eq!(st.items[2].name, ProxyName::Central);
+}
+
+#[test]
+fn from_resolved_central_forced_last_even_if_not_tail_of_resolved() {
+    // Central is always coerced last regardless of where it appears in inputs.
+    let cfg = cfg_pino_headroom_central(false, false);
+    let resolved = vec![
+        ResolvedProxy {
+            name: ProxyName::Pino,
+            settings: ProxySettings::Pino(PinoSettings {
+                auto_cache: true,
+                tail_ttl: crate::proxy::pino::TailTtl::FiveMin,
+                drop_tools: vec![],
+                strip_ansi: true,
+                model_override: None,
+            }),
+        },
+        ResolvedProxy {
+            name: ProxyName::Central,
+            settings: ProxySettings::Central(CentralSettings {
+                port: None,
+                pinned_version: None,
+            }),
+        },
+    ];
+    let st = TuiState::from_config_and_resolved(&cfg, &resolved);
+    assert_eq!(st.items.last().unwrap().name, ProxyName::Central);
+    assert!(st.items.last().unwrap().enabled);
+}
+
+#[test]
+fn from_resolved_then_confirm_yields_the_resolved_chain() {
+    // Round-trip: the chain confirmed back out matches the resolved seed
+    // (enabled members, in order). This is the property the picker relies on so
+    // an unmodified Enter reproduces `--proxies` / POVERTY_PROXY_CHAIN.
+    let cfg = cfg_pino_headroom_central(false, false);
+    let resolved = vec![
+        ResolvedProxy {
+            name: ProxyName::Headroom,
+            settings: ProxySettings::Headroom(HeadroomSettings { compression: false }),
+        },
+        ResolvedProxy {
+            name: ProxyName::Pino,
+            settings: ProxySettings::Pino(PinoSettings {
+                auto_cache: true,
+                tail_ttl: crate::proxy::pino::TailTtl::FiveMin,
+                drop_tools: vec![],
+                strip_ansi: true,
+                model_override: Some("seed-model".to_string()),
+            }),
+        },
+    ];
+    let mut st = TuiState::from_config_and_resolved(&cfg, &resolved);
+    match st.apply(TuiAction::Confirm) {
+        TuiOutcome::Run(out) => {
+            assert_eq!(
+                out, resolved,
+                "confirmed chain must equal the resolved seed"
+            );
+        }
+        other => panic!("expected Run, got {other:?}"),
+    }
+}
+
 // --- central-last property guards (added green-on-arrival; not red->green) -----
 
 #[test]
