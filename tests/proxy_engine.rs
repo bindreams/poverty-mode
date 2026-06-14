@@ -600,3 +600,70 @@ async fn forward_passes_upstream_response_headers_verbatim() {
     shutdown.notify_waiters();
     bound.handle.await.expect("join").expect("engine ok");
 }
+
+#[tokio::test]
+async fn streaming_response_is_tee_d_to_log_file_when_configured() {
+    let stub = start_stub_async("event: message\ndata: {\"a\":1}\n\n").await;
+    let shutdown = std::sync::Arc::new(Notify::new());
+    let shutdown_fut = {
+        let s = shutdown.clone();
+        async move { s.notified().await }
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let log_path = dir.path().join("pino-test.log");
+    let cfg = EngineConfig {
+        name: ProxyName::Pino,
+        listen: "127.0.0.1:0".parse().unwrap(),
+        upstream: upstream(&format!("http://127.0.0.1:{}", stub.port)),
+        run_id: "01J0TEE".to_string(),
+        log_file: Some(log_path.clone()),
+        transform: TransformKind::None,
+    };
+    let bound = bind_engine(cfg, shutdown_fut).await.expect("bind");
+    let port = bound.local_addr.port();
+
+    let (status, body) = raw_post(port, "/v1/messages", r#"{"messages":[]}"#).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "event: message\ndata: {\"a\":1}\n\n");
+
+    // Drain so the tee file is flushed/closed.
+    shutdown.notify_waiters();
+    bound.handle.await.expect("join").expect("engine ok");
+
+    let logged = std::fs::read_to_string(&log_path).expect("log file exists");
+    assert!(
+        logged.contains("event: message"),
+        "response body must be tee'd to the log: got {logged:?}"
+    );
+}
+
+#[tokio::test]
+async fn no_log_file_means_no_file_written() {
+    let stub = start_stub_async(r#"{"ok":true}"#).await;
+    let shutdown = std::sync::Arc::new(Notify::new());
+    let shutdown_fut = {
+        let s = shutdown.clone();
+        async move { s.notified().await }
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = EngineConfig {
+        name: ProxyName::Pino,
+        listen: "127.0.0.1:0".parse().unwrap(),
+        upstream: upstream(&format!("http://127.0.0.1:{}", stub.port)),
+        run_id: "01J0NOLOG".to_string(),
+        log_file: None,
+        transform: TransformKind::None,
+    };
+    let bound = bind_engine(cfg, shutdown_fut).await.expect("bind");
+    let port = bound.local_addr.port();
+    let (status, _) = raw_post(port, "/v1/messages", r#"{"messages":[]}"#).await;
+    assert_eq!(status, StatusCode::OK);
+
+    shutdown.notify_waiters();
+    bound.handle.await.expect("join").expect("engine ok");
+
+    assert!(
+        std::fs::read_dir(dir.path()).unwrap().next().is_none(),
+        "no log file must be created when log_file is None"
+    );
+}

@@ -13,7 +13,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use futures_util::TryStreamExt;
+use futures_util::{StreamExt, TryStreamExt};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full, StreamBody};
 use hyper::body::{Frame, Incoming};
@@ -22,6 +22,7 @@ use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use hyper_util::server::graceful::GracefulShutdown;
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 
 pub mod headroom;
@@ -328,7 +329,7 @@ struct EngineState {
     // foreclose that design (it cannot be moved into a 'static blocking closure
     // and still be reused), so M3 authors `Arc` now.
     transform: Option<Arc<dyn BodyTransform + Send + Sync>>,
-    #[allow(dead_code)] // M3.11 wires this into the response log-tee.
+    // M3.11: the optional per-response log-tee destination (append mode).
     log_file: Option<std::path::PathBuf>,
 }
 
@@ -702,18 +703,65 @@ async fn forward(
 /// (SSE-safe). Infallible: a malformed status/header is logged and skipped, never
 /// `?`-propagated (R23e). Async so M3.11 can open the optional log-tee file here.
 async fn build_downstream_response(
-    _state: Arc<EngineState>,
+    state: Arc<EngineState>,
     up_resp: reqwest::Response,
 ) -> Response<EngineBody> {
     let status = up_resp.status();
     let resp_headers = up_resp.headers().clone();
 
-    let framed = up_resp
-        .bytes_stream()
-        .map_ok(Frame::data)
-        .map_err(std::io::Error::other);
-    let body = StreamBody::new(framed).boxed();
+    // Open the tee file (append) once per response if configured.
+    let tee = match state.log_file.as_ref() {
+        Some(path) => {
+            if let Some(parent) = path.parent() {
+                if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                    tracing::warn!("tee: cannot create log dir {}: {e}", parent.display());
+                }
+            }
+            match tokio::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .await
+            {
+                Ok(file) => Some(Arc::new(tokio::sync::Mutex::new(file))),
+                Err(e) => {
+                    tracing::warn!("tee: cannot open log file {}: {e}", path.display());
+                    None
+                }
+            }
+        }
+        None => None,
+    };
 
+    let tee_for_stream = tee.clone();
+    let framed = up_resp.bytes_stream().then(move |chunk| {
+        let tee = tee_for_stream.clone();
+        async move {
+            match chunk {
+                Ok(bytes) => {
+                    if let Some(tee) = tee.as_ref() {
+                        let mut f = tee.lock().await;
+                        // Observable failures (MINOR finding): warn, never panic,
+                        // never fail the response on a log error.
+                        if let Err(e) = f.write_all(&bytes).await {
+                            tracing::warn!("tee: write failed: {e}");
+                        } else if let Err(e) = f.flush().await {
+                            tracing::warn!("tee: flush failed: {e}");
+                        }
+                    }
+                    Ok(Frame::data(bytes))
+                }
+                Err(e) => Err(std::io::Error::other(e)),
+            }
+        }
+    });
+    // `BodyExt::boxed` (not `StreamExt::boxed`): `StreamBody` is both a `Body`
+    // and a `Stream`, and importing `StreamExt` (for `.then`) makes the bare
+    // `.boxed()` ambiguous. We want the `Body` → `BoxBody<Bytes, io::Error>`.
+    let body = BodyExt::boxed(StreamBody::new(framed));
+
+    // Infallible (R23e): a malformed status/header is logged-skipped, never
+    // `?`-propagated to the hyper service error.
     let status = StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let mut builder = Response::builder().status(status);
     for (name, value) in resp_headers.iter() {
