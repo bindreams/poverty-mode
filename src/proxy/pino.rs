@@ -199,9 +199,72 @@ fn apply_model_override(body: &mut Value, model: &str) {
     }
 }
 
-fn apply_default_transform(_body: &mut Value, _settings: &PinoSettings) {
-    // Implemented in Tasks M4.4 (strip_ansi), M4.5 (drop_tools + reminder scrub),
-    // and M4.5b (restructureV123).
+// --- strip_ansi (default.js lines 42-70) -----
+
+// Matches a CSI/SGR sequence: ESC '[' <params> <final letter>. Port of the Node
+// ANSI_RE /\x1b\[[0-9;]*[A-Za-z]/g; only this exact form is scrubbed.
+fn ansi_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\x1b\[[0-9;]*[A-Za-z]").unwrap())
+}
+
+fn strip_ansi_str(s: &str) -> String {
+    ansi_re().replace_all(s, "").into_owned()
+}
+
+// Scrubs ANSI escapes from m.content (string), each block's b.text, each block's
+// b.content (string), and each nested rc.text when b.content is an array.
+fn strip_ansi_from_messages(body: &mut Value) {
+    let messages = match body.get_mut("messages").and_then(|m| m.as_array_mut()) {
+        Some(m) => m,
+        None => return,
+    };
+    for msg in messages.iter_mut() {
+        let content = match msg.get_mut("content") {
+            Some(c) => c,
+            None => continue,
+        };
+        match content {
+            Value::String(s) => {
+                *s = strip_ansi_str(s);
+            }
+            Value::Array(blocks) => {
+                for blk in blocks.iter_mut() {
+                    if !blk.is_object() {
+                        continue;
+                    }
+                    if let Some(Value::String(text)) = blk.get_mut("text") {
+                        *text = strip_ansi_str(text);
+                    }
+                    match blk.get_mut("content") {
+                        Some(Value::String(inner)) => {
+                            *inner = strip_ansi_str(inner);
+                        }
+                        Some(Value::Array(inner_blocks)) => {
+                            for rc in inner_blocks.iter_mut() {
+                                if rc.is_object() {
+                                    if let Some(Value::String(text)) = rc.get_mut("text") {
+                                        *text = strip_ansi_str(text);
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn apply_default_transform(body: &mut Value, settings: &PinoSettings) {
+    // Node transforms/default.js transform() order:
+    //   trimTools -> trimReminders -> trimSystem(inert) -> restructureV123 -> stripAnsiFromMessages.
+    // drop_tools + reminder scrub are wired in M4.5; restructureV123 in M4.5b.
+    if settings.strip_ansi {
+        strip_ansi_from_messages(body);
+    }
 }
 
 fn apply_auto_cache(_body: &mut Value, _tail_ttl: TailTtl) {

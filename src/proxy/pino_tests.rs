@@ -336,3 +336,98 @@ fn model_override_friendly_with_literal_dollar_is_not_treated_as_template() {
     t.transform(&mut body).unwrap();
     assert_eq!(body["system"], json!("name claude-$x"));
 }
+
+// M4.4 ===== strip_ansi: scrub ANSI/CSI escapes from message text + tool-result
+// content (port of stripAnsiFromMessages / stripAnsi, default.js lines 42-70).
+// Node regex /\x1b\[[0-9;]*[A-Za-z]/g. Default-on, gated by settings.strip_ansi.
+
+fn strip_only_settings() -> PinoSettings {
+    PinoSettings {
+        auto_cache: false,
+        tail_ttl: TailTtl::FiveMin,
+        drop_tools: vec![],
+        strip_ansi: true,
+        model_override: None,
+    }
+}
+
+#[test]
+fn strip_ansi_cleans_string_message_content() {
+    let t = PinoTransform {
+        settings: strip_only_settings(),
+    };
+    let mut body = json!({
+        "messages": [
+            { "role": "user", "content": "\u{1b}[31mred\u{1b}[0m text" }
+        ]
+    });
+    t.transform(&mut body).unwrap();
+    assert_eq!(body["messages"][0]["content"], json!("red text"));
+}
+
+#[test]
+fn strip_ansi_cleans_block_text_and_block_content_string() {
+    let t = PinoTransform {
+        settings: strip_only_settings(),
+    };
+    let mut body = json!({
+        "messages": [
+            { "role": "user", "content": [
+                { "type": "text", "text": "\u{1b}[1mbold\u{1b}[22m" },
+                { "type": "tool_result", "content": "\u{1b}[32mok\u{1b}[0m" }
+            ] }
+        ]
+    });
+    t.transform(&mut body).unwrap();
+    assert_eq!(body["messages"][0]["content"][0]["text"], json!("bold"));
+    assert_eq!(body["messages"][0]["content"][1]["content"], json!("ok"));
+}
+
+#[test]
+fn strip_ansi_cleans_nested_tool_result_content_array() {
+    let t = PinoTransform {
+        settings: strip_only_settings(),
+    };
+    let mut body = json!({
+        "messages": [
+            { "role": "user", "content": [
+                { "type": "tool_result", "content": [
+                    { "type": "text", "text": "\u{1b}[33mwarn\u{1b}[39m line" }
+                ] }
+            ] }
+        ]
+    });
+    t.transform(&mut body).unwrap();
+    assert_eq!(
+        body["messages"][0]["content"][0]["content"][0]["text"],
+        json!("warn line")
+    );
+}
+
+#[test]
+fn strip_ansi_disabled_leaves_escapes_intact() {
+    let mut s = strip_only_settings();
+    s.strip_ansi = false;
+    let t = PinoTransform { settings: s };
+    let mut body = json!({
+        "messages": [ { "role": "user", "content": "\u{1b}[31mred\u{1b}[0m" } ]
+    });
+    t.transform(&mut body).unwrap();
+    assert_eq!(
+        body["messages"][0]["content"],
+        json!("\u{1b}[31mred\u{1b}[0m")
+    );
+}
+
+#[test]
+fn strip_ansi_only_matches_csi_sgr_form_not_arbitrary_text() {
+    // The Node regex only matches ESC [ <params> <letter>; literal "[31m" without ESC stays.
+    let t = PinoTransform {
+        settings: strip_only_settings(),
+    };
+    let mut body = json!({
+        "messages": [ { "role": "user", "content": "literal [31m stays" } ]
+    });
+    t.transform(&mut body).unwrap();
+    assert_eq!(body["messages"][0]["content"], json!("literal [31m stays"));
+}
