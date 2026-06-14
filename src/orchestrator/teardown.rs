@@ -78,12 +78,22 @@ mod imp {
             })
         }
 
-        pub fn spawn(&mut self, exe: &Path, args: &[String]) -> anyhow::Result<GroupSpawn> {
+        pub fn spawn(
+            &mut self,
+            exe: &Path,
+            args: &[String],
+            extra_env: &[(String, String)],
+        ) -> anyhow::Result<GroupSpawn> {
             let mut cmd = Command::new(exe);
             cmd.args(args);
             cmd.stdout(Stdio::piped());
             // Tell the child which fd is the death-pipe read end to watch.
             cmd.env("PM_DEATH_PIPE_FD", self.death_read_fd.to_string());
+            // Per-child env overrides (e.g. test-only fault injection): applied to
+            // THIS child's Command only, never the parent's global env (no UB).
+            for (k, v) in extra_env {
+                cmd.env(k, v);
+            }
 
             let read_fd = self.death_read_fd;
             // Test-only knob: when PM_DISABLE_PDEATHSIG=1 is in THIS process's env,
@@ -258,7 +268,8 @@ mod imp {
     use windows_sys::Win32::System::Pipes::CreatePipe;
     use windows_sys::Win32::System::Threading::{
         CreateProcessW, GetExitCodeProcess, ResumeThread, WaitForSingleObject, CREATE_SUSPENDED,
-        INFINITE, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW,
+        CREATE_UNICODE_ENVIRONMENT, INFINITE, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
+        STARTUPINFOW,
     };
 
     struct OwnedChild {
@@ -282,6 +293,25 @@ mod imp {
             .encode_wide()
             .chain(std::iter::once(0))
             .collect()
+    }
+
+    /// Build a double-null-terminated UTF-16 environment block: the parent env
+    /// (via `std::env::vars()`) with `extra` overrides applied. Used only when a
+    /// per-child env override is requested (else `spawn` passes `null` to inherit).
+    fn build_env_block(extra: &[(String, String)]) -> Vec<u16> {
+        use std::collections::BTreeMap;
+        let mut map: BTreeMap<String, String> = std::env::vars().collect();
+        for (k, v) in extra {
+            map.insert(k.clone(), v.clone());
+        }
+        let mut block: Vec<u16> = Vec::new();
+        for (k, v) in map {
+            let entry = format!("{k}={v}");
+            block.extend(entry.encode_utf16());
+            block.push(0);
+        }
+        block.push(0); // final (double-null) terminator
+        block
     }
 
     impl ProxyGroup {
@@ -321,7 +351,12 @@ mod imp {
             })
         }
 
-        pub fn spawn(&mut self, exe: &Path, args: &[String]) -> anyhow::Result<GroupSpawn> {
+        pub fn spawn(
+            &mut self,
+            exe: &Path,
+            args: &[String],
+            extra_env: &[(String, String)],
+        ) -> anyhow::Result<GroupSpawn> {
             // Build an inheritable stdout pipe for the READY read.
             // SAFETY: zeroed is a valid initial state for SECURITY_ATTRIBUTES.
             let mut sa: SECURITY_ATTRIBUTES = unsafe { std::mem::zeroed() };
@@ -372,9 +407,25 @@ mod imp {
             // SAFETY: zeroed is a valid initial state for PROCESS_INFORMATION.
             let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
 
-            // SAFETY: standard CreateProcessW call; bInheritHandles=TRUE so the
-            // child inherits the write end of the pipe. CREATE_SUSPENDED means the
-            // child runs no code until we ResumeThread (after assigning the job).
+            // Conditional env block: empty -> inherit parent env (null); non-empty ->
+            // a custom UTF-16 block with the overrides applied. `env_block` is kept
+            // alive for the whole CreateProcessW call (env_ptr borrows it).
+            let env_block: Vec<u16>;
+            let (creation_flags, env_ptr): (u32, *const std::ffi::c_void) = if extra_env.is_empty()
+            {
+                (CREATE_SUSPENDED, std::ptr::null())
+            } else {
+                env_block = build_env_block(extra_env);
+                (
+                    CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
+                    env_block.as_ptr() as *const std::ffi::c_void,
+                )
+            };
+
+            // SAFETY: standard CreateProcessW call; bInheritHandles=TRUE so the child
+            // inherits the write end of the pipe. CREATE_SUSPENDED means the child runs
+            // no code until we ResumeThread (after assigning the job). `env_ptr` is
+            // either null (inherit) or points into the live `env_block`.
             let ok = unsafe {
                 CreateProcessW(
                     std::ptr::null(),
@@ -382,8 +433,8 @@ mod imp {
                     std::ptr::null(),
                     std::ptr::null(),
                     TRUE,
-                    CREATE_SUSPENDED,
-                    std::ptr::null(),
+                    creation_flags,
+                    env_ptr,
                     std::ptr::null(),
                     &si,
                     &mut pi,

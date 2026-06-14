@@ -106,7 +106,7 @@ fn kill_pid(pid: u32) {
 async fn group_spawn_exposes_pid_and_stdout() {
     let mut group = ProxyGroup::new().expect("create group");
     let spawned = group
-        .spawn(&exe(), &["__sleep".to_string()])
+        .spawn(&exe(), &["__sleep".to_string()], &[])
         .expect("spawn into group");
     assert!(spawned.pid > 0, "must report a real child pid");
     assert!(
@@ -121,7 +121,7 @@ async fn group_spawn_exposes_pid_and_stdout() {
 async fn kill_all_reaps_grouped_child_no_orphans() {
     let mut group = ProxyGroup::new().expect("create group");
     let spawned = group
-        .spawn(&exe(), &["__sleep".to_string()])
+        .spawn(&exe(), &["__sleep".to_string()], &[])
         .expect("spawn sleeper");
     let pid = spawned.pid;
     assert!(pid_alive(pid), "sleeper should be alive right after spawn");

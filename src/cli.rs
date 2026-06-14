@@ -321,12 +321,19 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
         Command::Run { .. } => Err(Error::NotImplemented("run").into()),
         Command::Proxy(args) => {
-            // DEFERRED TO M6 (R22 parent-death wiring): M6 inserts
-            // `crate::orchestrator::teardown::spawn_death_watcher_from_env();` as
-            // the FIRST statement of this arm so the macOS death-pipe backstop
-            // fires (the child terminates on parent death via read-end EOF, R23h).
-            // It cannot be added in M3 because `teardown` is authored in M6; M3
-            // surfaces the deferral here rather than silently omitting it.
+            // Test-only fail-closed shim: a child whose OWN env has
+            // PM_TEST_FAIL_PROXY=1 exits 1 before binding, so the orchestrator's
+            // readiness path is deterministically testable. The orchestrator sets
+            // this ONLY via the spawned child's Command::env (never the parent's
+            // global env), so it is inert in production.
+            if std::env::var("PM_TEST_FAIL_PROXY").as_deref() == Ok("1") {
+                std::process::exit(1);
+            }
+            // Parent-death backstop (R22/R23h): macOS death-pipe EOF watcher (Linux:
+            // redundant with PR_SET_PDEATHSIG armed in `pre_exec`; Windows: no-op).
+            // It is a no-op unless this child was spawned into a `ProxyGroup` (i.e.
+            // `PM_DEATH_PIPE_FD` is set), so standalone `proxy` debugging is unaffected.
+            crate::orchestrator::teardown::spawn_death_watcher_from_env();
             let cfg = engine_config_from_proxy_args(&args);
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -355,7 +362,7 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
                 .build()?;
             rt.block_on(async {
                 let mut group = ProxyGroup::new()?;
-                let spawned = group.spawn(&exe, &["__sleep".to_string()])?;
+                let spawned = group.spawn(&exe, &["__sleep".to_string()], &[])?;
                 println!("{}", spawned.pid);
                 println!("HOLDER_READY");
                 use std::io::Write as _;

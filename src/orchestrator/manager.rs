@@ -65,13 +65,21 @@ pub trait ProxyManager {
 pub struct EphemeralManager {
     exe: PathBuf,
     group: ProxyGroup,
+    /// Test-only: when true, the FIRST hop spawned (tail-most) is told via its
+    /// own Command env to fail readiness. Never mutates the parent's env.
+    fail_next_hop: bool,
 }
 
 impl EphemeralManager {
     pub fn new(exe: PathBuf) -> anyhow::Result<EphemeralManager> {
+        Self::new_with_fault(exe, false)
+    }
+
+    pub fn new_with_fault(exe: PathBuf, fail_next_hop: bool) -> anyhow::Result<EphemeralManager> {
         Ok(EphemeralManager {
             exe,
             group: ProxyGroup::new()?,
+            fail_next_hop,
         })
     }
 
@@ -99,9 +107,16 @@ impl EphemeralManager {
         // We push tail-first, then reverse to return head-first.
         let mut started_rev: Vec<RunningProxy> = Vec::with_capacity(hops.len());
 
-        for hop in hops.iter().rev() {
+        for (rev_idx, hop) in hops.iter().rev().enumerate() {
             let args = Self::full_args(hop, &next_upstream);
-            let spawned = self.group.spawn(&exe, &args).map_err(|e| {
+            // Fault injection: only the FIRST spawned (tail-most) hop, via its OWN
+            // env. rev_idx == 0 is the first iteration of the reversed loop.
+            let extra_env: Vec<(String, String)> = if self.fail_next_hop && rev_idx == 0 {
+                vec![("PM_TEST_FAIL_PROXY".to_string(), "1".to_string())]
+            } else {
+                Vec::new()
+            };
+            let spawned = self.group.spawn(&exe, &args, &extra_env).map_err(|e| {
                 anyhow::anyhow!("spawning proxy hop '{}': {e}", hop.name().as_str())
             })?;
             let stdout = spawned.stdout.ok_or_else(|| {

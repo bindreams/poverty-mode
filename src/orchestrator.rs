@@ -113,6 +113,13 @@ fn split_trailing_central(chain: &[ResolvedProxy]) -> (Vec<ResolvedProxy>, bool)
     }
 }
 
+/// The bounded readiness deadline: the single human-surfaced failure timeout the
+/// house rules permit (a bound on an external event — a child that never becomes
+/// ready — NOT a sleep to synchronize code we control). If the chain is not ready
+/// within this, the run is aborted and torn down. The success path never waits on
+/// this timer: `start_hops` resolves the instant the last hop is ready.
+pub const READINESS_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Build the chain (back-to-front, race-free, via the ProxyManager seam), run the
 /// agent against the head, forward signals, wait, then tear the chain down.
 /// Returns the agent's exit status.
@@ -125,6 +132,20 @@ pub async fn build_and_run(
     tail_upstream: Upstream,
     agent: &dyn Agent,
     argv: &[String],
+) -> anyhow::Result<std::process::ExitStatus> {
+    build_and_run_with_fault(chain, tail_upstream, agent, argv, false).await
+}
+
+/// Like [`build_and_run`], but constructs an [`manager::EphemeralManager`] with a
+/// fault knob (test-only: forces the tail-most hop to fail readiness). Inert when
+/// `fault` is false; [`build_and_run`] calls this with `false`.
+#[doc(hidden)]
+pub async fn build_and_run_with_fault(
+    chain: Vec<ResolvedProxy>,
+    tail_upstream: Upstream,
+    agent: &dyn Agent,
+    argv: &[String],
+    fault: bool,
 ) -> anyhow::Result<std::process::ExitStatus> {
     let (hops, central_tail) = split_trailing_central(&chain);
 
@@ -139,7 +160,7 @@ pub async fn build_and_run(
     }
 
     let exe = self_spawn_exe()?;
-    let mut manager = manager::EphemeralManager::new(exe)?;
+    let mut manager = manager::EphemeralManager::new_with_fault(exe, fault)?;
 
     build_via_manager(
         &mut manager,
@@ -203,7 +224,30 @@ async fn build_via_manager(
         })
         .collect();
 
-    let running = manager.start_hops(&hop_specs, tail_upstream).await?;
+    let running = match tokio::time::timeout(
+        READINESS_DEADLINE,
+        manager.start_hops(&hop_specs, tail_upstream),
+    )
+    .await
+    {
+        Ok(Ok(running)) => running,
+        Ok(Err(e)) => {
+            // start_hops already tore down on internal error; surface it.
+            return Err(e);
+        }
+        Err(_elapsed) => {
+            // Timeout: dropping the `start_hops` future cancels it mid-flight, so
+            // we run teardown explicitly to reap whatever children it spawned. Any
+            // in-flight `spawn_blocking` health probe it left detached cannot run
+            // forever — `health_probe` carries `HEALTH_PROBE_TIMEOUT`, so the
+            // stranded blocking task self-terminates rather than leaking.
+            let _ = manager.shutdown().await;
+            anyhow::bail!(
+                "chain not ready within {}s; torn down all started proxies",
+                READINESS_DEADLINE.as_secs()
+            );
+        }
+    };
     let head = running
         .first()
         .ok_or_else(|| anyhow::anyhow!("manager returned no running hops"))?;
