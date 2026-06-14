@@ -109,26 +109,72 @@ impl TuiState {
                 TuiOutcome::Continue
             }
             TuiAction::Toggle => {
+                let acted = self.cursor_name();
                 if let Some(item) = self.items.get_mut(self.cursor) {
                     item.enabled = !item.enabled;
                 }
+                self.enforce_central_last();
+                self.restore_cursor(acted);
+                self.hint = None;
                 TuiOutcome::Continue
             }
             TuiAction::MoveUp => {
-                if self.cursor > 0 {
-                    self.swap_rows(self.cursor, self.cursor - 1);
-                    self.cursor -= 1;
-                }
+                self.reorder(self.cursor.checked_sub(1));
                 TuiOutcome::Continue
             }
             TuiAction::MoveDown => {
-                if self.cursor + 1 < self.items.len() {
-                    self.swap_rows(self.cursor, self.cursor + 1);
-                    self.cursor += 1;
-                }
+                self.reorder(Some(self.cursor + 1));
                 TuiOutcome::Continue
             }
             TuiAction::Confirm | TuiAction::Cancel => TuiOutcome::Continue,
+        }
+    }
+
+    /// Attempt to swap the cursor row with the row at `target` (if any/in range),
+    /// then re-assert central-last. If the swap was undone by the central-last
+    /// coercion (i.e. the user tried to push a row past central or lift central),
+    /// set the reject hint; if the swap stuck or no swap happened (end clamp),
+    /// clear it. The cursor follows the acted-on row in all cases.
+    fn reorder(&mut self, target: Option<usize>) {
+        let acted = self.cursor_name();
+        let snapshot: Vec<ProxyName> = self.items.iter().map(|i| i.name).collect();
+        let mut attempted = false;
+        if let Some(j) = target {
+            if j < self.items.len() {
+                self.swap_rows(self.cursor, j);
+                attempted = true;
+            }
+        }
+        self.enforce_central_last();
+        self.restore_cursor(acted);
+        let order_now: Vec<ProxyName> = self.items.iter().map(|i| i.name).collect();
+        // A hint is warranted only when a swap was attempted but the order is
+        // back to where it started (central-last undid it). A clamped end-move
+        // (no swap attempted) or a successful reorder leaves no hint.
+        self.hint = if attempted && order_now == snapshot {
+            Some("central must stay last")
+        } else {
+            None
+        };
+    }
+
+    /// The proxy the cursor currently points at, if any.
+    fn cursor_name(&self) -> Option<ProxyName> {
+        self.items.get(self.cursor).map(|i| i.name)
+    }
+
+    /// Re-point the cursor at the row identified by `name` after a structural
+    /// change. Relies on unique row names (asserted in `TuiState::new`). If
+    /// `name` is gone (it never is in v1), the cursor is clamped in range.
+    fn restore_cursor(&mut self, name: Option<ProxyName>) {
+        if let Some(name) = name {
+            if let Some(idx) = self.items.iter().position(|i| i.name == name) {
+                self.cursor = idx;
+                return;
+            }
+        }
+        if self.cursor >= self.items.len() && !self.items.is_empty() {
+            self.cursor = self.items.len() - 1;
         }
     }
 
