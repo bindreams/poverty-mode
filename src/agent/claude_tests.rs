@@ -151,3 +151,82 @@ fn empty_user_args_still_emit_settings() {
     assert_eq!(args.len(), 2, "exactly --settings + json, no user args");
     assert_eq!(args[0], "--settings");
 }
+
+// M7.3 (characterization of the M6 process-env belt — belt 1 of the R8 dual belt).
+//
+// RECONCILIATION (R12 labeling): the env-mirroring behavior these tests inspect —
+// `ANTHROPIC_BASE_URL` set from `base_url`, plus every `extra_env` pair copied
+// into the child env — was implemented and committed in M6 (it is what the
+// orchestrator's env half relies on). The original M7 task scripted these as
+// red→green (env unwired until M7.3), but under the controller decision M6 already
+// wired belt 1, so these are CHARACTERIZATION guards added after the behavior
+// exists: they LOCK belt 1 so an accidental change to the env wiring is caught.
+// They are NOT dressed as red→green.
+
+// Read a single env var off the built command, if present and set.
+fn env_of(cmd: &tokio::process::Command, key: &str) -> Option<String> {
+    cmd.as_std()
+        .get_envs()
+        .find(|(k, _)| *k == std::ffi::OsStr::new(key))
+        .and_then(|(_, v)| v.map(|v| v.to_string_lossy().into_owned()))
+}
+
+#[test]
+fn process_env_sets_base_url() {
+    let base = Url::parse("http://127.0.0.1:4100").unwrap();
+    let cmd = ClaudeAgent.build_command(&[], &base, &[]);
+    assert_eq!(
+        env_of(&cmd, "ANTHROPIC_BASE_URL"),
+        Some("http://127.0.0.1:4100/".to_string())
+    );
+}
+
+#[test]
+fn process_env_includes_every_extra_env_entry() {
+    let base = Url::parse("http://127.0.0.1:4100").unwrap();
+    let extra = vec![
+        (
+            "POVERTY_PROXY_CHAIN".to_string(),
+            "pino,headroom".to_string(),
+        ),
+        ("ENABLE_TOOL_SEARCH".to_string(), "true".to_string()),
+    ];
+    let cmd = ClaudeAgent.build_command(&[], &base, &extra);
+
+    assert_eq!(
+        env_of(&cmd, "POVERTY_PROXY_CHAIN"),
+        Some("pino,headroom".to_string())
+    );
+    assert_eq!(env_of(&cmd, "ENABLE_TOOL_SEARCH"), Some("true".to_string()));
+    // base url is still set even when extra_env does not carry it.
+    assert_eq!(
+        env_of(&cmd, "ANTHROPIC_BASE_URL"),
+        Some("http://127.0.0.1:4100/".to_string())
+    );
+}
+
+#[test]
+fn central_tail_auth_token_lands_in_process_env() {
+    // Orchestrator marks a central tail by adding ANTHROPIC_AUTH_TOKEN=wire-proxy.
+    let base = Url::parse("http://127.0.0.1:4100").unwrap();
+    let extra = vec![
+        ("ENABLE_TOOL_SEARCH".to_string(), "true".to_string()),
+        ("ANTHROPIC_AUTH_TOKEN".to_string(), "wire-proxy".to_string()),
+    ];
+    let cmd = ClaudeAgent.build_command(&[], &base, &extra);
+    assert_eq!(
+        env_of(&cmd, "ANTHROPIC_AUTH_TOKEN"),
+        Some("wire-proxy".to_string())
+    );
+}
+
+#[test]
+fn anthropic_tail_has_no_auth_token_override() {
+    // No central tail => orchestrator does NOT add ANTHROPIC_AUTH_TOKEN, so the
+    // child inherits the user's real Anthropic auth verbatim (we set nothing).
+    // (extra_env still carries ENABLE_TOOL_SEARCH from the orchestrator.)
+    let base = Url::parse("http://127.0.0.1:4100").unwrap();
+    let extra = vec![("ENABLE_TOOL_SEARCH".to_string(), "true".to_string())];
+    let cmd = ClaudeAgent.build_command(&[], &base, &extra);
+    assert_eq!(env_of(&cmd, "ANTHROPIC_AUTH_TOKEN"), None);
+}
