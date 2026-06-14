@@ -371,3 +371,73 @@ fn proxy_transform_kind_matches_chosen_proxy() {
         other => panic!("expected headroom transform, got {other:?}"),
     }
 }
+
+// FIX-D: `central` / `config` subcommand dispatch =====
+//
+// These exercise the safe, hermetic arms of the new dispatch handlers. The env
+// guards (`crate::test_support`) serialize and isolate the config/cache roots so
+// the tests never touch the real user dirs (R13/R23j). The live `central login`
+// and `central status`-against-a-running-daemon paths spawn `jbcentral` and need a
+// real install + login; those are covered by `#[ignore]` live tests below.
+
+#[test]
+fn dispatch_config_path_succeeds_in_isolated_home() {
+    let guard = crate::test_support::ConfigHomeGuard::new();
+    let cli = Cli::try_parse_from(["poverty-mode", "config", "path"]).unwrap();
+    // `config path` is pure path math (no file is created); it must succeed and
+    // resolve under the isolated config home.
+    dispatch(cli).expect("`config path` should succeed");
+    assert_eq!(crate::paths::config_path().unwrap(), guard.config_file());
+}
+
+#[test]
+fn dispatch_config_show_creates_default_and_succeeds() {
+    let guard = crate::test_support::ConfigHomeGuard::new();
+    assert!(
+        !guard.config_file().exists(),
+        "config file must be absent before `config show`"
+    );
+    let cli = Cli::try_parse_from(["poverty-mode", "config", "show"]).unwrap();
+    // `config show` loads-or-creates: on first run it writes the safe default, then
+    // prints it. The file must exist afterwards and re-parse into the canonical default.
+    dispatch(cli).expect("`config show` should succeed");
+    let text = std::fs::read_to_string(guard.config_file()).expect("config written on first show");
+    let cfg: crate::config::Config = serde_yaml::from_str(&text).unwrap();
+    assert_eq!(cfg, crate::config::Config::default_all_disabled());
+}
+
+#[test]
+fn dispatch_central_stop_when_not_installed_is_ok() {
+    // Point the cache at an empty temp dir: no jbcentral install => `central stop`
+    // has nothing to stop and returns Ok WITHOUT spawning any process or hitting
+    // the network. This is the safe, hermetic stop path.
+    let dir = tempfile::TempDir::new().unwrap();
+    let _guard = crate::test_support::EnvVarGuard::set("POVERTY_CACHE_DIR", Some(dir.path()));
+    let cli = Cli::try_parse_from(["poverty-mode", "central", "stop"]).unwrap();
+    dispatch(cli).expect("`central stop` with no install should be Ok");
+}
+
+#[test]
+fn dispatch_central_status_when_not_installed_is_ok() {
+    // With an empty cache there is no install, so `central status` reports
+    // not-installed/stopped/unknown and returns Ok without any network probe
+    // (the empty-versions short-circuit skips `/health` entirely).
+    let dir = tempfile::TempDir::new().unwrap();
+    let _guard = crate::test_support::EnvVarGuard::set("POVERTY_CACHE_DIR", Some(dir.path()));
+    let cli = Cli::try_parse_from(["poverty-mode", "central", "status"]).unwrap();
+    dispatch(cli).expect("`central status` with no install should be Ok");
+}
+
+#[test]
+#[ignore = "live: spawns `jbcentral` and drives the interactive browser-OAuth login (needs a real install + JetBrains AI Pro)"]
+fn dispatch_central_login_live() {
+    let cli = Cli::try_parse_from(["poverty-mode", "central", "login"]).unwrap();
+    dispatch(cli).expect("`central login` should succeed against a real jbcentral");
+}
+
+#[test]
+#[ignore = "live: classifies login via a real `jbcentral status` and probes a running daemon's /health"]
+fn dispatch_central_status_live() {
+    let cli = Cli::try_parse_from(["poverty-mode", "central", "status"]).unwrap();
+    dispatch(cli).expect("`central status` should succeed against a real jbcentral");
+}

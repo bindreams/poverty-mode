@@ -687,3 +687,48 @@ fn characterization_default_yaml_has_spec_5_2_shape() {
     let back: Config = serde_yaml::from_str(&yaml).unwrap();
     assert_eq!(back, Config::default_all_disabled());
 }
+
+// `config show` rendering (FIX-D) =====
+
+#[test]
+fn render_config_matches_save_serialization_and_round_trips() {
+    let cfg = Config::default_all_disabled();
+    let rendered = render_config(&cfg).unwrap();
+    // `show` renders exactly what `save` would write (same serde path).
+    assert_eq!(rendered, serde_yaml::to_string(&cfg).unwrap());
+    // The rendered text re-parses back into the same config.
+    let back: Config = serde_yaml::from_str(&rendered).unwrap();
+    assert_eq!(back, cfg);
+}
+
+// `config edit` editor resolution (FIX-D) =====
+
+#[test]
+fn resolve_editor_prefers_visual_then_editor_then_fallback() {
+    // $VISUAL wins over $EDITOR.
+    assert_eq!(
+        resolve_editor(Some("vis"), Some("ed")),
+        vec!["vis".to_string()]
+    );
+    // $EDITOR used when $VISUAL is unset.
+    assert_eq!(resolve_editor(None, Some("ed")), vec!["ed".to_string()]);
+    // Multi-word editor commands split into argv (e.g. `code --wait`).
+    assert_eq!(
+        resolve_editor(None, Some("code --wait")),
+        vec!["code".to_string(), "--wait".to_string()]
+    );
+}
+
+#[test]
+fn resolve_editor_treats_blank_env_as_unset_and_falls_back() {
+    // Whitespace-only values are ignored; an empty $VISUAL falls through to $EDITOR.
+    assert_eq!(
+        resolve_editor(Some("   "), Some("ed")),
+        vec!["ed".to_string()]
+    );
+    // Neither set => a single-element platform fallback (notepad on Windows, vi elsewhere).
+    let fallback = resolve_editor(None, None);
+    assert_eq!(fallback.len(), 1);
+    let expected = if cfg!(windows) { "notepad" } else { "vi" };
+    assert_eq!(fallback, vec![expected.to_string()]);
+}

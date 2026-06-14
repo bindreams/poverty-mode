@@ -325,6 +325,40 @@ impl Config {
     }
 }
 
+// `config` subcommand support =====
+
+/// Render a [`Config`] as the YAML text shown by `config show`. This is the same
+/// serialization `save` writes to disk, so `show` reflects exactly what a later
+/// `save` would persist (round-trips through serde).
+pub fn render_config(cfg: &Config) -> anyhow::Result<String> {
+    serde_yaml::to_string(cfg).map_err(|e| anyhow::anyhow!("serializing config: {e}"))
+}
+
+/// Resolve the editor command line for `config edit`, as a non-empty argv.
+///
+/// Precedence: `$VISUAL`, then `$EDITOR`, then a platform fallback (`notepad` on
+/// Windows, `vi` elsewhere). An env var set to whitespace-only is treated as
+/// unset. The value is split on ASCII whitespace so `EDITOR="code --wait"` works;
+/// the config-file path is appended by the caller as a separate argv element.
+pub fn resolve_editor(visual_env: Option<&str>, editor_env: Option<&str>) -> Vec<String> {
+    for candidate in [visual_env, editor_env].into_iter().flatten() {
+        let parts: Vec<String> = candidate.split_whitespace().map(str::to_string).collect();
+        if !parts.is_empty() {
+            return parts;
+        }
+    }
+    vec![default_editor().to_string()]
+}
+
+/// The platform editor used when neither `$VISUAL` nor `$EDITOR` is set.
+fn default_editor() -> &'static str {
+    if cfg!(windows) {
+        "notepad"
+    } else {
+        "vi"
+    }
+}
+
 #[cfg(test)]
 #[path = "config_tests.rs"]
 mod config_tests;

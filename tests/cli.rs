@@ -17,20 +17,16 @@ fn help_lists_all_subcommands() {
 }
 
 /// Exercises the library crate import path R1 mandates: parse argv with the
-/// public `Cli`, then dispatch through the public `dispatch`. `config` is still a
-/// `NotImplemented` stub (M10.3 wired `status` to the real handler), so it remains
-/// the reachable-stub probe for this library-import path.
+/// public `Cli`, then dispatch through the public `dispatch`. FIX-D wired `config`
+/// to its real handler, so `config path` now succeeds via this library-import
+/// path. It is pure path math (no file is created), so it needs no isolation.
 #[test]
-fn library_dispatch_is_reachable_for_stub_subcommand() {
+fn library_dispatch_is_reachable_for_config_subcommand() {
     use clap::Parser;
     use poverty_mode::cli::{dispatch, Cli};
 
     let cli = Cli::try_parse_from(["poverty-mode", "config", "path"]).unwrap();
-    let err = dispatch(cli).unwrap_err();
-    assert!(
-        err.to_string().contains("not yet implemented: config"),
-        "library dispatch should return the stub error, got: {err}"
-    );
+    dispatch(cli).expect("`config path` should dispatch successfully via the library import path");
 }
 
 // ---- Characterization guards (R12): added AFTER the dispatch stubs exist in
@@ -128,11 +124,68 @@ fn clean_subcommand_yes_clears_cache_and_completes() {
     assert!(!cache.join("bin").exists());
 }
 
+/// FIX-D wired `config` to the real handler: `config path` now prints the resolved
+/// config-file path and exits success. Hermetic via `XDG_CONFIG_HOME` (set only for
+/// the child process), so the printed path points into the isolated config home and
+/// no real user file is touched. `config path` creates nothing.
 #[test]
-fn config_path_subcommand_is_not_yet_implemented() {
+fn config_path_subcommand_prints_resolved_path() {
+    let tmp = tempfile::tempdir().unwrap();
     let mut cmd = Command::cargo_bin("poverty-mode").unwrap();
     cmd.args(["config", "path"])
+        .env("XDG_CONFIG_HOME", tmp.path())
         .assert()
-        .failure()
-        .stderr(contains("not yet implemented: config"));
+        .success()
+        .stdout(contains("poverty-mode.yaml"));
+    // The file itself must NOT have been created by `config path` (pure path math).
+    assert!(!tmp.path().join("poverty-mode.yaml").exists());
+}
+
+/// FIX-D: `config show` loads-or-creates the config, then prints its YAML. On first
+/// run it writes the safe all-disabled default and emits it. Hermetic via
+/// `XDG_CONFIG_HOME` (child-only env) so it never reads or writes the real config.
+#[test]
+fn config_show_subcommand_creates_default_and_prints_yaml() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut cmd = Command::cargo_bin("poverty-mode").unwrap();
+    cmd.args(["config", "show"])
+        .env("XDG_CONFIG_HOME", tmp.path())
+        .assert()
+        .success()
+        .stdout(contains("version: 1"))
+        .stdout(contains("name: pino"))
+        .stdout(contains("name: central"))
+        .stdout(contains("enable_tool_search: true"));
+    // First run wrote the default config into the isolated home.
+    assert!(tmp.path().join("poverty-mode.yaml").exists());
+}
+
+/// FIX-D: `central stop` with no install reports "nothing to stop" and exits
+/// success WITHOUT spawning any process or hitting the network. Hermetic via an
+/// empty `POVERTY_CACHE_DIR` (child-only env) so no jbcentral binary is found.
+#[test]
+fn central_stop_subcommand_not_installed_is_success() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut cmd = Command::cargo_bin("poverty-mode").unwrap();
+    cmd.args(["central", "stop"])
+        .env("POVERTY_CACHE_DIR", tmp.path().join("cache"))
+        .assert()
+        .success()
+        .stdout(contains("central not installed; nothing to stop"));
+}
+
+/// FIX-D: `central status` with no install reports not-installed/stopped/unknown
+/// and exits success without any spawn or network probe (the empty-versions
+/// short-circuit skips `/health`). Hermetic via an empty `POVERTY_CACHE_DIR`.
+#[test]
+fn central_status_subcommand_not_installed_is_success() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut cmd = Command::cargo_bin("poverty-mode").unwrap();
+    cmd.args(["central", "status"])
+        .env("POVERTY_CACHE_DIR", tmp.path().join("cache"))
+        .assert()
+        .success()
+        .stdout(contains("install: not installed"))
+        .stdout(contains("state: stopped"))
+        .stdout(contains("login: unknown"));
 }

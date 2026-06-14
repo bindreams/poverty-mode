@@ -3,17 +3,17 @@
 //! Per R23b the `proxy` command is the TUPLE variant `Command::Proxy(ProxyArgs)`;
 //! `ProxyArgs` carries a positional `which: ProxyName` plus three flattened
 //! argument groups (`common`, `pino`, `headroom`). The dispatcher selects the
-//! relevant group from `which`. M3 FILLS the `proxy` handler (build
-//! [`EngineConfig`] from the flags, then run the async engine); the remaining
-//! handlers are `NotImplemented` stubs that later milestones FILL. The proxy
-//! identity flag is `--run-id` (a per-run ULID shared by all hops, R10).
+//! relevant group from `which`. The `proxy` handler builds the [`EngineConfig`]
+//! from the flags and runs the async engine; every other subcommand is wired to
+//! its real handler. The proxy identity flag is `--run-id` (a per-run ULID shared
+//! by all hops, R10).
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+use anyhow::Context as _;
 use clap::{Args, Parser, Subcommand};
 
-use crate::error::Error;
 use crate::proxy::headroom::HeadroomSettings;
 use crate::proxy::pino::{PinoSettings, TailTtl};
 use crate::proxy::{self, EngineConfig, ProxyName, TransformKind, Upstream};
@@ -342,8 +342,9 @@ pub fn engine_config_from_proxy_args(args: &ProxyArgs) -> EngineConfig {
 
 /// Dispatch a parsed CLI to the matching subcommand handler. The `proxy` arm is
 /// FILLED here (M3): it builds the [`EngineConfig`] and runs the async engine to
-/// completion on a fresh multi-thread runtime. The remaining handlers are
-/// `NotImplemented` stubs that later milestones FILL.
+/// completion on a fresh multi-thread runtime. Every other handler is wired to its
+/// real implementation; `central`/`config` delegate to [`dispatch_central`] /
+/// [`dispatch_config`].
 pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
         Command::Run {
@@ -434,8 +435,8 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
                 .build()?;
             rt.block_on(proxy::run_proxy(cfg))
         }
-        Command::Central { .. } => Err(Error::NotImplemented("central").into()),
-        Command::Config { .. } => Err(Error::NotImplemented("config").into()),
+        Command::Central { action } => dispatch_central(action),
+        Command::Config { action } => dispatch_config(action),
         Command::Status => {
             // `dispatch` is synchronous; `run_status` is async (R5: its blocking
             // central health/`jbcentral status` probes run off the executor via
@@ -569,6 +570,101 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
             print!("{}", std::env::var(&name).unwrap_or_default());
             use std::io::Write as _;
             std::io::stdout().flush().ok();
+            Ok(())
+        }
+    }
+}
+
+/// Handle `poverty-mode central <login|status|stop>` (spec §5.1). All three arms
+/// shell out / hit the network through the blocking `central` primitives; `dispatch`
+/// is synchronous and off any executor, so they are called directly (no runtime).
+fn dispatch_central(action: CentralAction) -> anyhow::Result<()> {
+    use crate::central;
+    let cache = crate::paths::cache_dir()?;
+    match action {
+        CentralAction::Login => {
+            // Ensure the pinned/default version is installed, then drive the
+            // detect-and-prompt login flow (R20: never bypass; browser OAuth).
+            let version = central::resolve_version(None);
+            let bin = central::ensure_installed(&version)?;
+            central::ensure_logged_in(&bin)
+        }
+        CentralAction::Status => {
+            // Install presence (semantic-sorted, R23f), live run state via the
+            // wire-config port + `/health`, and login truth from `jbcentral status`.
+            let versions = crate::status::central_versions(&cache)?;
+            let running_port = central_running_port(&versions);
+            let login = match crate::status::newest_central_binary(&cache)? {
+                Some(bin) => central::run_status_classified(&bin)
+                    .unwrap_or(central::CentralLoginState::Unknown),
+                None => central::CentralLoginState::Unknown,
+            };
+            let status = central::CentralCommandStatus {
+                versions,
+                running_port,
+                login,
+            };
+            print!("{}", central::render_central_command_status(&status));
+            Ok(())
+        }
+        CentralAction::Stop => {
+            // Best-effort stop: a not-running daemon is normalized to Ok by
+            // `central::stop`; a missing install has nothing to stop.
+            match crate::status::newest_central_binary(&cache)? {
+                Some(bin) => central::stop(&bin),
+                None => {
+                    println!("central not installed; nothing to stop");
+                    Ok(())
+                }
+            }
+        }
+    }
+}
+
+/// The live daemon port for `central status`: the `~/.wire/config.json` port iff an
+/// install exists AND that port answers `/health`. `None` (stopped) otherwise.
+fn central_running_port(versions: &[String]) -> Option<u16> {
+    if versions.is_empty() {
+        return None;
+    }
+    let port = crate::central::read_wire_config().ok()?.port;
+    crate::central::health(port).then_some(port)
+}
+
+/// Handle `poverty-mode config <show|edit|path>` (spec §5.1).
+fn dispatch_config(action: ConfigAction) -> anyhow::Result<()> {
+    match action {
+        ConfigAction::Show => {
+            // Load (creating the safe default on first run), then print the YAML —
+            // exactly what a subsequent `save` would write.
+            let cfg = crate::config::Config::load_or_create()?;
+            print!("{}", crate::config::render_config(&cfg)?);
+            Ok(())
+        }
+        ConfigAction::Path => {
+            println!("{}", crate::paths::config_path()?.display());
+            Ok(())
+        }
+        ConfigAction::Edit => {
+            // Ensure the file exists (first run writes the default), then open it in
+            // $VISUAL/$EDITOR (fallback: notepad on Windows, vi elsewhere). The editor
+            // inherits stdio so a terminal editor works.
+            crate::config::Config::load_or_create()?;
+            let path = crate::paths::config_path()?;
+            let visual = std::env::var("VISUAL").ok();
+            let editor = std::env::var("EDITOR").ok();
+            let argv = crate::config::resolve_editor(visual.as_deref(), editor.as_deref());
+            let (program, rest) = argv
+                .split_first()
+                .expect("resolve_editor always returns a non-empty argv");
+            let status = std::process::Command::new(program)
+                .args(rest)
+                .arg(&path)
+                .status()
+                .with_context(|| format!("launching editor `{program}` for {}", path.display()))?;
+            if !status.success() {
+                anyhow::bail!("editor `{program}` exited with {:?}", status.code());
+            }
             Ok(())
         }
     }

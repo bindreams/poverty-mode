@@ -178,7 +178,7 @@ pub(crate) fn version_sort_key(version: &str) -> (u64, u64, u64) {
 /// (the canonical install dir, R4: `crate::central::INSTALL_TOOL_DIR`). Sorted
 /// SEMANTICALLY by `(major, minor, patch)` (R23f) so `0.2.10 > 0.2.9` — never
 /// lexicographically.
-fn central_versions(cache_dir: &Path) -> Result<Vec<String>> {
+pub(crate) fn central_versions(cache_dir: &Path) -> Result<Vec<String>> {
     let bin = cache_dir.join("bin").join(crate::central::INSTALL_TOOL_DIR);
     if !bin.exists() {
         return Ok(Vec::new());
