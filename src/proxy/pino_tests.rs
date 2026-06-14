@@ -620,3 +620,262 @@ fn drop_tools_reminder_line_match_is_exact_trim_not_substring() {
     let expected = "<system-reminder>\ndeferred tools:\nNotebookEditExtra\n</system-reminder>";
     assert_eq!(body["messages"][0]["content"], json!(expected));
 }
+
+// M4.5b ===== restructureV123: message-restructuring pass (R19, full parity).
+// Ported verbatim from reference/pino/src/transforms/default.js lines 126-208.
+
+fn restructure_settings() -> PinoSettings {
+    // Only restructure runs (drop_tools empty, strip_ansi off, auto_cache off,
+    // no model override) so these tests isolate restructureV123.
+    PinoSettings {
+        auto_cache: false,
+        tail_ttl: TailTtl::FiveMin,
+        drop_tools: vec![],
+        strip_ansi: false,
+        model_override: None,
+    }
+}
+
+#[test]
+fn restructure_noop_for_single_message() {
+    // length < 2 => early return, including no string->array normalization.
+    let t = PinoTransform {
+        settings: restructure_settings(),
+    };
+    let original = json!({
+        "messages": [ { "role": "user", "content": "ToolSearch hint, single turn" } ]
+    });
+    let mut body = original.clone();
+    t.transform(&mut body).unwrap();
+    assert_eq!(
+        body, original,
+        "single-message body must be untouched by restructure"
+    );
+}
+
+#[test]
+fn restructure_normalizes_string_content_to_arrays() {
+    let t = PinoTransform {
+        settings: restructure_settings(),
+    };
+    let mut body = json!({
+        "messages": [
+            { "role": "user", "content": "first turn" },
+            { "role": "assistant", "content": "second turn" }
+        ]
+    });
+    t.transform(&mut body).unwrap();
+    assert_eq!(
+        body["messages"][0]["content"],
+        json!([{ "type": "text", "text": "first turn" }])
+    );
+    assert_eq!(
+        body["messages"][1]["content"],
+        json!([{ "type": "text", "text": "second turn" }])
+    );
+}
+
+#[test]
+fn restructure_extracts_core_context_into_msg0_and_sets_role_user() {
+    let t = PinoTransform {
+        settings: restructure_settings(),
+    };
+    let mut body = json!({
+        "messages": [
+            { "role": "user", "content": [ { "type": "text", "text": "plain msg0 prose" } ] },
+            { "role": "assistant", "content": [ { "type": "text", "text": "ok" } ] },
+            { "role": "user", "content": [
+                { "type": "text", "text": "context with claudeMd path here" },
+                { "type": "text", "text": "normal latest turn" }
+            ] }
+        ]
+    });
+    t.transform(&mut body).unwrap();
+    // Core block moved to the FRONT of msg0; msg0 prose retained after it; role coerced.
+    assert_eq!(body["messages"][0]["role"], json!("user"));
+    assert_eq!(
+        body["messages"][0]["content"],
+        json!([
+            { "type": "text", "text": "context with claudeMd path here" },
+            { "type": "text", "text": "plain msg0 prose" }
+        ])
+    );
+    // The core block is GONE from the tail message (extracted), normal turn remains.
+    assert_eq!(
+        body["messages"][2]["content"],
+        json!([ { "type": "text", "text": "normal latest turn" } ])
+    );
+}
+
+#[test]
+fn restructure_dedupes_core_blocks_by_text_first_occurrence_wins() {
+    let t = PinoTransform {
+        settings: restructure_settings(),
+    };
+    let mut body = json!({
+        "messages": [
+            { "role": "user", "content": [ { "type": "text", "text": "msg0" } ] },
+            { "role": "user", "content": [ { "type": "text", "text": "ToolSearch catalog A" } ] },
+            { "role": "assistant", "content": [ { "type": "text", "text": "mid" } ] },
+            { "role": "user", "content": [
+                { "type": "text", "text": "ToolSearch catalog A" },
+                { "type": "text", "text": "tail prose" }
+            ] }
+        ]
+    });
+    t.transform(&mut body).unwrap();
+    // Only ONE copy of the duplicate core block, prepended to msg0 before its prose.
+    assert_eq!(
+        body["messages"][0]["content"],
+        json!([
+            { "type": "text", "text": "ToolSearch catalog A" },
+            { "type": "text", "text": "msg0" }
+        ])
+    );
+    // The message that became empty after extraction (index 1, only the core block)
+    // is pruned. Remaining: msg0, the assistant "mid", and the tail.
+    let roles: Vec<&str> = body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["role"].as_str().unwrap())
+        .collect();
+    assert_eq!(roles, vec!["user", "assistant", "user"]);
+    // Tail kept only its non-core block.
+    let last = body["messages"].as_array().unwrap().len() - 1;
+    assert_eq!(
+        body["messages"][last]["content"],
+        json!([ { "type": "text", "text": "tail prose" } ])
+    );
+}
+
+#[test]
+fn restructure_removes_stale_scaffolding_from_history_but_not_tail() {
+    let t = PinoTransform {
+        settings: restructure_settings(),
+    };
+    let mut body = json!({
+        "messages": [
+            { "role": "user", "content": [
+                { "type": "text", "text": "<system-reminder>stale in history</system-reminder>" },
+                { "type": "text", "text": "kept history prose" }
+            ] },
+            { "role": "user", "content": [
+                { "type": "text", "text": "<system-reminder>stale-looking but in TAIL</system-reminder>" }
+            ] }
+        ]
+    });
+    t.transform(&mut body).unwrap();
+    // History stale-removable block dropped; non-stale prose kept.
+    assert_eq!(
+        body["messages"][0]["content"],
+        json!([ { "type": "text", "text": "kept history prose" } ])
+    );
+    // Tail's stale-LOOKING block is preserved (isTail short-circuits removal).
+    assert_eq!(
+        body["messages"][1]["content"],
+        json!([ { "type": "text", "text": "<system-reminder>stale-looking but in TAIL</system-reminder>" } ])
+    );
+}
+
+#[test]
+fn restructure_local_command_text_is_not_core_context() {
+    // isCoreContext returns FALSE when the block contains <local-command-stdout>
+    // or <local-command-caveat>, even if it also contains a core marker.
+    let t = PinoTransform {
+        settings: restructure_settings(),
+    };
+    let mut body = json!({
+        "messages": [
+            { "role": "user", "content": [ { "type": "text", "text": "msg0" } ] },
+            { "role": "user", "content": [
+                { "type": "text", "text": "<local-command-stdout>ToolSearch mentioned</local-command-stdout>" },
+                { "type": "text", "text": "tail" }
+            ] }
+        ]
+    });
+    t.transform(&mut body).unwrap();
+    // The local-command block is NOT core (so not extracted to msg0), and since it
+    // is the TAIL it is also NOT stale-removed: it stays in the tail message.
+    assert_eq!(
+        body["messages"][0]["content"],
+        json!([ { "type": "text", "text": "msg0" } ])
+    );
+    assert_eq!(
+        body["messages"][1]["content"],
+        json!([
+            { "type": "text", "text": "<local-command-stdout>ToolSearch mentioned</local-command-stdout>" },
+            { "type": "text", "text": "tail" }
+        ])
+    );
+}
+
+#[test]
+fn restructure_prunes_emptied_messages() {
+    let t = PinoTransform {
+        settings: restructure_settings(),
+    };
+    let mut body = json!({
+        "messages": [
+            { "role": "user", "content": [ { "type": "text", "text": "msg0" } ] },
+            // This entire message is stale scaffolding -> emptied -> pruned.
+            { "role": "user", "content": [
+                { "type": "text", "text": "<command-name>foo</command-name>" }
+            ] },
+            { "role": "user", "content": [ { "type": "text", "text": "tail" } ] }
+        ]
+    });
+    t.transform(&mut body).unwrap();
+    let texts: Vec<&str> = body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["content"][0]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(texts, vec!["msg0", "tail"], "emptied middle message pruned");
+}
+
+#[test]
+fn restructure_preserves_non_text_blocks() {
+    // tool_use / tool_result / image blocks (no string `text`) are always kept.
+    let t = PinoTransform {
+        settings: restructure_settings(),
+    };
+    let mut body = json!({
+        "messages": [
+            { "role": "user", "content": [ { "type": "text", "text": "msg0" } ] },
+            { "role": "assistant", "content": [
+                { "type": "tool_use", "id": "tu1", "name": "Bash", "input": {} }
+            ] },
+            { "role": "user", "content": [
+                { "type": "tool_result", "tool_use_id": "tu1", "content": "out" }
+            ] }
+        ]
+    });
+    let original = body.clone();
+    t.transform(&mut body).unwrap();
+    // No core blocks, no stale-removable text blocks => only string->array no-op
+    // (already arrays) and no pruning. Body is unchanged.
+    assert_eq!(body, original);
+}
+
+#[test]
+fn restructure_no_core_blocks_does_not_force_msg0_role() {
+    // When coreBlocks is empty, Node does NOT reassemble msg0 or set role=user.
+    let t = PinoTransform {
+        settings: restructure_settings(),
+    };
+    let mut body = json!({
+        "messages": [
+            { "role": "assistant", "content": [ { "type": "text", "text": "no core here" } ] },
+            { "role": "user", "content": [ { "type": "text", "text": "tail" } ] }
+        ]
+    });
+    t.transform(&mut body).unwrap();
+    // Role left as the original "assistant" because no core blocks were collected.
+    assert_eq!(body["messages"][0]["role"], json!("assistant"));
+    assert_eq!(
+        body["messages"][0]["content"],
+        json!([ { "type": "text", "text": "no core here" } ])
+    );
+}

@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use anyhow::Result;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::proxy::BodyTransform;
 
@@ -336,13 +336,127 @@ fn scrub_reminders_from_messages(body: &mut Value, drop: &[String]) {
     }
 }
 
+// --- restructureV123 (default.js lines 126-208) -----
+
+// Ported verbatim from reference/pino/src/transforms/default.js restructureV123
+// (lines 126-208). Normalizes string content to arrays, extracts core-context
+// blocks (ToolSearch / claudeMd / .claude paths) into messages[0], removes stale
+// scaffolding from non-tail history, dedupes core blocks, sets msg0.role=user, and
+// prunes emptied messages. R19: full parity, runs before cache injection. The Node
+// source wraps the body in try/catch (logs and swallows); this port is panic-free
+// by construction (pure serde_json::Value manipulation), so no catch is needed —
+// the only cosmetic divergence is the absence of console logging.
+
+fn is_core_context(t: &str) -> bool {
+    if t.contains("<local-command-stdout>") || t.contains("<local-command-caveat>") {
+        return false;
+    }
+    t.contains("ToolSearch")
+        || t.contains("claudeMd")
+        || t.contains(".claude/projects")
+        || t.contains(".claude/plans")
+}
+
+fn is_stale_removable(t: &str) -> bool {
+    t.starts_with("<system-reminder>")
+        || t.starts_with("<local-command-stdout>")
+        || t.starts_with("<local-command-caveat>")
+        || t.starts_with("<command-name>")
+}
+
+fn restructure_v123(body: &mut Value) {
+    let messages = match body.get_mut("messages").and_then(|m| m.as_array_mut()) {
+        Some(m) => m,
+        None => return,
+    };
+    // Node: if (!Array.isArray(body.messages) || body.messages.length < 2) return;
+    if messages.len() < 2 {
+        return;
+    }
+
+    // 1. Normalize all message contents to arrays.
+    for msg in messages.iter_mut() {
+        if let Some(content) = msg.get_mut("content") {
+            if let Value::String(s) = content {
+                let text = std::mem::take(s);
+                *content = json!([ { "type": "text", "text": text } ]);
+            }
+        }
+    }
+
+    let last_index = messages.len() - 1;
+    let mut core_blocks: Vec<Value> = Vec::new();
+
+    // 2. Process ALL messages: extract core context, drop stale scaffolding from history.
+    for (i, msg) in messages.iter_mut().enumerate() {
+        let content = match msg.get_mut("content").and_then(|c| c.as_array_mut()) {
+            Some(c) => c,
+            None => continue, // Node: if (!Array.isArray(msg.content)) continue;
+        };
+        let is_tail = i == last_index;
+        let old = std::mem::take(content);
+        let mut new_content: Vec<Value> = Vec::new();
+        for block in old.into_iter() {
+            if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                if is_core_context(text) {
+                    core_blocks.push(block);
+                    continue;
+                }
+                if !is_tail && is_stale_removable(text) {
+                    continue;
+                }
+            }
+            // Preserve everything else: tool_results, normal text, tool_use, tail reminders.
+            new_content.push(block);
+        }
+        *content = new_content;
+    }
+
+    // 3. Assemble msg0 with deduped core blocks (first occurrence wins, order preserved).
+    if !core_blocks.is_empty() {
+        let mut unique_core: Vec<Value> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for b in core_blocks.into_iter() {
+            let key = b
+                .get("text")
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .to_string();
+            if seen.insert(key) {
+                unique_core.push(b);
+            }
+        }
+        if let Some(msg0) = messages.get_mut(0) {
+            if let Some(obj) = msg0.as_object_mut() {
+                let existing = obj
+                    .get_mut("content")
+                    .and_then(|c| c.as_array_mut())
+                    .map(std::mem::take)
+                    .unwrap_or_default();
+                let mut combined = unique_core;
+                combined.extend(existing);
+                obj.insert("content".to_string(), Value::Array(combined));
+                obj.insert("role".to_string(), Value::String("user".to_string()));
+            }
+        }
+    }
+
+    // 4. Remove completely empty messages (Node: m.content && m.content.length > 0).
+    messages.retain(|m| {
+        m.get("content")
+            .and_then(|c| c.as_array())
+            .map(|a| !a.is_empty())
+            .unwrap_or(false)
+    });
+}
+
 fn apply_default_transform(body: &mut Value, settings: &PinoSettings) {
     // Node transforms/default.js transform() order verbatim:
     //   trimTools -> trimReminders -> trimSystem(inert) -> restructureV123 -> stripAnsiFromMessages.
     drop_tools_from_tools(body, &settings.drop_tools);
     scrub_reminders_from_messages(body, &settings.drop_tools);
     // trimSystem is an inert commented-out example in the Node source — not ported.
-    // restructureV123 is wired here in M4.5b (between reminder scrub and strip_ansi).
+    restructure_v123(body);
     if settings.strip_ansi {
         strip_ansi_from_messages(body);
     }
