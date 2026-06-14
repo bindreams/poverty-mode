@@ -14,6 +14,7 @@ pub mod logging;
 pub mod orchestrator;
 pub mod paths;
 pub mod proxy;
+pub mod tui;
 
 #[cfg(test)]
 #[path = "test_support.rs"]
