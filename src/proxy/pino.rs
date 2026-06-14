@@ -7,10 +7,11 @@ use crate::proxy::BodyTransform;
 
 /// Rolling-tail cache TTL. Serializes to the short forms `"5m"` / `"1h"`.
 ///
-/// Deserialization is **lenient** (R22/R23k — Node `parseTailTtl` parity):
-/// `"5m"` → `FiveMin`, `"1h"` → `OneHour`, and ANY other string falls back to
-/// `FiveMin` with a logged `warn!` rather than erroring. M2's config tests
-/// assert the fallback; M4 relies on it.
+/// Deserialization is **lenient** (R22/R23k — Node `parseTailTtl` parity,
+/// `reference/pino/src/config.js` lines 36-44): the raw value is trimmed and
+/// lowercased, then `"5m"` → `FiveMin`, `"1h"` → `OneHour`, and ANY other
+/// string falls back to `FiveMin` with a logged `warn!` rather than erroring.
+/// M2's config tests assert the fallback; M4 relies on it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum TailTtl {
     #[serde(rename = "5m")]
@@ -25,9 +26,11 @@ impl<'de> Deserialize<'de> for TailTtl {
         D: serde::Deserializer<'de>,
     {
         let raw = String::deserialize(deserializer)?;
-        match raw.as_str() {
-            "5m" => Ok(TailTtl::FiveMin),
+        // Node parseTailTtl: String(raw).trim().toLowerCase() before matching.
+        match raw.trim().to_ascii_lowercase().as_str() {
             "1h" => Ok(TailTtl::OneHour),
+            // "5m" and every unrecognized value degrade to 5m (Node behavior).
+            "5m" => Ok(TailTtl::FiveMin),
             other => {
                 tracing::warn!(
                     value = other,
@@ -35,6 +38,16 @@ impl<'de> Deserialize<'de> for TailTtl {
                 );
                 Ok(TailTtl::FiveMin)
             }
+        }
+    }
+}
+
+impl TailTtl {
+    /// Wire value written into `cache_control.ttl`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TailTtl::FiveMin => "5m",
+            TailTtl::OneHour => "1h",
         }
     }
 }
