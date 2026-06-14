@@ -4,7 +4,7 @@
 //! `src/tui.rs` is a thin render/event shell that translates key events into
 //! [`TuiAction`]s and feeds them to [`TuiState::apply`].
 
-use crate::config::{ProxySettings, ResolvedProxy};
+use crate::config::{Config, ProxySettings, ResolvedProxy};
 use crate::proxy::ProxyName;
 
 #[cfg(test)]
@@ -85,6 +85,27 @@ impl TuiState {
         };
         st.enforce_central_last();
         st
+    }
+
+    /// Seed the reducer from a loaded [`Config`], preserving file order and each
+    /// entry's `enabled` flag and settings. The central-last invariant is
+    /// re-asserted by `new` (config load already enforces it, but seeding is
+    /// defensive).
+    pub fn from_config(config: &Config) -> Self {
+        let seed = config
+            .proxies
+            .iter()
+            .map(|entry| {
+                (
+                    TuiItem {
+                        name: entry.name,
+                        enabled: entry.enabled,
+                    },
+                    entry.settings.clone(),
+                )
+            })
+            .collect();
+        TuiState::new(seed)
     }
 
     /// The transient UX hint from the last action, if any. Read by the render
