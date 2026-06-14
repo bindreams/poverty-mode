@@ -52,7 +52,7 @@ pub struct TailInputs {
 /// 3. else `https://api.anthropic.com`.
 pub fn resolve_tail_upstream(inputs: &TailInputs) -> anyhow::Result<Upstream> {
     if let Some(info) = inputs.central.as_ref() {
-        return Ok(central::central_wire_upstream(info));
+        return central::central_wire_upstream(info);
     }
 
     let preexisting = inputs

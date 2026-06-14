@@ -64,18 +64,28 @@ pub struct CentralInfo {
     pub secret: String,
 }
 
-/// The wire upstream the chain forwards to when central is the tail:
-/// `http://127.0.0.1:<port>/wire/<secret>/claude-code/anthropic` (design §6).
-/// The pre-central hop carries this as its `--upstream`; in a central-only chain
-/// the agent's `ANTHROPIC_BASE_URL` points here directly.
-pub fn central_wire_upstream(info: &CentralInfo) -> Upstream {
+/// The wire URL string that fronts JB Central:
+/// `http://127.0.0.1:<port>/wire/<percent-encoded-secret>/claude-code/anthropic` (design §6).
+/// This is the upstream the hop before central uses (or the agent base for a central-only chain).
+/// The externally-sourced secret is percent-encoded as one path segment so URL-significant
+/// characters cannot escape the path into a query, fragment, or extra segment. Never logged.
+pub fn central_wire_url(info: &CentralInfo) -> String {
     let secret = utf8_percent_encode(&info.secret, WIRE_SECRET_SET);
-    let url = url::Url::parse(&format!(
+    format!(
         "http://127.0.0.1:{}/wire/{secret}/claude-code/anthropic",
         info.port
-    ))
-    .expect("central wire URL is well-formed");
-    Upstream { url }
+    )
+}
+
+/// The wire upstream the chain forwards to when central is the tail, as a parsed [`Upstream`]
+/// for direct use as a proxy upstream. The pre-central hop carries this as its `--upstream`; in a
+/// central-only chain the agent's `ANTHROPIC_BASE_URL` points here directly. Returns an error
+/// (never panics) if, against expectation, the encoded URL fails to parse.
+pub fn central_wire_upstream(info: &CentralInfo) -> anyhow::Result<Upstream> {
+    let s = central_wire_url(info);
+    let url =
+        url::Url::parse(&s).with_context(|| "constructing the JB Central wire upstream URL")?;
+    Ok(Upstream { url })
 }
 
 /// Parse the contents of `~/.wire/config.json` into a [`CentralInfo`].

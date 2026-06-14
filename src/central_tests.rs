@@ -9,7 +9,7 @@ fn central_wire_upstream_renders_jetbrains_wire_url() {
         port: 19516,
         secret: "abc123".to_string(),
     };
-    let up = central_wire_upstream(&info);
+    let up = central_wire_upstream(&info).unwrap();
     assert_eq!(
         up.url.as_str(),
         "http://127.0.0.1:19516/wire/abc123/claude-code/anthropic"
@@ -30,7 +30,7 @@ fn central_wire_upstream_percent_encodes_special_secret() {
         port: 19516,
         secret: "a#b?c/d e&f%g".to_string(),
     };
-    let up = central_wire_upstream(&info);
+    let up = central_wire_upstream(&info).unwrap();
     assert_eq!(
         up.url.as_str(),
         "http://127.0.0.1:19516/wire/a%23b%3Fc%2Fd%20e%26f%25g/claude-code/anthropic"
@@ -100,4 +100,84 @@ fn accepts_string_port_coerced_to_u16() {
     let json = r#"{ "proxy_port": "8123", "proxy_secret": "s" }"#;
     let info = parse_wire_config(json).unwrap();
     assert_eq!(info.port, 8123);
+}
+
+// wire URL =====
+
+use crate::proxy::Upstream;
+
+#[test]
+fn builds_wire_upstream_url() {
+    let info = CentralInfo {
+        port: 19516,
+        secret: "abc123".to_string(),
+    };
+    let up: Upstream = central_wire_upstream(&info).unwrap();
+    assert_eq!(
+        up.url.as_str(),
+        "http://127.0.0.1:19516/wire/abc123/claude-code/anthropic"
+    );
+}
+
+#[test]
+fn wire_upstream_path_prefix_excludes_v1_messages() {
+    // path_prefix() must be the wire path (no trailing slash); the engine appends /v1/messages.
+    let info = CentralInfo {
+        port: 7000,
+        secret: "S".to_string(),
+    };
+    let up = central_wire_upstream(&info).unwrap();
+    assert_eq!(up.path_prefix(), "/wire/S/claude-code/anthropic");
+    assert_eq!(up.host_header(), "127.0.0.1:7000");
+}
+
+#[test]
+fn wire_url_string_helper_matches_upstream() {
+    let info = CentralInfo {
+        port: 8080,
+        secret: "xyz".to_string(),
+    };
+    assert_eq!(
+        central_wire_url(&info),
+        "http://127.0.0.1:8080/wire/xyz/claude-code/anthropic"
+    );
+}
+
+#[test]
+fn wire_secret_with_url_significant_chars_is_percent_encoded() {
+    // A secret containing '?', '#', space, '/', and a non-ASCII char must NOT bleed into the query,
+    // fragment, or split the path. It is percent-encoded as a single path segment.
+    let info = CentralInfo {
+        port: 9000,
+        secret: "a b/c?d#e\u{00e9}".to_string(),
+    };
+    let url = central_wire_url(&info);
+    assert_eq!(
+        url,
+        "http://127.0.0.1:9000/wire/a%20b%2Fc%3Fd%23e%C3%A9/claude-code/anthropic"
+    );
+    // It parses without panicking and the secret stays inside the path (no query/fragment leaked).
+    let up = central_wire_upstream(&info).unwrap();
+    assert!(
+        up.url.query().is_none(),
+        "secret must not leak into the query"
+    );
+    assert!(
+        up.url.fragment().is_none(),
+        "secret must not leak into the fragment"
+    );
+    assert_eq!(
+        up.url.path(),
+        "/wire/a%20b%2Fc%3Fd%23e%C3%A9/claude-code/anthropic"
+    );
+}
+
+#[test]
+fn wire_url_helper_and_upstream_agree_on_encoded_secret() {
+    let info = CentralInfo {
+        port: 1234,
+        secret: "x y".to_string(),
+    };
+    let up = central_wire_upstream(&info).unwrap();
+    assert_eq!(up.url.as_str(), central_wire_url(&info));
 }
