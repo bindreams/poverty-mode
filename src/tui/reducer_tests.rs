@@ -127,3 +127,105 @@ fn toggle_central_in_place_when_already_last() {
     assert_eq!(st.items[2].name, ProxyName::Central);
     assert_eq!(st.cursor, 2);
 }
+
+#[test]
+fn move_down_swaps_with_next_and_follows_cursor() {
+    let mut st = seed_all_disabled(); // [pino, headroom, central], cursor 0
+    assert_eq!(st.apply(TuiAction::MoveDown), TuiOutcome::Continue);
+    assert_eq!(st.items[0].name, ProxyName::Headroom);
+    assert_eq!(st.items[1].name, ProxyName::Pino);
+    assert_eq!(st.items[2].name, ProxyName::Central);
+    // Cursor follows the moved (pino) row to index 1.
+    assert_eq!(st.cursor, 1);
+}
+
+#[test]
+fn move_up_swaps_with_prev_and_follows_cursor() {
+    let mut st = seed_all_disabled();
+    st.cursor = 1; // headroom
+    assert_eq!(st.apply(TuiAction::MoveUp), TuiOutcome::Continue);
+    assert_eq!(st.items[0].name, ProxyName::Headroom);
+    assert_eq!(st.items[1].name, ProxyName::Pino);
+    assert_eq!(st.cursor, 0);
+}
+
+#[test]
+fn move_up_at_top_is_noop() {
+    let mut st = seed_all_disabled();
+    let before: Vec<_> = st.items.clone();
+    st.cursor = 0;
+    assert_eq!(st.apply(TuiAction::MoveUp), TuiOutcome::Continue);
+    assert_eq!(st.items, before);
+    assert_eq!(st.cursor, 0);
+}
+
+#[test]
+fn move_down_at_bottom_is_noop() {
+    // Seed without central so the bottom row is freely "moveable" yet clamps.
+    let mut st = TuiState::new(vec![
+        (
+            TuiItem {
+                name: ProxyName::Pino,
+                enabled: false,
+            },
+            ProxySettings::Pino(PinoSettings {
+                auto_cache: true,
+                tail_ttl: crate::proxy::pino::TailTtl::FiveMin,
+                drop_tools: vec![],
+                strip_ansi: true,
+                model_override: None,
+            }),
+        ),
+        (
+            TuiItem {
+                name: ProxyName::Headroom,
+                enabled: false,
+            },
+            ProxySettings::Headroom(HeadroomSettings { compression: false }),
+        ),
+    ]);
+    let before: Vec<_> = st.items.clone();
+    st.cursor = 1; // last row
+    assert_eq!(st.apply(TuiAction::MoveDown), TuiOutcome::Continue);
+    assert_eq!(st.items, before);
+    assert_eq!(st.cursor, 1);
+}
+
+#[test]
+fn reorder_carries_settings_with_the_row() {
+    // pino has a distinctive setting (model_override) we can recognize after a move.
+    let mut st = TuiState::new(vec![
+        (
+            TuiItem {
+                name: ProxyName::Pino,
+                enabled: true,
+            },
+            ProxySettings::Pino(PinoSettings {
+                auto_cache: true,
+                tail_ttl: crate::proxy::pino::TailTtl::FiveMin,
+                drop_tools: vec![],
+                strip_ansi: true,
+                model_override: Some("sonnet-test".to_string()),
+            }),
+        ),
+        (
+            TuiItem {
+                name: ProxyName::Headroom,
+                enabled: false,
+            },
+            ProxySettings::Headroom(HeadroomSettings { compression: false }),
+        ),
+    ]);
+    st.cursor = 0;
+    st.apply(TuiAction::MoveDown); // pino -> index 1
+    assert_eq!(st.items[1].name, ProxyName::Pino);
+    // Its settings moved with it: settings_at(1) is pino's distinctive override.
+    match st.settings_at(1) {
+        ProxySettings::Pino(p) => {
+            assert_eq!(p.model_override.as_deref(), Some("sonnet-test"));
+        }
+        other => panic!("expected pino settings at index 1, got {other:?}"),
+    }
+    // And index 0 now holds headroom's settings.
+    assert!(matches!(st.settings_at(0), ProxySettings::Headroom(_)));
+}

@@ -114,10 +114,36 @@ impl TuiState {
                 }
                 TuiOutcome::Continue
             }
-            TuiAction::MoveUp | TuiAction::MoveDown | TuiAction::Confirm | TuiAction::Cancel => {
+            TuiAction::MoveUp => {
+                if self.cursor > 0 {
+                    self.swap_rows(self.cursor, self.cursor - 1);
+                    self.cursor -= 1;
+                }
                 TuiOutcome::Continue
             }
+            TuiAction::MoveDown => {
+                if self.cursor + 1 < self.items.len() {
+                    self.swap_rows(self.cursor, self.cursor + 1);
+                    self.cursor += 1;
+                }
+                TuiOutcome::Continue
+            }
+            TuiAction::Confirm | TuiAction::Cancel => TuiOutcome::Continue,
         }
+    }
+
+    /// Swap two rows, keeping `items` and `settings` aligned so per-row
+    /// settings travel with their row.
+    fn swap_rows(&mut self, i: usize, j: usize) {
+        self.items.swap(i, j);
+        self.settings.swap(i, j);
+    }
+
+    /// Test-only view of the settings parallel to `items[i]`. Lets reorder tests
+    /// confirm settings travel with their row before `Confirm` exists (M9.7).
+    #[cfg(test)]
+    pub(crate) fn settings_at(&self, i: usize) -> &ProxySettings {
+        &self.settings[i]
     }
 
     /// Move `central` (if present) to the end of `items`/`settings`, preserving
