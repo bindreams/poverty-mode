@@ -2,6 +2,8 @@
 //! with a race-free READY handshake, wire + signal-forward the agent, run it, and
 //! tear the chain down (children survive parent death — see `teardown`).
 
+pub mod teardown;
+
 use crate::config::ResolvedProxy;
 
 /// Render a resolved chain as the `POVERTY_PROXY_CHAIN` value: lowercase proxy

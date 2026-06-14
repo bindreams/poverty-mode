@@ -84,6 +84,15 @@ pub enum Command {
 
     /// Stop singletons and prune run dirs and caches.
     Clean,
+
+    /// Hidden: spawn one grouped sleeper, print its pid + READY, then park. Used
+    /// by teardown tests to prove the OS reaps the child when the holder dies.
+    #[command(name = "__spawn-holder", hide = true)]
+    SpawnHolder,
+
+    /// Hidden: a long sleeper used as the grouped child in teardown tests.
+    #[command(name = "__sleep", hide = true)]
+    Sleep,
 }
 
 /// Arguments for the `proxy` subcommand (R23b). The positional `which` selects
@@ -319,6 +328,28 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
         Command::Status => Err(Error::NotImplemented("status").into()),
         Command::Doctor => Err(Error::NotImplemented("doctor").into()),
         Command::Clean => Err(Error::NotImplemented("clean").into()),
+        Command::SpawnHolder => {
+            use crate::orchestrator::teardown::ProxyGroup;
+            let exe = std::env::current_exe()?;
+            let mut group = ProxyGroup::new()?;
+            let spawned = group.spawn(&exe, &["__sleep".to_string()])?;
+            println!("{}", spawned.pid);
+            println!("HOLDER_READY");
+            use std::io::Write as _;
+            std::io::stdout().flush().ok();
+            // Leak the group so neither Drop nor kill_all runs: we want the OS to
+            // reap the child purely because THIS holder dies. (Unix: closing the
+            // death-pipe write end + PR_SET_PDEATHSIG; Windows: job handle close.)
+            std::mem::forget(group);
+            loop {
+                std::thread::park();
+            }
+        }
+        Command::Sleep => {
+            crate::orchestrator::teardown::spawn_death_watcher_from_env();
+            std::thread::sleep(std::time::Duration::from_secs(3600));
+            Ok(())
+        }
     }
 }
 
