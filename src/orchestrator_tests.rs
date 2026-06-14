@@ -74,3 +74,79 @@ fn serialize_then_parse_round_trips() {
     let names = parse_chain(&s);
     assert_eq!(names, vec!["pino", "headroom", "central"]);
 }
+
+use crate::central::CentralInfo;
+
+#[test]
+fn tail_is_central_wire_url_when_central_is_tail() {
+    let inputs = TailInputs {
+        central: Some(CentralInfo {
+            port: 19516,
+            secret: "abc123".to_string(),
+        }),
+        preexisting_base_url: Some("https://user-gateway.example.com".to_string()),
+    };
+    let up = resolve_tail_upstream(&inputs).unwrap();
+    // central wins over a pre-existing base url.
+    assert_eq!(
+        up.url.as_str(),
+        "http://127.0.0.1:19516/wire/abc123/claude-code/anthropic"
+    );
+}
+
+#[test]
+fn tail_is_preexisting_base_url_when_no_central() {
+    let inputs = TailInputs {
+        central: None,
+        preexisting_base_url: Some("https://user-gateway.example.com/".to_string()),
+    };
+    let up = resolve_tail_upstream(&inputs).unwrap();
+    assert_eq!(up.url.as_str(), "https://user-gateway.example.com/");
+}
+
+#[test]
+fn tail_is_preexisting_base_url_with_path_prefix_preserved() {
+    let inputs = TailInputs {
+        central: None,
+        preexisting_base_url: Some("https://gw.example.com/proxy".to_string()),
+    };
+    let up = resolve_tail_upstream(&inputs).unwrap();
+    assert_eq!(up.url.as_str(), "https://gw.example.com/proxy");
+    assert_eq!(up.path_prefix(), "/proxy");
+}
+
+#[test]
+fn tail_defaults_to_anthropic_when_no_central_and_no_preexisting() {
+    let inputs = TailInputs {
+        central: None,
+        preexisting_base_url: None,
+    };
+    let up = resolve_tail_upstream(&inputs).unwrap();
+    assert_eq!(up.url.as_str(), "https://api.anthropic.com/");
+}
+
+#[test]
+fn tail_treats_empty_preexisting_as_unset() {
+    // An empty/whitespace ANTHROPIC_BASE_URL is the same as not set -> default.
+    let inputs = TailInputs {
+        central: None,
+        preexisting_base_url: Some("   ".to_string()),
+    };
+    let up = resolve_tail_upstream(&inputs).unwrap();
+    assert_eq!(up.url.as_str(), "https://api.anthropic.com/");
+}
+
+#[test]
+fn tail_errors_on_unparseable_preexisting_base_url() {
+    let inputs = TailInputs {
+        central: None,
+        preexisting_base_url: Some("not a url".to_string()),
+    };
+    let err = resolve_tail_upstream(&inputs).unwrap_err();
+    assert!(
+        err.to_string()
+            .to_lowercase()
+            .contains("anthropic_base_url"),
+        "error should name the offending env var: {err}"
+    );
+}
