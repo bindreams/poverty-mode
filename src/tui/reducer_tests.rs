@@ -329,3 +329,96 @@ fn no_central_present_reorder_is_unconstrained() {
     assert_eq!(st.cursor, 1);
     assert_eq!(st.hint(), None);
 }
+
+#[test]
+fn confirm_resolves_enabled_rows_in_order() {
+    let mut st = seed_all_disabled();
+    // Enable pino (0) and central (2); leave headroom (1) disabled.
+    st.cursor = 0;
+    st.apply(TuiAction::Toggle);
+    st.cursor = 2;
+    st.apply(TuiAction::Toggle);
+    let outcome = st.apply(TuiAction::Confirm);
+    match outcome {
+        TuiOutcome::Run(resolved) => {
+            assert_eq!(resolved.len(), 2);
+            assert_eq!(resolved[0].name, ProxyName::Pino);
+            assert_eq!(resolved[1].name, ProxyName::Central);
+            assert!(matches!(resolved[0].settings, ProxySettings::Pino(_)));
+            assert!(matches!(resolved[1].settings, ProxySettings::Central(_)));
+        }
+        other => panic!("expected Run, got {other:?}"),
+    }
+}
+
+#[test]
+fn confirm_with_nothing_enabled_runs_empty_chain() {
+    let mut st = seed_all_disabled();
+    match st.apply(TuiAction::Confirm) {
+        TuiOutcome::Run(resolved) => assert!(resolved.is_empty()),
+        other => panic!("expected Run(empty), got {other:?}"),
+    }
+}
+
+#[test]
+fn confirm_respects_reordered_enabled_rows() {
+    let mut st = seed_all_disabled();
+    // Enable pino and headroom, then move headroom above pino.
+    st.cursor = 0;
+    st.apply(TuiAction::Toggle); // pino on
+    st.cursor = 1;
+    st.apply(TuiAction::Toggle); // headroom on
+    st.apply(TuiAction::MoveUp); // headroom -> index 0, pino -> index 1
+    match st.apply(TuiAction::Confirm) {
+        TuiOutcome::Run(resolved) => {
+            assert_eq!(resolved.len(), 2);
+            assert_eq!(resolved[0].name, ProxyName::Headroom);
+            assert_eq!(resolved[1].name, ProxyName::Pino);
+        }
+        other => panic!("expected Run, got {other:?}"),
+    }
+}
+
+#[test]
+fn confirm_carries_settings_into_resolved_chain() {
+    // End-to-end settings-carry across a reorder, now that Confirm exists.
+    let mut st = seed_all_disabled();
+    st.cursor = 0;
+    st.apply(TuiAction::Toggle); // pino enabled at index 0
+    st.apply(TuiAction::MoveDown); // pino -> index 1 (headroom -> 0)
+    match st.apply(TuiAction::Confirm) {
+        TuiOutcome::Run(resolved) => {
+            assert_eq!(resolved.len(), 1); // only pino enabled
+            assert_eq!(resolved[0].name, ProxyName::Pino);
+            match &resolved[0].settings {
+                ProxySettings::Pino(p) => assert!(p.auto_cache),
+                other => panic!("expected pino settings, got {other:?}"),
+            }
+        }
+        other => panic!("expected Run, got {other:?}"),
+    }
+}
+
+#[test]
+fn cancel_returns_cancel_outcome() {
+    let mut st = seed_all_disabled();
+    assert_eq!(st.apply(TuiAction::Cancel), TuiOutcome::Cancel);
+}
+
+#[test]
+fn confirm_and_cancel_do_not_mutate_state() {
+    let mut st = seed_all_disabled();
+    st.cursor = 1;
+    st.apply(TuiAction::Toggle); // headroom on
+    let items_before = st.items.clone();
+    let cursor_before = st.cursor;
+    let hint_before = st.hint();
+    let _ = st.apply(TuiAction::Confirm);
+    assert_eq!(st.items, items_before);
+    assert_eq!(st.cursor, cursor_before);
+    assert_eq!(st.hint(), hint_before);
+    let _ = st.apply(TuiAction::Cancel);
+    assert_eq!(st.items, items_before);
+    assert_eq!(st.cursor, cursor_before);
+    assert_eq!(st.hint(), hint_before);
+}

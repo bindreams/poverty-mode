@@ -126,8 +126,23 @@ impl TuiState {
                 self.reorder(Some(self.cursor + 1));
                 TuiOutcome::Continue
             }
-            TuiAction::Confirm | TuiAction::Cancel => TuiOutcome::Continue,
+            TuiAction::Confirm => TuiOutcome::Run(self.resolved_enabled()),
+            TuiAction::Cancel => TuiOutcome::Cancel,
         }
+    }
+
+    /// Collect enabled rows, in display order, as resolved proxies pairing each
+    /// name with its carried settings.
+    fn resolved_enabled(&self) -> Vec<ResolvedProxy> {
+        self.items
+            .iter()
+            .zip(self.settings.iter())
+            .filter(|(item, _)| item.enabled)
+            .map(|(item, settings)| ResolvedProxy {
+                name: item.name,
+                settings: settings.clone(),
+            })
+            .collect()
     }
 
     /// Attempt to swap the cursor row with the row at `target` (if any/in range),
