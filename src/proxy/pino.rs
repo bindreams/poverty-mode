@@ -462,6 +462,122 @@ fn apply_default_transform(body: &mut Value, settings: &PinoSettings) {
     }
 }
 
+// --- cache helpers (cache.js lines 28-96) -----
+
+/// Counts every `cache_control.type == "ephemeral"` breakpoint anywhere in the
+/// body. Mirrors countCacheBreakpoints in reference/pino/src/cache.js (lines 28-38).
+pub fn count_cache_breakpoints(body: &Value) -> usize {
+    fn walk(x: &Value, n: &mut usize) {
+        match x {
+            Value::Array(items) => {
+                for it in items {
+                    walk(it, n);
+                }
+            }
+            Value::Object(map) => {
+                if let Some(cc) = map.get("cache_control") {
+                    if cc.get("type").and_then(|t| t.as_str()) == Some("ephemeral") {
+                        *n += 1;
+                    }
+                }
+                for (_k, v) in map.iter() {
+                    walk(v, n);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut n = 0;
+    walk(body, &mut n);
+    n
+}
+
+fn block_has_ephemeral(block: &Value) -> bool {
+    block
+        .get("cache_control")
+        .and_then(|cc| cc.get("type"))
+        .and_then(|t| t.as_str())
+        == Some("ephemeral")
+}
+
+/// True if any element of `arr` carries an ephemeral breakpoint.
+/// Mirrors hasBreakpoint in reference/pino/src/cache.js (lines 77-81).
+#[allow(dead_code)] // exercised via the injector in M4.7.
+fn has_breakpoint(arr: &Value) -> bool {
+    match arr.as_array() {
+        Some(items) => items.iter().any(block_has_ephemeral),
+        None => false,
+    }
+}
+
+/// Removes client-sent ephemeral cache_control from system blocks shorter than
+/// MIN_SYSTEM_CACHE_CHARS. Returns the count stripped.
+/// Mirrors stripSmallSystemBreakpoints in reference/pino/src/cache.js (lines 83-96).
+///
+/// R18 / Finding 5: length is UTF-16 code units (Node String.length) so the
+/// boundary decision matches Node exactly even for astral-plane characters.
+pub fn strip_small_system_breakpoints(body: &mut Value) -> usize {
+    let blocks = match body.get_mut("system").and_then(|s| s.as_array_mut()) {
+        Some(b) => b,
+        None => return 0,
+    };
+    let mut stripped = 0;
+    for block in blocks.iter_mut() {
+        let obj = match block.as_object_mut() {
+            Some(o) => o,
+            None => continue,
+        };
+        let is_ephemeral = obj
+            .get("cache_control")
+            .and_then(|cc| cc.get("type"))
+            .and_then(|t| t.as_str())
+            == Some("ephemeral");
+        if !is_ephemeral {
+            continue;
+        }
+        let len = obj
+            .get("text")
+            .and_then(|t| t.as_str())
+            .map(|s| s.encode_utf16().count()) // Node String.length == UTF-16 code units.
+            .unwrap_or(0);
+        if len < MIN_SYSTEM_CACHE_CHARS {
+            obj.remove("cache_control");
+            stripped += 1;
+        }
+    }
+    stripped
+}
+
+/// Deletes cache_control from blocks in every message EXCEPT the first and last.
+/// Returns the count stripped. Mirrors stripIntermediateMessageBreakpoints
+/// (reference/pino/src/cache.js lines 61-75).
+pub fn strip_intermediate_message_breakpoints(body: &mut Value) -> usize {
+    let messages = match body.get_mut("messages").and_then(|m| m.as_array_mut()) {
+        Some(m) => m,
+        None => return 0,
+    };
+    if messages.len() <= 2 {
+        return 0;
+    }
+    let last = messages.len() - 1;
+    let mut stripped = 0;
+    // Node iterates i in 1..messages.length-1 (every message except the first and
+    // last); take(last).skip(1) yields exactly those indices.
+    for msg in messages.iter_mut().take(last).skip(1) {
+        if let Some(content) = msg.get_mut("content").and_then(|c| c.as_array_mut()) {
+            for block in content.iter_mut() {
+                if let Some(obj) = block.as_object_mut() {
+                    if obj.contains_key("cache_control") {
+                        obj.remove("cache_control");
+                        stripped += 1;
+                    }
+                }
+            }
+        }
+    }
+    stripped
+}
+
 fn apply_auto_cache(_body: &mut Value, _tail_ttl: TailTtl) {
     // Implemented in Tasks M4.6-M4.9.
 }

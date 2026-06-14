@@ -879,3 +879,130 @@ fn restructure_no_core_blocks_does_not_force_msg0_role() {
         json!([ { "type": "text", "text": "no core here" } ])
     );
 }
+
+// M4.6 ===== cache helpers: count_cache_breakpoints, strip_intermediate_message_
+// breakpoints (both pub), and strip_small_system_breakpoints (UTF-16 length).
+// Ported from reference/pino/src/cache.js lines 28-96.
+
+use super::{count_cache_breakpoints, strip_intermediate_message_breakpoints};
+
+#[test]
+fn count_cache_breakpoints_counts_every_ephemeral() {
+    let body = json!({
+        "tools": [ { "name": "a", "cache_control": { "type": "ephemeral", "ttl": "1h" } } ],
+        "system": [
+            { "type": "text", "text": "s", "cache_control": { "type": "ephemeral" } },
+            { "type": "text", "text": "no cc" }
+        ],
+        "messages": [
+            { "role": "user", "content": [
+                { "type": "text", "text": "m", "cache_control": { "type": "ephemeral", "ttl": "5m" } }
+            ] }
+        ]
+    });
+    assert_eq!(count_cache_breakpoints(&body), 3);
+}
+
+#[test]
+fn count_cache_breakpoints_ignores_non_ephemeral() {
+    let body = json!({ "x": { "cache_control": { "type": "persistent" } } });
+    assert_eq!(count_cache_breakpoints(&body), 0);
+}
+
+#[test]
+fn strip_intermediate_removes_cc_from_middle_messages_only() {
+    let mut body = json!({
+        "messages": [
+            { "role": "user",      "content": [ { "type": "text", "text": "first",  "cache_control": { "type": "ephemeral" } } ] },
+            { "role": "assistant", "content": [ { "type": "text", "text": "midA",   "cache_control": { "type": "ephemeral" } } ] },
+            { "role": "user",      "content": [ { "type": "text", "text": "midB",   "cache_control": { "type": "ephemeral" } } ] },
+            { "role": "assistant", "content": [ { "type": "text", "text": "last",   "cache_control": { "type": "ephemeral" } } ] }
+        ]
+    });
+    let stripped = strip_intermediate_message_breakpoints(&mut body);
+    assert_eq!(stripped, 2, "only the two middle messages are stripped");
+    assert!(body["messages"][0]["content"][0]
+        .get("cache_control")
+        .is_some());
+    assert!(body["messages"][3]["content"][0]
+        .get("cache_control")
+        .is_some());
+    assert!(body["messages"][1]["content"][0]
+        .get("cache_control")
+        .is_none());
+    assert!(body["messages"][2]["content"][0]
+        .get("cache_control")
+        .is_none());
+}
+
+#[test]
+fn strip_intermediate_noop_when_two_or_fewer_messages() {
+    let mut body = json!({
+        "messages": [
+            { "role": "user", "content": [ { "type": "text", "text": "a", "cache_control": { "type": "ephemeral" } } ] },
+            { "role": "user", "content": [ { "type": "text", "text": "b", "cache_control": { "type": "ephemeral" } } ] }
+        ]
+    });
+    let stripped = strip_intermediate_message_breakpoints(&mut body);
+    assert_eq!(stripped, 0);
+    assert!(body["messages"][0]["content"][0]
+        .get("cache_control")
+        .is_some());
+    assert!(body["messages"][1]["content"][0]
+        .get("cache_control")
+        .is_some());
+}
+
+// --- strip_small_system_breakpoints is private; exercise it through the public
+// --- injector (inject_breakpoint_if_absent lands in M4.7). For THIS task we test
+// --- it directly via a thin pub(crate) test shim is unnecessary; instead these two
+// --- tests assert the UTF-16 boundary behavior through count_cache_breakpoints
+// --- after calling the injector — BUT the injector does not exist yet. To keep
+// --- this task self-contained and the boundary locked NOW, expose the helper.
+
+use super::strip_small_system_breakpoints;
+
+#[test]
+fn strip_small_system_removes_breakpoint_below_500_and_keeps_at_or_above() {
+    let mut body = json!({
+        "system": [
+            { "type": "text", "text": "x".repeat(499), "cache_control": { "type": "ephemeral" } },
+            { "type": "text", "text": "y".repeat(500), "cache_control": { "type": "ephemeral" } }
+        ]
+    });
+    let stripped = strip_small_system_breakpoints(&mut body);
+    assert_eq!(stripped, 1, "only the <500 block is stripped");
+    assert!(
+        body["system"][0].get("cache_control").is_none(),
+        "499-char block stripped"
+    );
+    assert!(
+        body["system"][1].get("cache_control").is_some(),
+        "500-char block kept (len < 500 is false)"
+    );
+}
+
+// R18 / Finding 5: length is measured in UTF-16 code units (Node String.length),
+// NOT Unicode scalar values. An astral char ('\u{1F600}') is ONE scalar but TWO
+// UTF-16 units. A string of 499 such chars is 499 scalars but 998 UTF-16 units,
+// which is >= 500 => the breakpoint MUST be kept. Counting scalars would wrongly
+// strip it.
+#[test]
+fn strip_small_system_uses_utf16_length_at_boundary() {
+    let astral = "\u{1F600}"; // 1 scalar, 2 UTF-16 code units
+    let mut body = json!({
+        "system": [
+            // 250 astral chars = 250 scalars = 500 UTF-16 units => NOT < 500 => kept.
+            { "type": "text", "text": astral.repeat(250), "cache_control": { "type": "ephemeral" } },
+            // 249 astral chars = 498 UTF-16 units => < 500 => stripped.
+            { "type": "text", "text": astral.repeat(249), "cache_control": { "type": "ephemeral" } }
+        ]
+    });
+    let stripped = strip_small_system_breakpoints(&mut body);
+    assert_eq!(stripped, 1, "only the 498-UTF-16-unit block is stripped");
+    assert!(
+        body["system"][0].get("cache_control").is_some(),
+        "500-UTF-16-unit block kept; scalar-counting (250) would wrongly strip it"
+    );
+    assert!(body["system"][1].get("cache_control").is_none());
+}
