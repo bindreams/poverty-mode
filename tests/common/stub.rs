@@ -8,6 +8,7 @@ use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
+use tokio::sync::Notify as TokioNotify;
 
 /// What the stub upstream captured from a request it received (R3 shape plus the
 /// extra fields M3's content-length / host assertions need).
@@ -126,6 +127,66 @@ fn spawn_accept_loop(
             });
         }
     });
+}
+
+/// A stub upstream whose response is held until `release` is notified. `started`
+/// fires once the upstream has RECEIVED a request, so the test knows the request
+/// is genuinely in-flight before it signals shutdown.
+pub struct GatedStub {
+    pub port: u16,
+    pub started: Arc<TokioNotify>,
+    pub release: Arc<TokioNotify>,
+}
+
+pub async fn start_gated_stub(canned_json: &'static str) -> GatedStub {
+    let started = Arc::new(TokioNotify::new());
+    let release = Arc::new(TokioNotify::new());
+    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+        .await
+        .expect("gated stub binds");
+    let port = listener.local_addr().expect("addr").port();
+
+    let started_loop = started.clone();
+    let release_loop = release.clone();
+    tokio::spawn(async move {
+        loop {
+            let (stream, _) = match listener.accept().await {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let io = TokioIo::new(stream);
+            let started = started_loop.clone();
+            let release = release_loop.clone();
+            tokio::spawn(async move {
+                let svc = service_fn(move |_req: Request<Incoming>| {
+                    let started = started.clone();
+                    let release = release.clone();
+                    async move {
+                        // Signal that the request reached upstream, then block on
+                        // the caller-controlled release event.
+                        started.notify_waiters();
+                        release.notified().await;
+                        Ok::<_, Infallible>(
+                            Response::builder()
+                                .status(StatusCode::OK)
+                                .header("content-type", "application/json")
+                                .body(Full::new(Bytes::from_static(canned_json.as_bytes())))
+                                .unwrap(),
+                        )
+                    }
+                });
+                let _ = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(io, svc)
+                    .await;
+            });
+        }
+    });
+
+    GatedStub {
+        port,
+        started,
+        release,
+    }
 }
 
 async fn capture_request(req: Request<Incoming>) -> Captured {

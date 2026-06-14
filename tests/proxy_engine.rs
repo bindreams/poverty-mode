@@ -1,6 +1,6 @@
 mod common;
 
-use common::stub::start_stub_async;
+use common::stub::{start_gated_stub, start_stub_async};
 use std::net::SocketAddr;
 
 use http_body_util::{BodyExt, Full};
@@ -666,4 +666,52 @@ async fn no_log_file_means_no_file_written() {
         std::fs::read_dir(dir.path()).unwrap().next().is_none(),
         "no log file must be created when log_file is None"
     );
+}
+
+#[tokio::test]
+async fn drain_completes_in_flight_request_before_exit() {
+    let gated = start_gated_stub(r#"{"drained":true}"#).await;
+    let shutdown = std::sync::Arc::new(Notify::new());
+    let shutdown_fut = {
+        let s = shutdown.clone();
+        async move { s.notified().await }
+    };
+    let cfg = EngineConfig {
+        name: ProxyName::Pino,
+        listen: "127.0.0.1:0".parse().unwrap(),
+        upstream: upstream(&format!("http://127.0.0.1:{}", gated.port)),
+        run_id: "01J0DRAIN".to_string(),
+        log_file: None,
+        transform: TransformKind::None,
+    };
+    let bound = bind_engine(cfg, shutdown_fut).await.expect("bind");
+    let port = bound.local_addr.port();
+
+    // Fire the slow request concurrently; it blocks at the upstream.
+    let client_task =
+        tokio::spawn(async move { raw_post(port, "/v1/messages", r#"{"messages":[]}"#).await });
+
+    // Wait (on a real event) until the request has reached the upstream.
+    gated.started.notified().await;
+
+    // Signal the engine to begin draining WHILE the request is in flight.
+    shutdown.notify_waiters();
+
+    // Now release the upstream; the in-flight request must complete.
+    gated.release.notify_waiters();
+
+    let (status, body) = client_task.await.expect("client task");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "in-flight request must complete during drain"
+    );
+    assert_eq!(body, r#"{"drained":true}"#);
+
+    // After the in-flight request finishes, the serve task must drain and exit.
+    bound
+        .handle
+        .await
+        .expect("join")
+        .expect("engine drained ok");
 }
