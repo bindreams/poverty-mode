@@ -138,6 +138,76 @@ pub fn read_wire_config() -> anyhow::Result<CentralInfo> {
     parse_wire_config(&contents)
 }
 
+/// `…/jbcentral/latest/version.txt` — where the live latest version is published (R4).
+pub fn latest_version_url() -> String {
+    format!(
+        "{}/jbcentral/latest/version.txt",
+        crate::download::JBCENTRAL_S3_BASE
+    )
+}
+
+/// Pure config-or-default version resolver (no network, R4): the trimmed `cfg_pinned` if non-blank,
+/// else `DEFAULT_JBCENTRAL_VERSION`.
+pub fn pinned_version(cfg_pinned: Option<&str>) -> String {
+    match cfg_pinned.map(str::trim) {
+        Some(v) if !v.is_empty() => v.to_string(),
+        _ => DEFAULT_JBCENTRAL_VERSION.to_string(),
+    }
+}
+
+/// Parse a `version.txt` body: the first non-blank, trimmed line, which must look like a dotted
+/// version (digits and dots, at least one dot). Anything else is an error so the caller falls back.
+pub fn parse_version_txt(body: &str) -> anyhow::Result<String> {
+    let line = body
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .ok_or_else(|| anyhow!("version.txt is empty"))?;
+    let looks_versiony = line.contains('.') && line.chars().all(|c| c.is_ascii_digit() || c == '.');
+    if !looks_versiony {
+        bail!("version.txt does not contain a dotted version: {line:?}");
+    }
+    Ok(line.to_string())
+}
+
+/// Resolve the jbcentral version to use (R4). If `cfg_pinned` is set (non-blank), use it. Otherwise
+/// GET `<base>/jbcentral/latest/version.txt`, parse the first dotted-version line, and fall back to
+/// `DEFAULT_JBCENTRAL_VERSION` on ANY failure (network, status, parse). `base` is parameterized for
+/// testing; production calls [`resolve_version`].
+///
+/// **R5 contract:** synchronous `reqwest::blocking` GET — call via `spawn_blocking` from async code.
+pub fn resolve_version_from(cfg_pinned: Option<&str>, base: &str) -> String {
+    if let Some(v) = cfg_pinned.map(str::trim) {
+        if !v.is_empty() {
+            return v.to_string();
+        }
+    }
+    let url = format!("{base}/jbcentral/latest/version.txt");
+    let fetch = || -> anyhow::Result<String> {
+        let client = reqwest::blocking::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .context("building reqwest blocking client")?;
+        let body = client
+            .get(&url)
+            .send()
+            .with_context(|| format!("GET {url}"))?
+            .error_for_status()
+            .with_context(|| format!("non-success status from {url}"))?
+            .text()
+            .with_context(|| format!("reading body of {url}"))?;
+        parse_version_txt(&body)
+    };
+    fetch().unwrap_or_else(|_| DEFAULT_JBCENTRAL_VERSION.to_string())
+}
+
+/// Production version resolver: [`resolve_version_from`] against JetBrains' real S3 base.
+///
+/// **R5 contract:** synchronous — call via `spawn_blocking` from async code.
+pub fn resolve_version(cfg_pinned: Option<&str>) -> String {
+    resolve_version_from(cfg_pinned, crate::download::JBCENTRAL_S3_BASE)
+}
+
 #[cfg(test)]
 #[path = "central_tests.rs"]
 mod central_tests;

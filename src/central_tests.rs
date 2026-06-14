@@ -181,3 +181,40 @@ fn wire_url_helper_and_upstream_agree_on_encoded_secret() {
     let up = central_wire_upstream(&info).unwrap();
     assert_eq!(up.url.as_str(), central_wire_url(&info));
 }
+
+// version resolution (pure) =====
+
+#[test]
+fn pinned_version_uses_config_when_set() {
+    assert_eq!(pinned_version(Some("1.2.3")), "1.2.3");
+    assert_eq!(pinned_version(Some("  9.9.9  ")), "9.9.9"); // trimmed
+}
+
+#[test]
+fn pinned_version_falls_back_to_default_when_unset_or_blank() {
+    assert_eq!(pinned_version(None), DEFAULT_JBCENTRAL_VERSION);
+    assert_eq!(pinned_version(Some("")), DEFAULT_JBCENTRAL_VERSION);
+    assert_eq!(pinned_version(Some("   ")), DEFAULT_JBCENTRAL_VERSION);
+}
+
+#[test]
+fn parse_version_txt_takes_first_nonblank_line() {
+    assert_eq!(parse_version_txt("0.3.1\n").unwrap(), "0.3.1");
+    assert_eq!(parse_version_txt("\n  0.3.2  \nextra\n").unwrap(), "0.3.2");
+}
+
+#[test]
+fn parse_version_txt_rejects_empty_or_garbage() {
+    assert!(parse_version_txt("").is_err());
+    assert!(parse_version_txt("   \n  \n").is_err());
+    // A line that does not look like a dotted version is rejected.
+    assert!(parse_version_txt("not a version!").is_err());
+}
+
+#[test]
+fn latest_version_url_targets_latest_version_txt() {
+    assert_eq!(
+        latest_version_url(),
+        "https://jetbrains-central-cli.s3.eu-west-1.amazonaws.com/jbcentral/latest/version.txt"
+    );
+}
