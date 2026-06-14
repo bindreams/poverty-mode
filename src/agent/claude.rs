@@ -38,15 +38,30 @@ impl Agent for ClaudeAgent {
         base_url: &Url,
         extra_env: &[(String, String)],
     ) -> tokio::process::Command {
-        let mut cmd = match argv.split_first() {
-            Some((program, rest)) => {
-                let mut c = tokio::process::Command::new(program);
-                c.args(rest);
-                c
-            }
-            // Empty argv: invoke the default agent binary with no extra args.
-            None => tokio::process::Command::new(self.name()),
+        // Generic model (M6): the program is argv[0]; argv[1..] are its args.
+        // Belt 2 (M7.2): a single `--settings <json>` pair is inserted between the
+        // program and argv[1..], so it lands at CLI-arg precedence ahead of the
+        // user's own flags. The JSON's `{"env":{...}}` contents — mirroring belt 1
+        // (ANTHROPIC_BASE_URL + extra_env) — are filled in M7.4; M7.2 only fixes
+        // the program/argv ordering and the presence/position of `--settings`.
+        let (program, rest): (&str, &[String]) = match argv.split_first() {
+            Some((program, rest)) => (program.as_str(), rest),
+            // Empty argv: invoke the default agent binary, still emitting belt 2.
+            None => (self.name(), &[]),
         };
+        let mut cmd = tokio::process::Command::new(program);
+
+        // Belt 2: inline --settings env block, inserted BEFORE the user's args.
+        cmd.arg("--settings");
+        cmd.arg("{}"); // placeholder JSON; real env block added in M7.4.
+
+        // User args (argv[1..]) last.
+        cmd.args(rest);
+
+        // Belt 1: process environment. ANTHROPIC_BASE_URL first, then every
+        // orchestrator env entry (POVERTY_PROXY_CHAIN, ENABLE_TOOL_SEARCH, and the
+        // central-tail ANTHROPIC_AUTH_TOKEN). The same values land in belt 2's
+        // JSON, so the two belts cannot disagree.
         cmd.env("ANTHROPIC_BASE_URL", base_url.as_str());
         for (k, v) in extra_env {
             cmd.env(k, v);

@@ -26,6 +26,15 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     pub log_file: Option<PathBuf>,
 
+    /// Hidden, accepted-and-ignored: mirrors Claude Code's `--settings <json>`
+    /// flag so the in-repo hidden helper subcommands (`__post`, `__printenv`,
+    /// ...) — used as stand-in agents in chain/run tests — tolerate the belt-2
+    /// `--settings` argument the orchestrator injects between the agent program
+    /// and its args (M7.2), exactly as the real `claude` binary would consume it.
+    /// poverty-mode itself never reads this value.
+    #[arg(long, global = true, hide = true, value_name = "JSON")]
+    pub settings: Option<String>,
+
     #[command(subcommand)]
     pub command: Command,
 }
