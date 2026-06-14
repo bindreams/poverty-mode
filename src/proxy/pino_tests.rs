@@ -1500,3 +1500,122 @@ fn apply_headers_noop_when_auto_cache_off() {
         "no beta flag advertised when auto_cache is off"
     );
 }
+
+// M4.11 ===== full-pipeline parity guard (operation order + restructure->cache).
+
+// LABELED INVARIANT GUARD (R12): composition of M4.3-M4.10 behavior. Not a
+// red->green cycle — the underlying reds were paid per stage. Locks operation
+// order and the restructure->cache interaction against regressions.
+#[test]
+fn full_pipeline_parity_realistic_body() {
+    let t = PinoTransform {
+        settings: PinoSettings {
+            auto_cache: true,
+            tail_ttl: TailTtl::FiveMin,
+            drop_tools: vec!["NotebookEdit".to_string()],
+            strip_ansi: true,
+            model_override: Some("claude-opus-4-6".to_string()),
+        },
+    };
+    let reminder = "<system-reminder>\nThe following are deferred tools:\nNotebookEdit\nGlob\n</system-reminder>";
+    let mut body = json!({
+        "model": "claude-sonnet-4-5",
+        "system": [
+            { "type": "text", "text": format!("You are claude-opus-4-7 (Opus 4.7). {}", "x".repeat(600)) }
+        ],
+        "tools": [
+            { "name": "Bash", "description": "run" },
+            { "name": "NotebookEdit", "description": "edit nb" },
+            { "name": "Read", "description": "read" }
+        ],
+        "messages": [
+            // msg0: plain prose (no core markers). Reminder is scrubbed (deferred-tools),
+            // not stale-removed here because it does not START with the tag after the
+            // "ctx" prefix... so we keep msg0 free of leading-tag stale content.
+            { "role": "user", "content": [ { "type": "text", "text": format!("session start. {}", "ctx ".repeat(60)) } ] },
+            // history assistant turn (kept).
+            { "role": "assistant", "content": [ { "type": "text", "text": "working" } ] },
+            // tail: a core-context block (extracted to msg0 by restructure) + a
+            // tool_result with ANSI + the scrubbable reminder.
+            { "role": "user", "content": [
+                { "type": "text", "text": "claudeMd: project rules here" },
+                { "type": "tool_result", "content": "\u{1b}[32mdone\u{1b}[0m output" },
+                { "type": "text", "text": reminder }
+            ] }
+        ]
+    });
+    t.transform(&mut body).unwrap();
+
+    // --- model override applied + system self-ref rewritten ---
+    assert_eq!(body["model"], json!("claude-opus-4-6"));
+    let sys_text = body["system"][0]["text"].as_str().unwrap();
+    assert!(sys_text.contains("claude-opus-4-6"));
+    assert!(sys_text.contains("Opus 4.6"));
+    assert!(!sys_text.contains("claude-opus-4-7"));
+
+    // --- dropped tool absent from tools + scrubbed from the reminder (still in tail) ---
+    let names: Vec<&str> = body["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["Bash", "Read"]);
+
+    // --- restructure: core block moved to FRONT of msg0; role coerced to user ---
+    assert_eq!(body["messages"][0]["role"], json!("user"));
+    assert_eq!(
+        body["messages"][0]["content"][0]["text"],
+        json!("claudeMd: project rules here")
+    );
+
+    // --- the tail (last message) no longer holds the core block; tool_result ANSI stripped ---
+    let last = body["messages"].as_array().unwrap().len() - 1;
+    // The tail still contains the tool_result and the (scrubbed) reminder block.
+    let tail_content = body["messages"][last]["content"].as_array().unwrap();
+    // ANSI stripped on the tool_result content.
+    let tr = tail_content
+        .iter()
+        .find(|b| b["type"] == json!("tool_result"))
+        .unwrap();
+    assert_eq!(tr["content"], json!("done output"));
+    // Reminder scrubbed: NotebookEdit gone, Glob kept.
+    let rem = tail_content
+        .iter()
+        .find(|b| {
+            b.get("text")
+                .and_then(|x| x.as_str())
+                .map(|s| s.contains("system-reminder"))
+                .unwrap_or(false)
+        })
+        .unwrap();
+    let rem_text = rem["text"].as_str().unwrap();
+    assert!(!rem_text.contains("NotebookEdit"));
+    assert!(rem_text.contains("Glob"));
+
+    // --- caching: 4-cap respected; tools/system/msg0 at 1h; tail at 5m ---
+    assert_eq!(count_cache_breakpoints(&body), 4);
+    assert_eq!(body["tools"][1]["cache_control"]["ttl"], json!("1h")); // last remaining tool = Read
+    assert_eq!(body["system"][0]["cache_control"]["ttl"], json!("1h"));
+    // msg0 dedicated breakpoint at 1h (on msg0's last cacheable block).
+    let msg0 = body["messages"][0]["content"].as_array().unwrap();
+    let msg0_last = msg0.len() - 1;
+    assert_eq!(
+        body["messages"][0]["content"][msg0_last]["cache_control"]["ttl"],
+        json!("1h")
+    );
+    // tail breakpoint at 5m on the last message's last cacheable block.
+    let tail_last = tail_content.len() - 1;
+    assert_eq!(
+        body["messages"][last]["content"][tail_last]["cache_control"]["ttl"],
+        json!("5m")
+    );
+
+    // --- apply_headers emits the beta flag (engine hook) ---
+    let mut headers = http::HeaderMap::new();
+    t.apply_headers(&mut headers);
+    assert_eq!(
+        headers.get("anthropic-beta").unwrap().to_str().unwrap(),
+        BETA_FLAG
+    );
+}
