@@ -68,3 +68,81 @@ fn unknown_arch_is_an_error() {
     let err = jbcentral_asset_url("0.2.9", "linux", "riscv64").unwrap_err();
     assert!(err.to_string().contains("riscv64"), "{err}");
 }
+
+// extract_archive =====
+
+use std::fs;
+use std::io::Write as _;
+
+/// Build a small `.tar.gz` in memory containing one file `file_rel` with known contents.
+fn make_tar_gz_fixture(file_rel: &str, contents: &[u8]) -> Vec<u8> {
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+
+    let mut tar_bytes: Vec<u8> = Vec::new();
+    {
+        let mut builder = tar::Builder::new(&mut tar_bytes);
+        let mut header = tar::Header::new_gnu();
+        header.set_size(contents.len() as u64);
+        header.set_mode(0o755);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, file_rel, contents)
+            .unwrap();
+        builder.finish().unwrap();
+    }
+    let mut gz = GzEncoder::new(Vec::new(), Compression::default());
+    gz.write_all(&tar_bytes).unwrap();
+    gz.finish().unwrap()
+}
+
+/// Build a small `.zip` in memory containing one file `file_rel` with known contents.
+fn make_zip_fixture(file_rel: &str, contents: &[u8]) -> Vec<u8> {
+    use std::io::Cursor;
+    use zip::write::SimpleFileOptions;
+
+    let mut cursor = Cursor::new(Vec::new());
+    {
+        let mut writer = zip::ZipWriter::new(&mut cursor);
+        let opts =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        writer.start_file(file_rel, opts).unwrap();
+        writer.write_all(contents).unwrap();
+        writer.finish().unwrap();
+    }
+    cursor.into_inner()
+}
+
+#[test]
+fn extract_archive_tar_gz_writes_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dest = tmp.path().join("out");
+    let bytes = make_tar_gz_fixture("bin/jbcentral", b"#!/bin/sh\necho hi\n");
+
+    extract_archive(&bytes, "thing.tar.gz", &dest).unwrap();
+
+    let extracted = dest.join("bin").join("jbcentral");
+    let got = fs::read(&extracted).unwrap();
+    assert_eq!(got, b"#!/bin/sh\necho hi\n");
+}
+
+#[test]
+fn extract_archive_zip_writes_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dest = tmp.path().join("out");
+    let bytes = make_zip_fixture("bin/jbcentral.exe", b"MZ-fake-exe");
+
+    extract_archive(&bytes, "thing.zip", &dest).unwrap();
+
+    let extracted = dest.join("bin").join("jbcentral.exe");
+    let got = fs::read(&extracted).unwrap();
+    assert_eq!(got, b"MZ-fake-exe");
+}
+
+#[test]
+fn extract_archive_unknown_suffix_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dest = tmp.path().join("out");
+    let err = extract_archive(b"junk", "thing.rar", &dest).unwrap_err();
+    assert!(err.to_string().contains("thing.rar"), "{err}");
+}

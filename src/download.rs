@@ -2,7 +2,11 @@
 //! per-version pin (R14), archive extraction, and a lock-serialized replace into the bin cache. Used
 //! only for `jbcentral` in v1.
 
-use anyhow::{anyhow, bail};
+use std::fs;
+use std::io::Cursor;
+use std::path::Path;
+
+use anyhow::{anyhow, bail, Context};
 
 /// JetBrains' public S3 bucket that hosts the `jbcentral` CLI assets.
 pub const JBCENTRAL_S3_BASE: &str = "https://jetbrains-central-cli.s3.eu-west-1.amazonaws.com";
@@ -46,6 +50,34 @@ pub fn host_arch() -> anyhow::Result<&'static str> {
         "x86_64" => Ok("x86_64"),
         "aarch64" => Ok("arm64"),
         other => Err(anyhow!("unsupported host arch \"{other}\" for jbcentral")),
+    }
+}
+
+/// Extract an in-memory archive into `dest_dir`, dispatching on `name`'s suffix:
+/// `*.tar.gz` / `*.tgz` -> gzip+tar, `*.zip` -> zip. Any other suffix is an error.
+/// `dest_dir` is created if absent. These are our own pinned, sha256-verified JetBrains assets; both
+/// `tar` and `zip` sanitize path traversal internally.
+pub fn extract_archive(bytes: &[u8], name: &str, dest_dir: &Path) -> anyhow::Result<()> {
+    fs::create_dir_all(dest_dir)
+        .with_context(|| format!("creating extract dir {}", dest_dir.display()))?;
+
+    let lower = name.to_ascii_lowercase();
+    if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
+        let gz = flate2::read::GzDecoder::new(Cursor::new(bytes));
+        let mut archive = tar::Archive::new(gz);
+        archive
+            .unpack(dest_dir)
+            .with_context(|| format!("unpacking tar.gz into {}", dest_dir.display()))?;
+        Ok(())
+    } else if lower.ends_with(".zip") {
+        let mut archive =
+            zip::ZipArchive::new(Cursor::new(bytes)).context("opening zip archive")?;
+        archive
+            .extract(dest_dir)
+            .with_context(|| format!("extracting zip into {}", dest_dir.display()))?;
+        Ok(())
+    } else {
+        bail!("unsupported archive type for \"{name}\" (expected .tar.gz/.tgz or .zip)")
     }
 }
 
