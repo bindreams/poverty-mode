@@ -636,15 +636,25 @@ fn for_each_anomaly(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::relevance::HybridScorer;
     use crate::transforms::anchor_selector::AnchorConfig;
     use crate::transforms::smart_crusher::constraints::default_oss_constraints;
     use serde_json::json;
 
+    // The test scorer mirrors the OSS default composition
+    // (`builder.rs::default_scorer`): `HybridScorer` (BM25 + ONNX
+    // embedding fusion) with the `embeddings` feature, pure-BM25 keyword
+    // scoring in the trimmed build. Both implement `RelevanceScorer`, so
+    // the planner — which takes `&dyn RelevanceScorer` — behaves
+    // identically for these planning tests.
+    #[cfg(not(feature = "embeddings"))]
+    use crate::relevance::BM25Scorer as TestScorer;
+    #[cfg(feature = "embeddings")]
+    use crate::relevance::HybridScorer as TestScorer;
+
     fn fixture<'a>(
         config: &'a SmartCrusherConfig,
         anchor_selector: &'a AnchorSelector,
-        scorer: &'a HybridScorer,
+        scorer: &'a TestScorer,
         analyzer: &'a SmartAnalyzer,
         constraints: &'a [Box<dyn Constraint>],
     ) -> SmartCrusherPlanner<'a> {
@@ -654,13 +664,13 @@ mod tests {
     fn make_planner_deps() -> (
         SmartCrusherConfig,
         AnchorSelector,
-        HybridScorer,
+        TestScorer,
         SmartAnalyzer,
         Vec<Box<dyn Constraint>>,
     ) {
         let cfg = SmartCrusherConfig::default();
         let asel = AnchorSelector::new(AnchorConfig::default());
-        let scorer = HybridScorer::default();
+        let scorer = TestScorer::default();
         let analyzer = SmartAnalyzer::new(cfg.clone());
         let constraints = default_oss_constraints();
         (cfg, asel, scorer, analyzer, constraints)
