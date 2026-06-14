@@ -518,3 +518,61 @@ fn from_config_then_confirm_yields_enabled_chain() {
         other => panic!("expected Run, got {other:?}"),
     }
 }
+
+// --- central-last property guards (added green-on-arrival; not red->green) -----
+
+#[test]
+fn central_remains_last_under_an_adversarial_action_sequence() {
+    let mut st = seed_all_disabled();
+    // A scripted barrage that repeatedly tries to displace central.
+    let script = [
+        TuiAction::Down,     // -> headroom
+        TuiAction::Toggle,   // enable headroom
+        TuiAction::MoveDown, // try to push headroom below central (illegal)
+        TuiAction::Down,     // -> central
+        TuiAction::Toggle,   // enable central
+        TuiAction::MoveUp,   // try to lift central (illegal)
+        TuiAction::Up,       // -> some row
+        TuiAction::MoveDown, // push toward central
+        TuiAction::Down,
+        TuiAction::MoveDown,
+        TuiAction::Toggle,
+        TuiAction::MoveUp,
+    ];
+    for a in script {
+        let out = st.apply(a);
+        // No scripted action is Confirm/Cancel, so we always Continue.
+        assert_eq!(out, TuiOutcome::Continue);
+        // Invariant after EVERY step: central, if present, is the last row.
+        let last = st.items.last().expect("non-empty");
+        assert_eq!(last.name, ProxyName::Central, "central must stay last");
+        // Cursor always in bounds.
+        assert!(st.cursor < st.items.len());
+    }
+}
+
+#[test]
+fn confirm_after_adversarial_sequence_keeps_central_last_in_chain() {
+    let mut st = seed_all_disabled();
+    // Enable all three, then thrash the order.
+    for idx in 0..3 {
+        st.cursor = idx;
+        st.apply(TuiAction::Toggle);
+    }
+    st.cursor = 0;
+    st.apply(TuiAction::MoveDown);
+    st.apply(TuiAction::MoveDown);
+    st.cursor = 2;
+    st.apply(TuiAction::MoveUp); // central can't rise
+    match st.apply(TuiAction::Confirm) {
+        TuiOutcome::Run(resolved) => {
+            assert_eq!(resolved.len(), 3);
+            assert_eq!(
+                resolved.last().expect("non-empty").name,
+                ProxyName::Central,
+                "central must be last in the resolved chain"
+            );
+        }
+        other => panic!("expected Run, got {other:?}"),
+    }
+}
