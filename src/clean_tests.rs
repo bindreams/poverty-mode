@@ -168,6 +168,68 @@ fn execute_clean_plan_tolerates_already_absent_paths() {
 }
 
 #[test]
+fn newest_central_binary_resolves_flat_layout() {
+    // Flat layout: <cache>/bin/jbcentral/<ver>/jbcentral.
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path().join("cache");
+    let dir = cache.join("bin").join("jbcentral").join("0.2.9");
+    fs::create_dir_all(&dir).unwrap();
+    let flat = dir.join(crate::central::jbcentral_binary_name());
+    fs::write(&flat, b"fake").unwrap();
+
+    assert_eq!(newest_central_binary(&cache).unwrap(), Some(flat));
+}
+
+#[test]
+fn newest_central_binary_resolves_nested_layout() {
+    // Nested layout: <cache>/bin/jbcentral/<ver>/jbcentral-<ver>/jbcentral. A flat-only
+    // lookup misses this, so `clean --stop-central` would falsely report "not installed"
+    // and leave the running singleton up — exactly what the user asked to stop. The
+    // resolver must agree with status (both delegate to central::installed_binary_path_in).
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path().join("cache");
+    let nested = cache
+        .join("bin")
+        .join("jbcentral")
+        .join("0.2.9")
+        .join("jbcentral-0.2.9");
+    fs::create_dir_all(&nested).unwrap();
+    let bin = nested.join(crate::central::jbcentral_binary_name());
+    fs::write(&bin, b"fake").unwrap();
+
+    assert_eq!(newest_central_binary(&cache).unwrap(), Some(bin));
+}
+
+#[test]
+fn newest_central_binary_picks_newest_version_semantically() {
+    // 0.2.10 is newer than 0.2.9 — a lexical sort would wrongly pick 0.2.9.
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path().join("cache");
+    for ver in ["0.2.9", "0.2.10"] {
+        let dir = cache.join("bin").join("jbcentral").join(ver);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(crate::central::jbcentral_binary_name()), b"fake").unwrap();
+    }
+
+    let resolved = newest_central_binary(&cache).unwrap().unwrap();
+    assert!(
+        resolved.to_string_lossy().contains("0.2.10"),
+        "expected newest (0.2.10), got: {}",
+        resolved.display()
+    );
+}
+
+#[test]
+fn newest_central_binary_none_when_not_installed() {
+    let tmp = tempfile::tempdir().unwrap();
+    // No <cache>/bin/jbcentral at all.
+    assert_eq!(
+        newest_central_binary(&tmp.path().join("cache")).unwrap(),
+        None
+    );
+}
+
+#[test]
 fn render_clean_plan_previews_actions() {
     let plan = CleanPlan {
         run_dirs_to_delete: vec![

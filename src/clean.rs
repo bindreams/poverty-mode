@@ -134,40 +134,16 @@ pub fn render_clean_plan(plan: &CleanPlan) -> String {
     out
 }
 
-/// Locate the newest installed central binary under `<cache>/bin/jbcentral/<ver>/`
-/// (canonical install dir, R4). Returns the executable path if present. Versions are
-/// ordered SEMANTICALLY via the shared `crate::status::version_sort_key` (R23f) so
-/// `0.2.10` is treated as newer than `0.2.9` — never lexicographically.
+/// Locate the newest installed central binary, delegating to the shared
+/// `crate::status::newest_central_binary` (which uses the canonical
+/// `central::installed_binary_path_in` resolver). This resolves BOTH the flat
+/// (`<cache>/bin/jbcentral/<ver>/jbcentral`) and nested (`.../jbcentral-<ver>/jbcentral`)
+/// archive layouts, and orders versions SEMANTICALLY (R23f). Sharing the resolver keeps
+/// `clean --stop-central` from disagreeing with `status`: a flat-only lookup here would
+/// miss a nested install and falsely report "not installed", silently leaving the running
+/// singleton up — the exact action the user asked to perform.
 fn newest_central_binary(cache_dir: &Path) -> Result<Option<PathBuf>> {
-    let root = cache_dir.join("bin").join(crate::central::INSTALL_TOOL_DIR);
-    if !root.exists() {
-        return Ok(None);
-    }
-    let mut versions: Vec<PathBuf> = Vec::new();
-    for entry in std::fs::read_dir(&root)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            versions.push(entry.path());
-        }
-    }
-    versions.sort_by_key(|p| {
-        let name = p
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default()
-            .to_string();
-        crate::status::version_sort_key(&name)
-    });
-    let Some(dir) = versions.pop() else {
-        return Ok(None);
-    };
-    let exe = if cfg!(windows) {
-        "jbcentral.exe"
-    } else {
-        "jbcentral"
-    };
-    let path = dir.join(exe);
-    Ok(path.exists().then_some(path))
+    crate::status::newest_central_binary(cache_dir)
 }
 
 /// Read a yes/no answer from stdin. Returns true only for an explicit y/yes.

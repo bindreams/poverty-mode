@@ -353,7 +353,10 @@ fn read_wire_config() -> Option<WireConfig> {
 /// archive layouts resolve consistently with install/clean. A flat-only lookup here would
 /// miss a nested install that `central_versions` still reports as present, forcing login to
 /// Unknown for a genuinely logged-in user.
-fn newest_central_binary(cache_dir: &Path) -> Result<Option<PathBuf>> {
+///
+/// Shared with `clean::run_clean` (its `--stop-central` path) so status and clean never
+/// disagree about whether — or where — central is installed.
+pub(crate) fn newest_central_binary(cache_dir: &Path) -> Result<Option<PathBuf>> {
     let versions = central_versions(cache_dir)?;
     let Some(latest) = versions.last() else {
         return Ok(None);
