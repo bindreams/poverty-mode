@@ -96,3 +96,125 @@ pub fn execute_clean_plan(plan: &CleanPlan) -> Result<()> {
     }
     Ok(())
 }
+
+use std::fmt::Write as _;
+use std::io::Write as _;
+
+/// Render a preview of the clean plan for the confirmation prompt (pure).
+pub fn render_clean_plan(plan: &CleanPlan) -> String {
+    if plan.is_empty() {
+        return "clean: nothing to clean\n".to_string();
+    }
+    let mut out = String::new();
+    if !plan.run_dirs_to_delete.is_empty() {
+        let _ = writeln!(
+            out,
+            "will delete {} run director{}:",
+            plan.run_dirs_to_delete.len(),
+            if plan.run_dirs_to_delete.len() == 1 {
+                "y"
+            } else {
+                "ies"
+            }
+        );
+        for dir in &plan.run_dirs_to_delete {
+            let _ = writeln!(out, "  {}", dir.display());
+        }
+    }
+    if let Some(cache) = &plan.cache_dir_to_clear {
+        let _ = writeln!(out, "will clear cache dir: {}", cache.display());
+    }
+    if plan.stop_central {
+        let _ = writeln!(
+            out,
+            "will STOP the shared central singleton \
+             (other live sessions using central will be disrupted)"
+        );
+    }
+    out
+}
+
+/// Locate the newest installed central binary under `<cache>/bin/jbcentral/<ver>/`
+/// (canonical install dir, R4). Returns the executable path if present. Versions are
+/// ordered SEMANTICALLY via the shared `crate::status::version_sort_key` (R23f) so
+/// `0.2.10` is treated as newer than `0.2.9` — never lexicographically.
+fn newest_central_binary(cache_dir: &Path) -> Result<Option<PathBuf>> {
+    let root = cache_dir.join("bin").join(crate::central::INSTALL_TOOL_DIR);
+    if !root.exists() {
+        return Ok(None);
+    }
+    let mut versions: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(&root)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            versions.push(entry.path());
+        }
+    }
+    versions.sort_by_key(|p| {
+        let name = p
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_string();
+        crate::status::version_sort_key(&name)
+    });
+    let Some(dir) = versions.pop() else {
+        return Ok(None);
+    };
+    let exe = if cfg!(windows) {
+        "jbcentral.exe"
+    } else {
+        "jbcentral"
+    };
+    let path = dir.join(exe);
+    Ok(path.exists().then_some(path))
+}
+
+/// Read a yes/no answer from stdin. Returns true only for an explicit y/yes.
+fn confirm(prompt: &str) -> Result<bool> {
+    print!("{prompt}");
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    let answer = line.trim().to_ascii_lowercase();
+    Ok(answer == "y" || answer == "yes")
+}
+
+/// Gather real inputs, preview, confirm (unless `assume_yes`), then execute. Central
+/// stop happens only when `stop_central` is set AND the user confirms, AFTER the
+/// emptiness check -- never on a no-op or aborted clean (R20). Stop errors propagate.
+pub fn run_clean(
+    keep: usize,
+    clear_cache: bool,
+    stop_central: bool,
+    assume_yes: bool,
+) -> Result<()> {
+    let cache = crate::paths::cache_dir()?;
+    let runs_root = crate::paths::state_dir()?.join("runs");
+    let plan = build_clean_plan(&runs_root, &cache, keep, clear_cache, stop_central)?;
+
+    print!("{}", render_clean_plan(&plan));
+    if plan.is_empty() {
+        return Ok(());
+    }
+
+    if !assume_yes && !confirm("proceed? [y/N] ")? {
+        println!("aborted");
+        return Ok(());
+    }
+
+    // Filesystem side first.
+    execute_clean_plan(&plan)?;
+
+    // Central stop, only if opted in and confirmed. Errors are surfaced:
+    // central::stop normalizes "not running" to Ok, so any Err is a real failure.
+    if plan.stop_central {
+        match newest_central_binary(&cache)? {
+            Some(bin) => crate::central::stop(&bin)?,
+            None => println!("central not installed; nothing to stop"),
+        }
+    }
+
+    println!("clean complete");
+    Ok(())
+}

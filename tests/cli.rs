@@ -84,13 +84,48 @@ fn doctor_subcommand_runs_and_renders() {
     );
 }
 
+/// M10.7 wired `clean` to the real handler (R23g): the M3 NotImplemented arm is
+/// gone, so the end-to-end `clean` invocation now builds a real plan. Hermetic via
+/// the `POVERTY_CACHE_DIR`/`POVERTY_STATE_DIR` overrides (R23j): an empty state dir
+/// (no run dirs) with the default `--keep` and no `--clear-cache`/`--stop-central`
+/// yields an empty plan, which short-circuits to "nothing to clean" and exits
+/// success WITHOUT prompting -- so this is safe to run non-interactively.
 #[test]
-fn clean_subcommand_is_not_yet_implemented() {
+fn clean_subcommand_empty_plan_says_nothing_to_clean() {
+    let tmp = tempfile::tempdir().unwrap();
     let mut cmd = Command::cargo_bin("poverty-mode").unwrap();
     cmd.arg("clean")
+        .env("POVERTY_CACHE_DIR", tmp.path().join("cache"))
+        .env("POVERTY_STATE_DIR", tmp.path().join("state"))
         .assert()
-        .failure()
-        .stderr(contains("not yet implemented: clean"));
+        .success()
+        .stdout(contains("nothing to clean"));
+}
+
+/// A non-empty clean with `--yes` bypasses the interactive confirmation and runs
+/// to completion. `--clear-cache` makes the plan non-empty even with no run dirs;
+/// `--yes` skips the prompt, so the side effects execute and "clean complete" is
+/// printed. `--stop-central` is NOT passed, so the shared singleton is untouched
+/// (R20) -- no central binary exists in the hermetic cache anyway.
+#[test]
+fn clean_subcommand_yes_clears_cache_and_completes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path().join("cache");
+    std::fs::create_dir_all(cache.join("bin")).unwrap();
+    std::fs::write(cache.join("bin").join("stale"), b"x").unwrap();
+
+    let mut cmd = Command::cargo_bin("poverty-mode").unwrap();
+    cmd.args(["clean", "--clear-cache", "--yes"])
+        .env("POVERTY_CACHE_DIR", &cache)
+        .env("POVERTY_STATE_DIR", tmp.path().join("state"))
+        .assert()
+        .success()
+        .stdout(contains("will clear cache dir"))
+        .stdout(contains("clean complete"));
+
+    // The cache contents were removed and the dir recreated empty.
+    assert!(cache.is_dir());
+    assert!(!cache.join("bin").exists());
 }
 
 #[test]

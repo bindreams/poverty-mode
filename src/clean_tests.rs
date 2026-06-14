@@ -166,3 +166,49 @@ fn execute_clean_plan_tolerates_already_absent_paths() {
     // The absent cache dir is recreated empty so subsequent runs find it present.
     assert!(cache.is_dir());
 }
+
+#[test]
+fn render_clean_plan_previews_actions() {
+    let plan = CleanPlan {
+        run_dirs_to_delete: vec![
+            PathBuf::from("/state/runs/01a"),
+            PathBuf::from("/state/runs/01b"),
+        ],
+        cache_dir_to_clear: Some(PathBuf::from("/cache")),
+        stop_central: false,
+    };
+    let out = render_clean_plan(&plan);
+    assert!(out.contains("2 run director"), "got: {out}");
+    assert!(out.contains("01a"), "got: {out}");
+    assert!(out.contains("01b"), "got: {out}");
+    assert!(out.contains("/cache"), "got: {out}");
+    // No central line unless stop_central is set.
+    assert!(!out.to_lowercase().contains("central"), "got: {out}");
+}
+
+#[test]
+fn render_clean_plan_includes_central_stop_when_requested() {
+    let plan = CleanPlan {
+        run_dirs_to_delete: vec![],
+        cache_dir_to_clear: None,
+        stop_central: true,
+    };
+    let out = render_clean_plan(&plan);
+    // The shared-singleton warning must be visible so the user knows other sessions
+    // may be affected.
+    assert!(out.to_lowercase().contains("central"), "got: {out}");
+    assert!(out.to_lowercase().contains("shared"), "got: {out}");
+    // Not "nothing to clean": stop_central alone is a real action.
+    assert!(!out.contains("nothing to clean"), "got: {out}");
+}
+
+#[test]
+fn render_clean_plan_empty_says_nothing_to_do() {
+    let plan = CleanPlan {
+        run_dirs_to_delete: vec![],
+        cache_dir_to_clear: None,
+        stop_central: false,
+    };
+    let out = render_clean_plan(&plan);
+    assert!(out.contains("nothing to clean"), "got: {out}");
+}

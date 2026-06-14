@@ -91,8 +91,21 @@ pub enum Command {
     /// Diagnose environment and settings conflicts.
     Doctor,
 
-    /// Stop singletons and prune run dirs and caches.
-    Clean,
+    /// Prune old run dirs, clear caches, and optionally stop the shared central singleton.
+    Clean {
+        /// Number of newest run directories to keep.
+        #[arg(long, default_value_t = crate::clean::DEFAULT_KEEP_RUNS)]
+        keep: usize,
+        /// Also clear the downloaded-binary cache.
+        #[arg(long)]
+        clear_cache: bool,
+        /// Stop the shared central singleton (disrupts other live sessions; off by default).
+        #[arg(long)]
+        stop_central: bool,
+        /// Skip the interactive confirmation prompt.
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
 
     /// Hidden: spawn one grouped sleeper, print its pid + READY, then park. Used
     /// by teardown tests to prove the OS reaps the child when the holder dies.
@@ -442,7 +455,12 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Command::Clean => Err(Error::NotImplemented("clean").into()),
+        Command::Clean {
+            keep,
+            clear_cache,
+            stop_central,
+            yes,
+        } => crate::clean::run_clean(keep, clear_cache, stop_central, yes),
         Command::SpawnHolder => {
             use crate::orchestrator::teardown::ProxyGroup;
             let exe = std::env::current_exe()?;
