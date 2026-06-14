@@ -204,3 +204,135 @@ fn non_object_body_is_left_untouched_and_ok() {
     t.transform(&mut body).unwrap();
     assert_eq!(body, json!("not an object"));
 }
+
+// M4.3 ===== model_override: replace body.model + rewrite model self-references
+// in system blocks (port of reference/pino/src/model.js rewriteSystemModelRefs +
+// the server.js `parsed.model = MODEL_OVERRIDE` step). R18: closure replacement
+// so a '$' in the override is emitted verbatim (never a regex template).
+
+fn model_override_settings(model: &str) -> PinoSettings {
+    PinoSettings {
+        auto_cache: false,
+        tail_ttl: TailTtl::FiveMin,
+        drop_tools: vec![],
+        strip_ansi: false,
+        model_override: Some(model.to_string()),
+    }
+}
+
+#[test]
+fn model_override_replaces_top_level_model_field() {
+    let t = PinoTransform {
+        settings: model_override_settings("claude-opus-4-6"),
+    };
+    let mut body = json!({ "model": "claude-sonnet-4-5", "messages": [] });
+    t.transform(&mut body).unwrap();
+    assert_eq!(body["model"], json!("claude-opus-4-6"));
+}
+
+#[test]
+fn model_override_rewrites_source_id_in_system_string() {
+    let t = PinoTransform {
+        settings: model_override_settings("claude-opus-4-6"),
+    };
+    let mut body = json!({
+        "model": "x",
+        "system": "You are claude-opus-4-7-20260101, also called Opus 4.7.",
+        "messages": []
+    });
+    t.transform(&mut body).unwrap();
+    assert_eq!(
+        body["system"],
+        json!("You are claude-opus-4-6, also called Opus 4.6.")
+    );
+}
+
+#[test]
+fn model_override_rewrites_source_id_in_system_blocks_array() {
+    let t = PinoTransform {
+        settings: model_override_settings("claude-sonnet-4-6-20260301"),
+    };
+    let mut body = json!({
+        "model": "x",
+        "system": [
+            { "type": "text", "text": "Model: claude-opus-4-7. Name: Opus 4.7." },
+            { "type": "text", "text": "no refs here" }
+        ],
+        "messages": []
+    });
+    t.transform(&mut body).unwrap();
+    // Override base = claude-sonnet-4-6 (date suffix stripped) => friendly "Sonnet 4.6".
+    // The bare source id (no date) is replaced with the FULL override INCLUDING the date.
+    assert_eq!(
+        body["system"][0]["text"],
+        json!("Model: claude-sonnet-4-6-20260301. Name: Sonnet 4.6.")
+    );
+    assert_eq!(body["system"][1]["text"], json!("no refs here"));
+}
+
+#[test]
+fn model_override_unknown_target_uses_base_id_as_friendly_name() {
+    let t = PinoTransform {
+        settings: model_override_settings("claude-future-9-9"),
+    };
+    let mut body = json!({
+        "model": "x",
+        "system": "id claude-opus-4-7 and name Opus 4.7",
+        "messages": []
+    });
+    t.transform(&mut body).unwrap();
+    // Unknown base => friendly falls back to the base id itself (Node `|| base`).
+    assert_eq!(
+        body["system"],
+        json!("id claude-future-9-9 and name claude-future-9-9")
+    );
+}
+
+#[test]
+fn model_override_none_leaves_system_untouched() {
+    let t = PinoTransform {
+        settings: no_op_settings(),
+    };
+    let mut body = json!({
+        "model": "claude-opus-4-7",
+        "system": "I am claude-opus-4-7 (Opus 4.7)",
+        "messages": []
+    });
+    t.transform(&mut body).unwrap();
+    assert_eq!(body["model"], json!("claude-opus-4-7"));
+    assert_eq!(body["system"], json!("I am claude-opus-4-7 (Opus 4.7)"));
+}
+
+// R18 / Finding 3: an override containing a literal '$' must be emitted verbatim,
+// NOT interpreted as a regex replacement template ($name / ${name} / $N).
+#[test]
+fn model_override_with_literal_dollar_is_not_treated_as_template() {
+    let t = PinoTransform {
+        settings: model_override_settings("claude-$weird-4-6"),
+    };
+    let mut body = json!({
+        "model": "x",
+        "system": "self: claude-opus-4-7",
+        "messages": []
+    });
+    t.transform(&mut body).unwrap();
+    assert_eq!(body["model"], json!("claude-$weird-4-6"));
+    assert_eq!(body["system"], json!("self: claude-$weird-4-6"));
+}
+
+#[test]
+fn model_override_friendly_with_literal_dollar_is_not_treated_as_template() {
+    // Both the id-replacement AND the friendly-name replacement use closures.
+    // Override "claude-$x" has unknown base => friendly == base == "claude-$x",
+    // so the "Opus 4.7" -> friendly substitution must also emit '$' literally.
+    let t = PinoTransform {
+        settings: model_override_settings("claude-$x"),
+    };
+    let mut body = json!({
+        "model": "x",
+        "system": "name Opus 4.7",
+        "messages": []
+    });
+    t.transform(&mut body).unwrap();
+    assert_eq!(body["system"], json!("name claude-$x"));
+}

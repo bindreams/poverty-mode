@@ -1,7 +1,10 @@
 //! pino: prompt-cache breakpoint injection. M1 ships the settings struct and a
 //! fail-loud transform stub (R9); the real cache-injection logic lands in M4.
 
+use std::sync::OnceLock;
+
 use anyhow::Result;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -121,8 +124,76 @@ impl BodyTransform for PinoTransform {
 
 // --- pipeline stages (filled in by later tasks) -----
 
-fn apply_model_override(_body: &mut Value, _model: &str) {
-    // Implemented in Task M4.3.
+// Source model that Claude Code self-identifies as; rewritten to the override.
+// Ported verbatim from reference/pino/src/model.js SOURCE_ID_PATTERN (the JS /g
+// flag => replace_all). Note: no end-anchor; matches anywhere.
+fn source_id_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"claude-opus-4-7(?:-\d{8})?").unwrap())
+}
+
+// SOURCE_NAME_PATTERN /Opus 4\.7/g.
+fn source_name_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"Opus 4\.7").unwrap())
+}
+
+// /-\d{8}$/ — strips a trailing date suffix from the override to get the base id.
+fn date_suffix_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"-\d{8}$").unwrap())
+}
+
+/// Maps a target model base id to its friendly display name. Mirrors
+/// TARGET_FRIENDLY_NAMES in reference/pino/src/model.js.
+fn target_friendly_name(base: &str) -> Option<&'static str> {
+    match base {
+        "claude-opus-4-6" => Some("Opus 4.6"),
+        "claude-opus-4-5" => Some("Opus 4.5"),
+        "claude-sonnet-4-6" => Some("Sonnet 4.6"),
+        "claude-sonnet-4-5" => Some("Sonnet 4.5"),
+        "claude-haiku-4-5" => Some("Haiku 4.5"),
+        _ => None,
+    }
+}
+
+fn apply_model_override(body: &mut Value, model: &str) {
+    let obj = match body.as_object_mut() {
+        Some(o) => o,
+        None => return,
+    };
+    // Replace the top-level model field (server.js: parsed.model = MODEL_OVERRIDE).
+    obj.insert("model".to_string(), Value::String(model.to_string()));
+
+    // Compute the replacement strings (model.js: base/friendly).
+    let base = date_suffix_re().replace(model, "").into_owned();
+    let friendly: String = target_friendly_name(&base)
+        .map(|s| s.to_string())
+        .unwrap_or(base);
+
+    // R18 / Finding 3: closure replacements so a '$' in the override (or friendly)
+    // is emitted literally and NOT expanded as a regex capture template.
+    let model_owned = model.to_string();
+    let rewrite = |text: &str| -> String {
+        let step1 = source_id_re().replace_all(text, |_: &regex::Captures| model_owned.clone());
+        source_name_re()
+            .replace_all(&step1, |_: &regex::Captures| friendly.clone())
+            .into_owned()
+    };
+
+    match obj.get_mut("system") {
+        Some(Value::String(s)) => {
+            *s = rewrite(s);
+        }
+        Some(Value::Array(blocks)) => {
+            for blk in blocks.iter_mut() {
+                if let Some(Value::String(text)) = blk.get_mut("text") {
+                    *text = rewrite(text);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn apply_default_transform(_body: &mut Value, _settings: &PinoSettings) {
