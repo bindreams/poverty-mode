@@ -759,7 +759,17 @@ async fn build_downstream_response(
                 .open(path)
                 .await
             {
-                Ok(file) => Some(Arc::new(tokio::sync::Mutex::new(file))),
+                Ok(file) => {
+                    // Harden to owner-only (0600) on POSIX: this file holds full
+                    // request/response bodies (the most sensitive on-disk
+                    // artifact), so it must match every other file we write
+                    // (paths::atomic_write / ensure_run_dir). No-op on Windows.
+                    // Warn (never fail the response) if hardening fails.
+                    if let Err(e) = crate::paths::harden_file_perms(path) {
+                        tracing::warn!("tee: cannot harden log file {}: {e}", path.display());
+                    }
+                    Some(Arc::new(tokio::sync::Mutex::new(file)))
+                }
                 Err(e) => {
                     tracing::warn!("tee: cannot open log file {}: {e}", path.display());
                     None

@@ -174,6 +174,51 @@ fn os_reaps_grouped_child_when_parent_is_killed_without_cleanup() {
     assert_pid_gone_within(child_pid, Duration::from_secs(30));
 }
 
+/// FIX-C (Windows): when `AssignProcessToJobObject` fails, the child was created
+/// CREATE_SUSPENDED and is NOT in any job — dropping its handle would leave a
+/// suspended ORPHAN that never runs and never dies. `spawn` must terminate it
+/// before its early `return Err(...)`. We force the assign step to fail via the
+/// per-child `extra_env` knob (no global-env race), then assert `spawn` errors
+/// AND that the suspended child it created was reaped (no orphan). Before the fix
+/// the child would linger suspended forever.
+#[cfg(windows)]
+#[test]
+fn assign_to_job_failure_terminates_suspended_child_no_orphan() {
+    let mut group = ProxyGroup::new().expect("create group");
+    let result = group.spawn(
+        &exe(),
+        &["__sleep".to_string()],
+        &[("PM_TEST_FORCE_ASSIGN_FAIL".to_string(), "1".to_string())],
+    );
+    let msg = match result {
+        Ok(_) => panic!("forced assign failure must return Err, not a running child"),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        msg.contains("AssignProcessToJobObject failed"),
+        "error must name the failing step, got: {msg}"
+    );
+
+    // The error embeds the pid of the suspended child `spawn` created and then
+    // terminated. Parse it and prove the OS reaped it (no orphan). `spawn` waits
+    // for the process to exit before returning, so the pid is already gone.
+    let pid = parse_terminated_pid(&msg);
+    assert_pid_gone_within(pid, Duration::from_secs(30));
+}
+
+/// Extract the `pid N` the Windows orphan-prevention path reports in its error
+/// (`"...(terminated suspended child pid 1234): ..."`).
+#[cfg(windows)]
+fn parse_terminated_pid(msg: &str) -> u32 {
+    let marker = "pid ";
+    let start = msg.find(marker).expect("error must report the pid") + marker.len();
+    let rest = &msg[start..];
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    rest[..end].parse().expect("pid parses")
+}
+
 /// THE R16 macOS-BACKSTOP GUARANTEE (death-pipe path, exercised on Linux/CI).
 /// PR_SET_PDEATHSIG is DISABLED for the holder's grouped child (via the child's
 /// OWN Command env `PM_DISABLE_PDEATHSIG=1` — never the test process's global

@@ -267,9 +267,9 @@ mod imp {
     };
     use windows_sys::Win32::System::Pipes::CreatePipe;
     use windows_sys::Win32::System::Threading::{
-        CreateProcessW, GetExitCodeProcess, ResumeThread, WaitForSingleObject, CREATE_SUSPENDED,
-        CREATE_UNICODE_ENVIRONMENT, INFINITE, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
-        STARTUPINFOW,
+        CreateProcessW, GetExitCodeProcess, ResumeThread, TerminateProcess, WaitForSingleObject,
+        CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, INFINITE, PROCESS_INFORMATION,
+        STARTF_USESTDHANDLES, STARTUPINFOW,
     };
 
     struct OwnedChild {
@@ -312,6 +312,23 @@ mod imp {
         }
         block.push(0); // final (double-null) terminator
         block
+    }
+
+    /// Terminate a CREATE_SUSPENDED child that never made it into the running set
+    /// (job-assign or resume failed), then wait for the OS to finish reaping it so
+    /// the caller's early `return Err(...)` cannot leave a suspended orphan. The
+    /// child is suspended (runs no code), so termination resolves promptly; the
+    /// wait awaits an OS-completed event we just requested, not a chosen timeout.
+    fn terminate_suspended_orphan(proc: HANDLE) {
+        // SAFETY: `proc` is a live process handle still owned by the caller's
+        // `OwnedHandle` for the duration of this call; terminating a suspended
+        // child is well-defined. Best-effort — we are already on an error path.
+        unsafe {
+            TerminateProcess(proc, 1);
+            // Block until the process is actually gone before the caller drops
+            // (closes) its handle, so no suspended orphan survives the return.
+            WaitForSingleObject(proc, INFINITE);
+        }
     }
 
     impl ProxyGroup {
@@ -456,22 +473,45 @@ mod imp {
             let thread = unsafe { OwnedHandle::from_raw_handle(pi.hThread as *mut _) };
             let pid = pi.dwProcessId;
 
-            // Assign to the job BEFORE the child runs (race closed).
+            // Assign to the job BEFORE the child runs (race closed). If this fails
+            // the child is CREATE_SUSPENDED and NOT in any job: dropping `process`
+            // only closes the handle, leaving a suspended ORPHAN that never runs and
+            // never dies. Terminate it before returning so it cannot leak.
             let job_raw = self.job.as_raw_handle();
             let proc_raw = process.as_raw_handle();
+            // Test-only fault injection: force the assign step to be treated as
+            // failed so the orphan-prevention path is exercised hermetically. The
+            // knob rides the per-child `extra_env` slice (NOT the process's global
+            // env), so a test sets it without any env-mutation race. Inert in
+            // production (never set outside tests).
+            let force_assign_fail = extra_env
+                .iter()
+                .any(|(k, v)| k == "PM_TEST_FORCE_ASSIGN_FAIL" && v == "1");
             // SAFETY: both are valid handles owned by us for this call.
-            if unsafe { AssignProcessToJobObject(job_raw as HANDLE, proc_raw as HANDLE) } == 0 {
-                return Err(anyhow::anyhow!(
-                    "AssignProcessToJobObject failed: {}",
+            let assigned = !force_assign_fail
+                && unsafe { AssignProcessToJobObject(job_raw as HANDLE, proc_raw as HANDLE) } != 0;
+            if !assigned {
+                let err = if force_assign_fail {
+                    std::io::Error::other("forced via extra_env PM_TEST_FORCE_ASSIGN_FAIL=1")
+                } else {
                     std::io::Error::last_os_error()
+                };
+                terminate_suspended_orphan(proc_raw as HANDLE);
+                return Err(anyhow::anyhow!(
+                    "AssignProcessToJobObject failed (terminated suspended child pid {pid}): {err}"
                 ));
             }
-            // Now let it run.
+            // Now let it run. If ResumeThread fails the child is still suspended
+            // (it is in the job, but dropping the job handle only triggers
+            // kill-on-job-close once EVERY handle to the job closes — and `self`
+            // still holds one, so this child would hang suspended until full
+            // teardown). Terminate it before returning so it cannot leak.
             // SAFETY: pi.hThread is the suspended primary thread of the child.
             if unsafe { ResumeThread(pi.hThread) } == u32::MAX {
+                let err = std::io::Error::last_os_error();
+                terminate_suspended_orphan(proc_raw as HANDLE);
                 return Err(anyhow::anyhow!(
-                    "ResumeThread failed: {}",
-                    std::io::Error::last_os_error()
+                    "ResumeThread failed (terminated suspended child pid {pid}): {err}"
                 ));
             }
 

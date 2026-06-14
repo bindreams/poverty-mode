@@ -753,6 +753,53 @@ async fn streaming_response_is_tee_d_to_log_file_when_configured() {
     );
 }
 
+// FIX-C: the body-tee log holds full request/response bodies — the most
+// sensitive on-disk artifact — so on POSIX it must be owner-only (0600), like
+// every other file poverty-mode writes (paths::atomic_write / ensure_run_dir).
+// Before the fix the engine created it with OpenOptions create+append and left
+// it at the process umask default (typically 0644: world-readable), leaking
+// captured prompts/responses to other local users.
+#[cfg(unix)]
+#[tokio::test]
+async fn tee_log_file_is_owner_only_0600_on_unix() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let stub = start_stub_async("event: message\ndata: {\"a\":1}\n\n").await;
+    let shutdown = std::sync::Arc::new(Notify::new());
+    let shutdown_fut = {
+        let s = shutdown.clone();
+        async move { s.notified().await }
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let log_path = dir.path().join("pino-perms.log");
+    let cfg = EngineConfig {
+        name: ProxyName::Pino,
+        listen: "127.0.0.1:0".parse().unwrap(),
+        upstream: upstream(&format!("http://127.0.0.1:{}", stub.port)),
+        run_id: "01J0PERM".to_string(),
+        log_file: Some(log_path.clone()),
+        transform: TransformKind::None,
+    };
+    let bound = bind_engine(cfg, shutdown_fut).await.expect("bind");
+    let port = bound.local_addr.port();
+
+    let (status, _) = raw_post(port, "/v1/messages", r#"{"messages":[]}"#).await;
+    assert_eq!(status, StatusCode::OK);
+
+    shutdown.notify_waiters();
+    bound.handle.await.expect("join").expect("engine ok");
+
+    let mode = std::fs::metadata(&log_path)
+        .expect("log file exists")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(
+        mode, 0o600,
+        "body-tee log must be hardened to 0600 (was {mode:o})"
+    );
+}
+
 #[tokio::test]
 async fn tee_log_file_port_placeholder_resolves_to_bound_port() {
     // The orchestrator builds each hop's body-log path BEFORE the OS assigns the
