@@ -675,45 +675,105 @@ pub async fn run_command(
     build_and_run(chain, tail, &agent, argv).await
 }
 
+/// The Central install/login/start/health operations the orchestrator drives,
+/// behind a seam (the same injection style as [`manager::ProxyManager`], R15) so
+/// the central-tail orchestration is unit-testable without a real `jbcentral`
+/// daemon. The v1 impl is [`RealCentral`], which forwards to the live
+/// `crate::central` functions (M8).
+///
+/// Every method is SYNCHRONOUS/blocking (R5): the real impl shells out, hits the
+/// network, and does blocking health GETs — callers run the whole pipeline via
+/// `tokio::task::spawn_blocking` (see `run_command`).
+trait CentralOps {
+    /// Resolve the jbcentral version to use (R4): the entry's pinned version if
+    /// set, else the live `latest/version.txt` with fallback to the default.
+    fn resolve_version(&self, cfg_pinned: Option<&str>) -> String;
+    /// Ensure `version` is installed; return the binary path.
+    fn ensure_installed(&self, version: &str) -> anyhow::Result<PathBuf>;
+    /// Ensure the user is logged in (interactive login if needed).
+    fn ensure_logged_in(&self, bin: &std::path::Path) -> anyhow::Result<()>;
+    /// Configure + start the daemon for `version`, requesting `port`; return the
+    /// live `CentralInfo`.
+    fn start(
+        &self,
+        bin: &std::path::Path,
+        port: Option<u16>,
+        version: &str,
+    ) -> anyhow::Result<CentralInfo>;
+    /// True iff the daemon at `port` answers `/health`.
+    fn health(&self, port: u16) -> bool;
+}
+
+/// Production [`CentralOps`]: forwards to the live `crate::central` pipeline (M8).
+struct RealCentral;
+
+impl CentralOps for RealCentral {
+    fn resolve_version(&self, cfg_pinned: Option<&str>) -> String {
+        central::resolve_version(cfg_pinned)
+    }
+    fn ensure_installed(&self, version: &str) -> anyhow::Result<PathBuf> {
+        central::ensure_installed(version)
+    }
+    fn ensure_logged_in(&self, bin: &std::path::Path) -> anyhow::Result<()> {
+        central::ensure_logged_in(bin)
+    }
+    fn start(
+        &self,
+        bin: &std::path::Path,
+        port: Option<u16>,
+        version: &str,
+    ) -> anyhow::Result<CentralInfo> {
+        central::start(bin, port, version)
+    }
+    fn health(&self, port: u16) -> bool {
+        central::health(port)
+    }
+}
+
 /// Ensure the Central singleton is installed, logged in, and started; return its
 /// CentralInfo (port + secret). Central is always the tail and is never torn down
 /// on session exit (design §5.7/§9). SYNCHRONOUS (R5-blocking calls, incl.
 /// interactive login) — callers run it via `spawn_blocking`.
 ///
-/// The install/login/start/health primitives this delegates to live in
-/// `crate::central` and are FILLED by M8 (`central::ensure_installed`,
-/// `central::ensure_logged_in`, `central::start`, `central::health`,
-/// `central::pinned_version` — see the M8 milestone contract). Until M8 lands,
-/// requesting a central tail fails LOUDLY here (never a silent no-op or a fake
-/// `CentralInfo`); the orchestration wiring around it — off-executor dispatch
-/// (R5), version resolved once and threaded into `start` (R4) — is in place so M8
-/// only fills the `central::*` bodies. The shape below is what M8 makes live:
-///
-/// ```ignore
-/// let version = central::pinned_version(pinned.as_deref());
-/// let bin = central::ensure_installed(&version)?;
-/// central::ensure_logged_in(&bin)?;
-/// let info = central::start(&bin, port, &version)?;
-/// if !central::health(info.port) {
-///     anyhow::bail!("JB Central started but /health did not report healthy");
-/// }
-/// Ok(info)
-/// ```
+/// Thin production wrapper over [`ensure_central_started_with`] with the real
+/// `crate::central` pipeline ([`RealCentral`]).
 fn ensure_central_started(chain: &[ResolvedProxy]) -> anyhow::Result<CentralInfo> {
+    ensure_central_started_with(chain, &RealCentral)
+}
+
+/// Drive the central-tail pipeline through a [`CentralOps`] seam (R4/R5): resolve
+/// the version once (from the trailing Central entry's pinned version), install,
+/// log in, start at the entry's requested port, then health-check the LIVE
+/// daemon's port (fail-closed if it never reports healthy).
+fn ensure_central_started_with(
+    chain: &[ResolvedProxy],
+    ops: &dyn CentralOps,
+) -> anyhow::Result<CentralInfo> {
     // Caller invariant: only reached when central is the tail (see `run_command`).
-    debug_assert!(
-        matches!(
-            chain.last().map(|p| &p.settings),
-            Some(ProxySettings::Central(_))
-        ),
-        "ensure_central_started called without a central tail"
-    );
-    let _ = chain;
-    anyhow::bail!(
-        "JB Central is requested as the chain tail, but central install/start \
-         support is not yet wired (milestone M8). Run without a `central` tail, \
-         or wait for the JB Central milestone."
-    );
+    let central_settings = match chain.last().map(|p| &p.settings) {
+        Some(ProxySettings::Central(c)) => c,
+        _ => {
+            debug_assert!(
+                false,
+                "ensure_central_started called without a central tail"
+            );
+            anyhow::bail!("internal error: ensure_central_started called without a central tail");
+        }
+    };
+    let port = central_settings.port;
+    let pinned = central_settings.pinned_version.clone();
+
+    // R4: resolve the version ONCE (live latest-or-fallback unless pinned), then
+    // thread the SAME value into install and start so the installed asset, the
+    // `config set pinned-version`, and the running daemon all agree.
+    let version = ops.resolve_version(pinned.as_deref());
+    let bin = ops.ensure_installed(&version)?;
+    ops.ensure_logged_in(&bin)?;
+    let info = ops.start(&bin, port, &version)?;
+    if !ops.health(info.port) {
+        anyhow::bail!("JB Central started but /health did not report healthy");
+    }
+    Ok(info)
 }
 
 #[cfg(test)]

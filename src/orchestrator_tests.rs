@@ -666,3 +666,217 @@ fn hop_log_file_embeds_literal_port_token_per_proxy() {
         "headroom-{port}.log"
     );
 }
+
+// ensure_central_started (FIX-A: central-tail orchestration wiring) =====
+//
+// The production `ensure_central_started` must drive the REAL `central::*`
+// install/login/start/health pipeline (R4/R5/M8) — not the removed M6
+// placeholder that `bail!`ed "(milestone M8)". These tests pin the orchestration
+// through the `CentralOps` seam (the same injection style as `ProxyManager`,
+// R15), so the seam cannot silently regress to the bail or to wrong threading.
+
+use std::cell::RefCell;
+use std::path::Path;
+
+/// A recording fake `CentralOps`: captures the exact arguments the orchestrator
+/// threads into each central operation and returns scripted results, so a test
+/// asserts the call order, the resolved version, and the port handed to `start`.
+struct FakeCentralOps {
+    calls: RefCell<Vec<String>>,
+    /// What `resolve_version` returns (and records the `cfg_pinned` it saw).
+    resolved_version: String,
+    /// Captured `cfg_pinned` passed to `resolve_version`.
+    seen_pinned: RefCell<Option<Option<String>>>,
+    /// Captured `version` passed to `ensure_installed`.
+    seen_install_version: RefCell<Option<String>>,
+    /// Captured `(port, version)` passed to `start`.
+    seen_start: RefCell<Option<(Option<u16>, String)>>,
+    /// Captured `port` passed to `health`.
+    seen_health_port: RefCell<Option<u16>>,
+    /// What `start` returns.
+    start_info: CentralInfo,
+    /// What `health` returns.
+    health_ok: bool,
+}
+
+impl FakeCentralOps {
+    /// A fake scripted with `resolved_version`, the `CentralInfo` `start` returns,
+    /// and whether `health` reports OK. All capture slots start empty.
+    fn new(resolved_version: &str, start_info: CentralInfo, health_ok: bool) -> Self {
+        FakeCentralOps {
+            calls: RefCell::new(Vec::new()),
+            resolved_version: resolved_version.to_string(),
+            seen_pinned: RefCell::new(None),
+            seen_install_version: RefCell::new(None),
+            seen_start: RefCell::new(None),
+            seen_health_port: RefCell::new(None),
+            start_info,
+            health_ok,
+        }
+    }
+}
+
+impl CentralOps for FakeCentralOps {
+    fn resolve_version(&self, cfg_pinned: Option<&str>) -> String {
+        self.calls.borrow_mut().push("resolve_version".to_string());
+        *self.seen_pinned.borrow_mut() = Some(cfg_pinned.map(str::to_string));
+        self.resolved_version.clone()
+    }
+    fn ensure_installed(&self, version: &str) -> anyhow::Result<PathBuf> {
+        self.calls.borrow_mut().push("ensure_installed".to_string());
+        *self.seen_install_version.borrow_mut() = Some(version.to_string());
+        Ok(PathBuf::from("/fake/jbcentral"))
+    }
+    fn ensure_logged_in(&self, _bin: &Path) -> anyhow::Result<()> {
+        self.calls.borrow_mut().push("ensure_logged_in".to_string());
+        Ok(())
+    }
+    fn start(&self, _bin: &Path, port: Option<u16>, version: &str) -> anyhow::Result<CentralInfo> {
+        self.calls.borrow_mut().push("start".to_string());
+        *self.seen_start.borrow_mut() = Some((port, version.to_string()));
+        Ok(self.start_info.clone())
+    }
+    fn health(&self, port: u16) -> bool {
+        self.calls.borrow_mut().push("health".to_string());
+        *self.seen_health_port.borrow_mut() = Some(port);
+        self.health_ok
+    }
+}
+
+fn central_rp_with(port: Option<u16>, pinned: Option<&str>) -> ResolvedProxy {
+    ResolvedProxy {
+        name: ProxyName::Central,
+        settings: ProxySettings::Central(CentralSettings {
+            port,
+            pinned_version: pinned.map(str::to_string),
+        }),
+    }
+}
+
+#[test]
+fn ensure_central_started_drives_real_central_pipeline_in_order() {
+    let ops = FakeCentralOps::new(
+        "0.2.9",
+        CentralInfo {
+            port: 41733,
+            secret: "s3cr3t".to_string(),
+        },
+        true,
+    );
+    let chain = vec![pino_rp(), central_rp_with(Some(20000), Some("9.9.9"))];
+
+    let info = ensure_central_started_with(&chain, &ops).expect("central start must succeed");
+
+    // The seam returns exactly what `start` produced.
+    assert_eq!(
+        info,
+        CentralInfo {
+            port: 41733,
+            secret: "s3cr3t".to_string()
+        }
+    );
+    // It drove the real pipeline (NOT the removed M8 bail), in order.
+    assert_eq!(
+        *ops.calls.borrow(),
+        vec![
+            "resolve_version",
+            "ensure_installed",
+            "ensure_logged_in",
+            "start",
+            "health"
+        ]
+    );
+    // R4: version is resolved from the entry's pinned_version (live-or-fallback),
+    // then threaded unchanged into install and start.
+    assert_eq!(
+        ops.seen_pinned.borrow().clone(),
+        Some(Some("9.9.9".to_string()))
+    );
+    assert_eq!(
+        ops.seen_install_version.borrow().clone(),
+        Some("0.2.9".to_string())
+    );
+    // The Central entry's port is threaded into `start`; health probes the
+    // LIVE daemon's port from the returned CentralInfo (not the requested one).
+    assert_eq!(
+        ops.seen_start.borrow().clone(),
+        Some((Some(20000), "0.2.9".to_string()))
+    );
+    assert_eq!(*ops.seen_health_port.borrow(), Some(41733));
+}
+
+#[test]
+fn ensure_central_started_threads_default_when_unpinned_and_no_port() {
+    let ops = FakeCentralOps::new(
+        "0.2.9",
+        CentralInfo {
+            port: 19516,
+            secret: "x".to_string(),
+        },
+        true,
+    );
+    // central-only chain, port: None, pinned_version: None.
+    let chain = vec![central_rp_with(None, None)];
+
+    ensure_central_started_with(&chain, &ops).unwrap();
+
+    assert_eq!(ops.seen_pinned.borrow().clone(), Some(None));
+    assert_eq!(
+        ops.seen_start.borrow().clone(),
+        Some((None, "0.2.9".to_string()))
+    );
+}
+
+#[test]
+fn ensure_central_started_fails_closed_when_unhealthy() {
+    let ops = FakeCentralOps::new(
+        "0.2.9",
+        CentralInfo {
+            port: 5,
+            secret: "x".to_string(),
+        },
+        false, // daemon started but never reports healthy
+    );
+    let chain = vec![central_rp_with(None, None)];
+
+    let err = ensure_central_started_with(&chain, &ops).unwrap_err();
+    let m = err.to_string().to_lowercase();
+    assert!(
+        m.contains("health") || m.contains("healthy"),
+        "unhealthy central must fail closed, naming health: {m}"
+    );
+    // It must NOT be the removed M8 placeholder bail.
+    assert!(
+        !m.contains("milestone m8") && !m.contains("not yet wired"),
+        "must drive the real pipeline, not the placeholder: {m}"
+    );
+}
+
+#[test]
+fn ensure_central_started_real_path_is_no_longer_the_m8_placeholder() {
+    // Drive the REAL production `ensure_central_started` (the wrapper that passes
+    // the real `central::*` ops) hermetically and network-free: point the cache
+    // at an empty temp dir and pin a version that has no checksum pin. The real
+    // pipeline then resolves the (pinned, no-network) version, finds nothing
+    // installed, and `central::ensure_installed` fails CLOSED at the mandatory
+    // checksum gate ("no pinned sha256 ... refusing to download unverified") —
+    // BEFORE any network or child process. The error must be that real central
+    // error, NEVER the removed "milestone M8 / not yet wired" placeholder bail.
+    let cache = tempfile::tempdir().unwrap();
+    let _guard = crate::test_support::EnvVarGuard::set("POVERTY_CACHE_DIR", Some(cache.path()));
+
+    // Pinned (non-blank) => `resolve_version` returns it verbatim, no network.
+    // Unknown version => `pinned_sha256` is None => install fails closed.
+    let chain = vec![central_rp_with(None, Some("0.0.0-test-nonexistent"))];
+    let err = ensure_central_started(&chain).unwrap_err();
+    let m = err.to_string().to_lowercase();
+    assert!(
+        !m.contains("milestone m8") && !m.contains("not yet wired"),
+        "real path must not be the M8 placeholder bail: {m}"
+    );
+    // Positive proof the real install gate was reached.
+    assert!(
+        m.contains("sha256") || m.contains("checksum") || m.contains("unverified"),
+        "real path must reach central::ensure_installed's checksum gate: {m}"
+    );
+}
