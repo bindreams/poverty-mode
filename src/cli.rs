@@ -433,7 +433,15 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
                 .build()?;
             rt.block_on(crate::status::run_status())
         }
-        Command::Doctor => Err(Error::NotImplemented("doctor").into()),
+        Command::Doctor => {
+            // R23g: MODIFY the M3 NotImplemented arm. `run_doctor` is synchronous
+            // (pure file/settings + toolchain checks); it returns `Ok(false)` when
+            // any Error-severity finding exists, which we map to a non-zero exit.
+            if !crate::doctor::run_doctor()? {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
         Command::Clean => Err(Error::NotImplemented("clean").into()),
         Command::SpawnHolder => {
             use crate::orchestrator::teardown::ProxyGroup;

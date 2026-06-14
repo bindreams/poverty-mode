@@ -57,13 +57,31 @@ fn status_subcommand_runs_and_renders() {
         .stdout(contains("no live runs"));
 }
 
+/// M10.5 wired `doctor` to the real handler (R23g): the M3 NotImplemented arm is
+/// gone, so the end-to-end `doctor` invocation now runs the toolchain/settings
+/// checks and renders findings. Run from a temp CWD with no project `.claude`
+/// layers so the project-settings sources are empty; the exit code still depends
+/// on host-level layers (a managed-policy `ANTHROPIC_BASE_URL` would be an
+/// `Error`), so this asserts only that real doctor diagnostics are produced — not
+/// a fixed exit code.
 #[test]
-fn doctor_subcommand_is_not_yet_implemented() {
+fn doctor_subcommand_runs_and_renders() {
+    let tmp = tempfile::tempdir().unwrap();
     let mut cmd = Command::cargo_bin("poverty-mode").unwrap();
-    cmd.arg("doctor")
-        .assert()
-        .failure()
-        .stderr(contains("not yet implemented: doctor"));
+    let output = cmd.arg("doctor").current_dir(tmp.path()).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Real diagnostics, not the old NotImplemented stub.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("not yet implemented"),
+        "doctor must be implemented, got stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("no problems detected")
+            || stdout.contains("WARN")
+            || stdout.contains("ERROR"),
+        "expected doctor diagnostics, got stdout: {stdout:?} stderr: {stderr:?}"
+    );
 }
 
 #[test]

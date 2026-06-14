@@ -153,3 +153,92 @@ pub fn settings_layer_paths() -> Result<Vec<(SettingsLayer, PathBuf)>> {
     ));
     Ok(out)
 }
+
+use std::fmt::Write as _;
+
+/// The five target (os, arch) pairs we build single binaries for.
+pub fn target_is_supported(os: &str, arch: &str) -> bool {
+    matches!(
+        (os, arch),
+        ("windows", "x86_64")
+            | ("macos", "x86_64")
+            | ("macos", "aarch64")
+            | ("linux", "x86_64")
+            | ("linux", "aarch64")
+    )
+}
+
+/// Whether a downloadable jbcentral asset exists for this (os, arch).
+/// JetBrains ships no windows-arm64 asset; everything else we support has one.
+pub fn central_asset_available(os: &str, arch: &str) -> bool {
+    if (os, arch) == ("windows", "aarch64") {
+        return false;
+    }
+    target_is_supported(os, arch)
+}
+
+/// Toolchain/target diagnostics for the given (os, arch). All findings are
+/// `FindingDomain::Toolchain` with `layer: None`.
+pub fn analyze_toolchain(os: &str, arch: &str) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    if !target_is_supported(os, arch) {
+        findings.push(Finding {
+            domain: FindingDomain::Toolchain,
+            layer: None,
+            severity: Severity::Error,
+            message: format!("unsupported build target {os}/{arch}"),
+            found_value: None,
+        });
+    }
+    if !central_asset_available(os, arch) {
+        findings.push(Finding {
+            domain: FindingDomain::Toolchain,
+            layer: None,
+            severity: Severity::Warn,
+            message: format!(
+                "no jbcentral asset for {os}/{arch}; the central proxy cannot be used on this platform"
+            ),
+            found_value: None,
+        });
+    }
+    findings
+}
+
+/// Render findings, errors first then warnings; pure.
+pub fn render_findings(findings: &[Finding]) -> String {
+    if findings.is_empty() {
+        return "doctor: no problems detected\n".to_string();
+    }
+    let mut out = String::new();
+    for f in findings.iter().filter(|f| f.severity == Severity::Error) {
+        let _ = writeln!(out, "ERROR: {}", f.message);
+    }
+    for f in findings.iter().filter(|f| f.severity == Severity::Warn) {
+        let _ = writeln!(out, "WARN:  {}", f.message);
+    }
+    out
+}
+
+/// Gather real inputs and print diagnostics. Side-effecting entry point.
+///
+/// Returns `Ok(false)` when any `Severity::Error` finding exists, so the caller can
+/// set a non-zero process exit code.
+pub fn run_doctor() -> Result<bool> {
+    let mut findings = Vec::new();
+
+    // File-backed settings layers. `doctor` cannot know the ephemeral run port, so
+    // any non-empty ANTHROPIC_BASE_URL is a conflict candidate: compare against an
+    // impossible sentinel so every set value surfaces.
+    for (layer, path) in settings_layer_paths()? {
+        let source = read_settings_layer(layer, &path);
+        findings.extend(analyze_base_url(&[source], "\u{0}none"));
+    }
+
+    findings.extend(analyze_toolchain(
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    ));
+
+    print!("{}", render_findings(&findings));
+    Ok(!findings.iter().any(|f| f.severity == Severity::Error))
+}
