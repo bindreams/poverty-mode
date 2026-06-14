@@ -277,36 +277,12 @@ fn proxy_body_log_file_does_not_set_global_log_file() {
     }
 }
 
-// Characterization (labeled per R12): the `Run` arm is now WIRED — it is no longer
-// the M1 `NotImplemented("run")` stub, and M9.11 replaced the old M9-deferral bail
-// with a real call into the TUI picker. We drive `--interactive` so the arm reaches
-// `tui::run_picker` WITHOUT execing an agent or calling `process::exit` (the happy
-// path does both): under the test harness stdio is not a TTY, so the picker's
-// non-TTY guard fails loudly with `TuiError::NotATerminal` — proving the request
-// reached the picker rather than the removed `NotImplemented`/`milestone M9` stubs.
-// A hermetic `XDG_CONFIG_HOME` keeps `Config::load_or_create` from reading the
-// developer's real config.
-#[test]
-fn dispatch_run_is_wired_not_the_not_implemented_stub() {
-    let _guard = crate::test_support::ConfigHomeGuard::new();
-    let cli =
-        Cli::try_parse_from(["poverty-mode", "run", "--interactive", "--", "claude"]).unwrap();
-    let err = dispatch(cli).unwrap_err();
-    let msg = err.to_string();
-    assert!(
-        !msg.contains("not yet implemented: run"),
-        "run is wired now; must not return the M1 NotImplemented stub: {msg}"
-    );
-    assert!(
-        !msg.contains("milestone M9"),
-        "the M9-deferral placeholder must be gone now that the TUI is wired: {msg}"
-    );
-    assert!(
-        msg.contains("requires a terminal"),
-        "run --interactive should reach the TUI picker and hit its non-TTY guard: {msg}"
-    );
-}
-
+// NOTE: the "run --interactive reaches the picker (not the NotImplemented/milestone-M9
+// stub) and hits the non-TTY guard" assertion lives in tests/interactive_dispatch.rs as a
+// BINARY-level assert_cmd check. It cannot be an in-process lib test: run_picker's guard
+// queries the real OS fds via IsTerminal, but libtest only redirects Rust's Stdout writer
+// (not fds 0/1), so an in-process call under an interactive `cargo test` sees a live TTY,
+// skips the guard, and hangs on event::read. The piped assert_cmd child is non-TTY regardless.
 #[test]
 fn proxy_bool_flags_are_presence_with_negations() {
     // Resolved values are read via the accessors (auto_cache(), strip_ansi(),
