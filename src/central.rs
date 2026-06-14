@@ -349,6 +349,28 @@ pub fn run_status_text(bin: &Path) -> anyhow::Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// Run `<bin> status` and classify the login state from the real exit code AND output (R20).
+///
+/// `run_status_text` discards the exit code, but `classify_login_status` needs it: with a `None`
+/// code it short-circuits to `Unknown` and can never report logged-in/out. The `status`/`doctor`
+/// login line must therefore go through this helper so a logged-in central (exit 0 + banner) renders
+/// as such. Errors if the process cannot be spawned; a non-zero exit is classified, not an error.
+///
+/// **R5 contract:** synchronous (spawns a child process). Call via `spawn_blocking` from async code.
+pub fn run_status_classified(bin: &Path) -> anyhow::Result<CentralLoginState> {
+    let output = std::process::Command::new(bin)
+        .arg("status")
+        .output()
+        .with_context(|| format!("running {} status", bin.display()))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Ok(classify_login_status(
+        output.status.code(),
+        &stdout,
+        &stderr,
+    ))
+}
+
 /// Detect login state by running `<bin> status`; if logged out, surface and run the interactive
 /// `<bin> login` (inheriting stdio so the browser-OAuth flow reaches the user). Never bypasses.
 ///

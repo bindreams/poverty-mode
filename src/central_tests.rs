@@ -331,6 +331,72 @@ fn run_status_text_errors_when_binary_is_missing() {
     );
 }
 
+/// Write a fake `jbcentral` into `dir` that prints `stdout`, exits with `code`, and ignores
+/// its arguments. Cross-platform: a `.bat` on Windows (executed via the full path) and a
+/// `chmod +x` shell script elsewhere. Returns the executable's path.
+fn write_fake_jbcentral(dir: &std::path::Path, stdout: &str, code: i32) -> std::path::PathBuf {
+    let bin = if cfg!(windows) {
+        let p = dir.join("jbcentral.bat");
+        // `@echo off` so the command line itself is not echoed into stdout.
+        std::fs::write(
+            &p,
+            format!("@echo off\r\necho {stdout}\r\nexit /b {code}\r\n"),
+        )
+        .unwrap();
+        p
+    } else {
+        let p = dir.join("jbcentral");
+        std::fs::write(&p, format!("#!/bin/sh\necho '{stdout}'\nexit {code}\n")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&p).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&p, perms).unwrap();
+        }
+        p
+    };
+    bin
+}
+
+#[test]
+fn run_status_classified_reports_logged_in_when_status_exits_zero() {
+    // Genuine wiring test (R20): the real exit code from `jbcentral status` must reach the
+    // classifier. A logged-in central exits 0 with a "Logged in" banner and must classify as
+    // LoggedIn -- NOT Unknown (which is what dropping the exit code would yield).
+    let tmp = tempfile::tempdir().unwrap();
+    let bin = write_fake_jbcentral(tmp.path(), "Logged in as user@example.com", 0);
+    let state = run_status_classified(&bin).unwrap();
+    assert_eq!(
+        state,
+        CentralLoginState::LoggedIn,
+        "exit 0 + banner => logged in"
+    );
+}
+
+#[test]
+fn run_status_classified_reports_logged_out_on_nonzero_exit() {
+    // A logged-out central exits non-zero; the real code must drive a LoggedOut classification.
+    let tmp = tempfile::tempdir().unwrap();
+    let bin = write_fake_jbcentral(tmp.path(), "not logged in; run jbcentral login", 1);
+    let state = run_status_classified(&bin).unwrap();
+    assert_eq!(
+        state,
+        CentralLoginState::LoggedOut,
+        "non-zero exit => logged out"
+    );
+}
+
+#[test]
+fn run_status_classified_errors_when_binary_is_missing() {
+    let missing = std::path::Path::new("/nonexistent/pm-jbcentral-does-not-exist");
+    let err = run_status_classified(missing).unwrap_err();
+    assert!(
+        err.to_string().contains("status"),
+        "error should name the failed `status` invocation: {err}"
+    );
+}
+
 // start/health argv + env =====
 
 #[test]

@@ -389,14 +389,12 @@ pub async fn run_status() -> Result<()> {
         }
         let wire = read_wire_config();
         // Login truth from `jbcentral status` (R20), not from any secret on disk.
-        // `run_status_text` (R23c) yields the status stdout; the canonical
-        // `classify_login_status(code, stdout, stderr)` (R23c) is fed that stdout
-        // (code/stderr unavailable through the stdout-only helper -> None / "").
+        // `run_status_classified` (R23c) captures BOTH the exit code and output and runs the
+        // canonical `classify_login_status`; the exit code is load-bearing -- without it the
+        // classifier short-circuits to Unknown and could never report logged-in/out.
         let login = match newest_central_binary(&cache_for_blocking)? {
-            Some(bin) => crate::central::run_status_text(&bin)
-                .map(|stdout| {
-                    CentralLogin::from(crate::central::classify_login_status(None, &stdout, ""))
-                })
+            Some(bin) => crate::central::run_status_classified(&bin)
+                .map(CentralLogin::from)
                 .unwrap_or(CentralLogin::Unknown),
             None => CentralLogin::Unknown,
         };
