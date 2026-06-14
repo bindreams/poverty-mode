@@ -277,11 +277,15 @@ fn proxy_body_log_file_does_not_set_global_log_file() {
     }
 }
 
-// Characterization (labeled per R12): the `Run` arm is now WIRED by M6.13 — it is
-// no longer the M1 `NotImplemented("run")` stub. We drive `--interactive` so the
-// arm reaches its M9-deferral bail WITHOUT execing an agent or calling
-// `process::exit` (the happy path does both). A hermetic `XDG_CONFIG_HOME` keeps
-// `Config::load_or_create` from reading the developer's real config.
+// Characterization (labeled per R12): the `Run` arm is now WIRED — it is no longer
+// the M1 `NotImplemented("run")` stub, and M9.11 replaced the old M9-deferral bail
+// with a real call into the TUI picker. We drive `--interactive` so the arm reaches
+// `tui::run_picker` WITHOUT execing an agent or calling `process::exit` (the happy
+// path does both): under the test harness stdio is not a TTY, so the picker's
+// non-TTY guard fails loudly with `TuiError::NotATerminal` — proving the request
+// reached the picker rather than the removed `NotImplemented`/`milestone M9` stubs.
+// A hermetic `XDG_CONFIG_HOME` keeps `Config::load_or_create` from reading the
+// developer's real config.
 #[test]
 fn dispatch_run_is_wired_not_the_not_implemented_stub() {
     let _guard = crate::test_support::ConfigHomeGuard::new();
@@ -294,8 +298,12 @@ fn dispatch_run_is_wired_not_the_not_implemented_stub() {
         "run is wired now; must not return the M1 NotImplemented stub: {msg}"
     );
     assert!(
-        msg.contains("--interactive") && msg.to_lowercase().contains("tui"),
-        "run --interactive should defer to the M9 TUI: {msg}"
+        !msg.contains("milestone M9"),
+        "the M9-deferral placeholder must be gone now that the TUI is wired: {msg}"
+    );
+    assert!(
+        msg.contains("requires a terminal"),
+        "run --interactive should reach the TUI picker and hit its non-TTY guard: {msg}"
     );
 }
 

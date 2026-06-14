@@ -341,27 +341,42 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
             agent_argv,
         } => {
             let config = crate::config::Config::load_or_create()?;
-            let cli_names: Option<Vec<ProxyName>> = match proxies {
-                Some(csv) => Some(
-                    csv.iter()
-                        .map(|s| match s.as_str() {
-                            "pino" => Ok(ProxyName::Pino),
-                            "headroom" => Ok(ProxyName::Headroom),
-                            "central" => Ok(ProxyName::Central),
-                            other => Err(anyhow::anyhow!("unknown proxy name '{other}'")),
-                        })
-                        .collect::<anyhow::Result<Vec<_>>>()?,
-                ),
-                None => None,
-            };
-            let env_chain = std::env::var("POVERTY_PROXY_CHAIN").ok();
-            let chain = config.resolve_chain(cli_names.as_deref(), env_chain.as_deref())?;
 
-            if interactive {
-                // M9 wires the TUI; until then, --interactive is an explicit error
-                // (never a silent no-op).
-                anyhow::bail!("--interactive requires the TUI (milestone M9)");
-            }
+            // Interactive picker overrides CLI/env/file chain resolution (spec
+            // §5.10). The picker is synchronous (crossterm blocking reads), so it
+            // runs before the Tokio runtime is built. Otherwise resolve the chain
+            // from CLI > env > file (M2 precedence).
+            let chain: Vec<crate::config::ResolvedProxy> = if interactive {
+                match crate::tui::run_picker(&config)? {
+                    crate::tui::reducer::TuiOutcome::Run(resolved) => resolved,
+                    crate::tui::reducer::TuiOutcome::Cancel => {
+                        println!("cancelled");
+                        return Ok(());
+                    }
+                    crate::tui::reducer::TuiOutcome::Continue => {
+                        // run_picker only returns on a terminal outcome; never Continue.
+                        debug_assert!(false, "run_picker returned Continue");
+                        return Ok(());
+                    }
+                }
+            } else {
+                let cli_names: Option<Vec<ProxyName>> = match proxies {
+                    Some(csv) => Some(
+                        csv.iter()
+                            .map(|s| match s.as_str() {
+                                "pino" => Ok(ProxyName::Pino),
+                                "headroom" => Ok(ProxyName::Headroom),
+                                "central" => Ok(ProxyName::Central),
+                                other => Err(anyhow::anyhow!("unknown proxy name '{other}'")),
+                            })
+                            .collect::<anyhow::Result<Vec<_>>>()?,
+                    ),
+                    None => None,
+                };
+                let env_chain = std::env::var("POVERTY_PROXY_CHAIN").ok();
+                config.resolve_chain(cli_names.as_deref(), env_chain.as_deref())?
+            };
+
             if save {
                 // --save persists the resolved order/enabled-set via M2's
                 // canonical helper (R22/R23i): `Config::save_resolved_chain(&self,
