@@ -81,6 +81,100 @@ pub fn compute_agent_env(chain: &[ResolvedProxy], central_is_tail: bool) -> Vec<
     env
 }
 
+use std::path::PathBuf;
+
+use crate::config::ProxySettings;
+use crate::proxy::pino::TailTtl;
+
+/// Everything needed to render one hop's `poverty-mode proxy <name>` argv.
+pub struct ProxyHopSpec<'a> {
+    pub proxy: &'a ResolvedProxy,
+    /// Listen addr — `127.0.0.1:0` for an OS-assigned ephemeral port.
+    pub listen: String,
+    /// The next hop's URL (or the tail upstream for the last hop).
+    pub upstream: String,
+    /// Per-run ULID identity shared by all hops of this run (R10).
+    pub run_id: String,
+    pub log_file: PathBuf,
+}
+
+fn tail_ttl_str(t: TailTtl) -> &'static str {
+    match t {
+        TailTtl::FiveMin => "5m",
+        TailTtl::OneHour => "1h",
+    }
+}
+
+/// Build the exact argv for `current_exe proxy <name> ...` from a hop spec.
+///
+/// The flags are emitted so the argv re-parses through M1's actual `proxy` clap
+/// parser (`orchestrator_tests::proxy_child_args_round_trips_through_clap`):
+/// - the per-proxy body-tee sink is `--body-log-file` (the global `--log-file`
+///   is a separate tracing arg);
+/// - `--auto-cache` / `--strip-ansi` / `--compression` are PRESENCE flags with
+///   `--no-*` companions, so a boolean is encoded by emitting the right flag (or
+///   nothing when the value already matches the CLI default), never a value.
+///
+/// pino default: `auto_cache=false`, `strip_ansi=true`. headroom default:
+/// `compression=false`. Optional flags (`--drop-tools`, `--model-override`) are
+/// omitted when empty/unset.
+pub fn proxy_child_args(spec: &ProxyHopSpec) -> Vec<String> {
+    let mut args = vec![
+        "proxy".to_string(),
+        spec.proxy.name.as_str().to_string(),
+        "--listen".to_string(),
+        spec.listen.clone(),
+        "--upstream".to_string(),
+        spec.upstream.clone(),
+        "--run-id".to_string(),
+        spec.run_id.clone(),
+        "--body-log-file".to_string(),
+        spec.log_file.to_string_lossy().into_owned(),
+    ];
+
+    match &spec.proxy.settings {
+        ProxySettings::Pino(p) => {
+            // auto_cache default is false: emit the presence flag only when on.
+            if p.auto_cache {
+                args.push("--auto-cache".to_string());
+            }
+            args.push("--tail-ttl".to_string());
+            args.push(tail_ttl_str(p.tail_ttl).to_string());
+            if !p.drop_tools.is_empty() {
+                args.push("--drop-tools".to_string());
+                args.push(p.drop_tools.join(","));
+            }
+            // strip_ansi default is true: emit --no-strip-ansi only when off.
+            if !p.strip_ansi {
+                args.push("--no-strip-ansi".to_string());
+            }
+            if let Some(model) = p.model_override.as_ref() {
+                args.push("--model-override".to_string());
+                args.push(model.clone());
+            }
+        }
+        ProxySettings::Headroom(h) => {
+            // compression default is false: emit the explicit flag either way so
+            // the child's resolved value is unambiguous regardless of defaults.
+            if h.compression {
+                args.push("--compression".to_string());
+            } else {
+                args.push("--no-compression".to_string());
+            }
+        }
+        ProxySettings::Central(_) => {
+            // Central is never spawned via `poverty-mode proxy`; it is the
+            // external daemon. The chain builder never passes a Central hop here.
+            debug_assert!(
+                false,
+                "proxy_child_args must never be called for a Central hop"
+            );
+        }
+    }
+
+    args
+}
+
 #[cfg(test)]
 #[path = "orchestrator_tests.rs"]
 mod orchestrator_tests;

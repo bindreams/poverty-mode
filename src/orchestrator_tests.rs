@@ -195,3 +195,251 @@ fn agent_env_for_empty_chain_has_empty_chain_value() {
     assert_eq!(get(&env, "ENABLE_TOOL_SEARCH"), Some("true"));
     assert_eq!(get(&env, "ANTHROPIC_AUTH_TOKEN"), None);
 }
+
+// proxy_child_args =====
+//
+// NOTE (deviation from the M6.4 plan text, see milestone report): the plan's
+// literal argv used `--log-file`, `--strip-ansi false`, and `--compression true`.
+// Those do NOT parse against M1's actual `proxy` CLI: the per-proxy body-tee flag
+// is `--body-log-file` (the global `--log-file` is a different, tracing arg), and
+// `--strip-ansi`/`--auto-cache`/`--compression` are PRESENCE flags with `--no-*`
+// companions, not value flags. M6.4's whole purpose is "the exact `proxy <name>`
+// argv for a self-spawned hop", so the builder MUST emit a parseable argv. These
+// tests pin the corrected, round-trippable argv (the `parses_back` test proves it
+// re-parses through clap to identical resolved settings).
+
+use std::path::PathBuf;
+
+use crate::cli::{Cli, Command};
+use clap::Parser;
+
+fn pino_custom() -> ResolvedProxy {
+    ResolvedProxy {
+        name: ProxyName::Pino,
+        settings: ProxySettings::Pino(PinoSettings {
+            auto_cache: true,
+            tail_ttl: TailTtl::OneHour,
+            drop_tools: vec!["WebFetch".to_string(), "WebSearch".to_string()],
+            strip_ansi: false,
+            model_override: Some("claude-3-5-haiku".to_string()),
+        }),
+    }
+}
+
+#[test]
+fn proxy_child_args_pino_full_flags() {
+    let spec = ProxyHopSpec {
+        proxy: &pino_custom(),
+        listen: "127.0.0.1:0".to_string(),
+        upstream: "http://127.0.0.1:55001".to_string(),
+        run_id: "01HRUN".to_string(),
+        log_file: PathBuf::from("/runs/r1/pino-0.log"),
+    };
+    let args = proxy_child_args(&spec);
+    assert_eq!(
+        args,
+        vec![
+            "proxy".to_string(),
+            "pino".to_string(),
+            "--listen".to_string(),
+            "127.0.0.1:0".to_string(),
+            "--upstream".to_string(),
+            "http://127.0.0.1:55001".to_string(),
+            "--run-id".to_string(),
+            "01HRUN".to_string(),
+            "--body-log-file".to_string(),
+            "/runs/r1/pino-0.log".to_string(),
+            "--auto-cache".to_string(),
+            "--tail-ttl".to_string(),
+            "1h".to_string(),
+            "--drop-tools".to_string(),
+            "WebFetch,WebSearch".to_string(),
+            "--no-strip-ansi".to_string(),
+            "--model-override".to_string(),
+            "claude-3-5-haiku".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn proxy_child_args_pino_minimal_flags_omits_optional() {
+    let spec = ProxyHopSpec {
+        proxy: &pino_rp(),
+        listen: "127.0.0.1:0".to_string(),
+        upstream: "http://127.0.0.1:1".to_string(),
+        run_id: "c".to_string(),
+        log_file: PathBuf::from("/x/pino-0.log"),
+    };
+    let args = proxy_child_args(&spec);
+    // pino_rp(): auto_cache=true, tail_ttl=5m, drop_tools=[], strip_ansi=true, model_override=None
+    assert!(args.contains(&"--auto-cache".to_string()));
+    assert!(args
+        .windows(2)
+        .any(|w| w == ["--tail-ttl".to_string(), "5m".to_string()]));
+    assert!(
+        !args.contains(&"--drop-tools".to_string()),
+        "empty drop_tools omitted: {args:?}"
+    );
+    assert!(
+        !args.contains(&"--model-override".to_string()),
+        "unset model_override omitted: {args:?}"
+    );
+    // strip_ansi=true is the CLI default, so neither --strip-ansi nor
+    // --no-strip-ansi is needed; we emit nothing.
+    assert!(
+        !args.contains(&"--no-strip-ansi".to_string()),
+        "default strip_ansi=true emits no flag: {args:?}"
+    );
+}
+
+#[test]
+fn proxy_child_args_pino_no_auto_cache_omits_flag() {
+    let rp = ResolvedProxy {
+        name: ProxyName::Pino,
+        settings: ProxySettings::Pino(PinoSettings {
+            auto_cache: false,
+            tail_ttl: TailTtl::FiveMin,
+            drop_tools: vec![],
+            strip_ansi: true,
+            model_override: None,
+        }),
+    };
+    let spec = ProxyHopSpec {
+        proxy: &rp,
+        listen: "127.0.0.1:0".to_string(),
+        upstream: "http://127.0.0.1:1".to_string(),
+        run_id: "c".to_string(),
+        log_file: PathBuf::from("/x/pino-0.log"),
+    };
+    let args = proxy_child_args(&spec);
+    assert!(
+        !args.contains(&"--auto-cache".to_string()),
+        "auto-cache off must omit the flag: {args:?}"
+    );
+}
+
+#[test]
+fn proxy_child_args_headroom_compression_flag() {
+    let rp = ResolvedProxy {
+        name: ProxyName::Headroom,
+        settings: ProxySettings::Headroom(HeadroomSettings { compression: true }),
+    };
+    let spec = ProxyHopSpec {
+        proxy: &rp,
+        listen: "127.0.0.1:0".to_string(),
+        upstream: "http://127.0.0.1:2".to_string(),
+        run_id: "c2".to_string(),
+        log_file: PathBuf::from("/x/headroom-1.log"),
+    };
+    let args = proxy_child_args(&spec);
+    assert_eq!(args[0], "proxy");
+    assert_eq!(args[1], "headroom");
+    assert!(
+        args.contains(&"--compression".to_string()),
+        "compression=true emits the presence flag: {args:?}"
+    );
+    assert!(
+        !args.contains(&"--auto-cache".to_string()),
+        "no pino flags on headroom: {args:?}"
+    );
+}
+
+#[test]
+fn proxy_child_args_headroom_no_compression_emits_negation() {
+    let rp = ResolvedProxy {
+        name: ProxyName::Headroom,
+        settings: ProxySettings::Headroom(HeadroomSettings { compression: false }),
+    };
+    let spec = ProxyHopSpec {
+        proxy: &rp,
+        listen: "127.0.0.1:0".to_string(),
+        upstream: "http://127.0.0.1:2".to_string(),
+        run_id: "c2".to_string(),
+        log_file: PathBuf::from("/x/headroom-1.log"),
+    };
+    let args = proxy_child_args(&spec);
+    assert!(
+        args.contains(&"--no-compression".to_string()),
+        "compression=false emits --no-compression: {args:?}"
+    );
+    assert!(
+        !args.contains(&"--compression".to_string()),
+        "compression=false must not emit --compression: {args:?}"
+    );
+}
+
+/// Parse a generated argv back through the real clap `proxy` parser and return
+/// the resolved settings, proving the self-spawn argv is genuinely parseable.
+fn reparse(args: &[String]) -> ResolvedProxy {
+    let mut argv = vec!["poverty-mode".to_string()];
+    argv.extend(args.iter().cloned());
+    let cli = Cli::try_parse_from(&argv).expect("generated proxy argv must parse via clap");
+    let pargs = match cli.command {
+        Command::Proxy(a) => a,
+        other => panic!("expected Command::Proxy, got {other:?}"),
+    };
+    let settings = match pargs.which {
+        ProxyName::Pino => ProxySettings::Pino(PinoSettings {
+            auto_cache: pargs.auto_cache(),
+            tail_ttl: pargs.pino.tail_ttl.into(),
+            drop_tools: pargs
+                .pino
+                .drop_tools
+                .iter()
+                .filter(|s| !s.is_empty())
+                .cloned()
+                .collect(),
+            strip_ansi: pargs.strip_ansi(),
+            model_override: pargs.pino.model_override.clone(),
+        }),
+        ProxyName::Headroom => ProxySettings::Headroom(HeadroomSettings {
+            compression: pargs.compression(),
+        }),
+        ProxyName::Central => panic!("central is never a first-party proxy hop"),
+    };
+    ResolvedProxy {
+        name: pargs.which,
+        settings,
+    }
+}
+
+#[test]
+fn proxy_child_args_round_trips_through_clap() {
+    // Every variant of resolved settings must survive argv -> clap -> settings.
+    for rp in [
+        pino_custom(),
+        pino_rp(),
+        ResolvedProxy {
+            name: ProxyName::Pino,
+            settings: ProxySettings::Pino(PinoSettings {
+                auto_cache: false,
+                tail_ttl: TailTtl::FiveMin,
+                drop_tools: vec![],
+                strip_ansi: true,
+                model_override: None,
+            }),
+        },
+        ResolvedProxy {
+            name: ProxyName::Headroom,
+            settings: ProxySettings::Headroom(HeadroomSettings { compression: true }),
+        },
+        ResolvedProxy {
+            name: ProxyName::Headroom,
+            settings: ProxySettings::Headroom(HeadroomSettings { compression: false }),
+        },
+    ] {
+        let spec = ProxyHopSpec {
+            proxy: &rp,
+            listen: "127.0.0.1:0".to_string(),
+            upstream: "http://127.0.0.1:55001".to_string(),
+            run_id: "01HRUN".to_string(),
+            log_file: PathBuf::from("/runs/r1/hop.log"),
+        };
+        let args = proxy_child_args(&spec);
+        let reparsed = reparse(&args);
+        assert_eq!(
+            reparsed, rp,
+            "argv did not round-trip for {rp:?} -> {args:?}"
+        );
+    }
+}
