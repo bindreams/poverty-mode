@@ -53,3 +53,38 @@ fn new_seeds_items_in_order_with_cursor_at_top() {
     // No hint until a constraint is violated.
     assert_eq!(st.hint(), None);
 }
+
+#[test]
+fn down_moves_cursor_and_clamps_at_bottom() {
+    let mut st = seed_all_disabled(); // 3 rows, cursor 0
+    assert_eq!(st.apply(TuiAction::Down), TuiOutcome::Continue);
+    assert_eq!(st.cursor, 1);
+    assert_eq!(st.apply(TuiAction::Down), TuiOutcome::Continue);
+    assert_eq!(st.cursor, 2);
+    // Already at the last row: clamp, do not wrap.
+    assert_eq!(st.apply(TuiAction::Down), TuiOutcome::Continue);
+    assert_eq!(st.cursor, 2);
+}
+
+#[test]
+fn up_moves_cursor_and_clamps_at_top() {
+    let mut st = seed_all_disabled();
+    st.cursor = 2;
+    assert_eq!(st.apply(TuiAction::Up), TuiOutcome::Continue);
+    assert_eq!(st.cursor, 1);
+    assert_eq!(st.apply(TuiAction::Up), TuiOutcome::Continue);
+    assert_eq!(st.cursor, 0);
+    // Already at the top: clamp, do not wrap.
+    assert_eq!(st.apply(TuiAction::Up), TuiOutcome::Continue);
+    assert_eq!(st.cursor, 0);
+}
+
+#[test]
+fn cursor_movement_never_changes_order_or_selection() {
+    let mut st = seed_all_disabled();
+    let before: Vec<_> = st.items.clone();
+    st.apply(TuiAction::Down);
+    st.apply(TuiAction::Down);
+    st.apply(TuiAction::Up);
+    assert_eq!(st.items, before);
+}

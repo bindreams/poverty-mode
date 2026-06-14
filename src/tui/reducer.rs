@@ -93,10 +93,27 @@ impl TuiState {
         self.hint
     }
 
-    /// Apply one action, returning the outcome. Stub for now; behavior is
-    /// filled in across the following tasks.
-    pub fn apply(&mut self, _a: TuiAction) -> TuiOutcome {
-        TuiOutcome::Continue
+    /// Apply one action, returning the outcome.
+    pub fn apply(&mut self, a: TuiAction) -> TuiOutcome {
+        match a {
+            TuiAction::Up => {
+                if self.cursor > 0 {
+                    self.cursor -= 1;
+                }
+                TuiOutcome::Continue
+            }
+            TuiAction::Down => {
+                if self.cursor + 1 < self.items.len() {
+                    self.cursor += 1;
+                }
+                TuiOutcome::Continue
+            }
+            TuiAction::Toggle
+            | TuiAction::MoveUp
+            | TuiAction::MoveDown
+            | TuiAction::Confirm
+            | TuiAction::Cancel => TuiOutcome::Continue,
+        }
     }
 
     /// Move `central` (if present) to the end of `items`/`settings`, preserving
