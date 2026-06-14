@@ -427,24 +427,24 @@ fn transform_kind_pino_yields_a_boxed_transform() {
 }
 
 #[test]
-fn transform_kind_pino_stub_fails_loud_until_m4() {
+fn transform_kind_pino_transform_succeeds_after_m4() {
     use crate::proxy::pino::{PinoSettings, TailTtl};
-    // Per R9 the M1 pino stub returns an explicit Err (NOT a silent no-op), so
-    // M3 cannot accidentally ship a lying no-op. M4 makes this Ok.
+    // R9's M1 stub returned an explicit Err; M4.2 replaced it with the real
+    // dispatch skeleton, so the materialized pino transform now returns Ok (and,
+    // with every feature off, is a byte-faithful no-op).
     let settings = PinoSettings {
-        auto_cache: true,
+        auto_cache: false,
         tail_ttl: TailTtl::FiveMin,
         drop_tools: vec![],
-        strip_ansi: true,
+        strip_ansi: false,
         model_override: None,
     };
     let t = TransformKind::Pino(settings).as_body_transform().unwrap();
-    let mut body = serde_json::json!({"model": "claude-x", "messages": []});
-    let err = t.transform(&mut body).unwrap_err();
-    assert!(
-        err.to_string().contains("pino transform not implemented"),
-        "M1 pino stub must fail loud, got: {err}"
-    );
+    let original = serde_json::json!({"model": "claude-x", "messages": []});
+    let mut body = original.clone();
+    t.transform(&mut body)
+        .expect("M4 pino transform must succeed");
+    assert_eq!(body, original, "all-features-off pino transform is a no-op");
 }
 
 #[test]

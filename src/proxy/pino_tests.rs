@@ -54,22 +54,6 @@ fn pino_settings_rejects_unknown_fields() {
 }
 
 #[test]
-fn pino_transform_fails_loud_until_m4() {
-    let t = PinoTransform {
-        settings: PinoSettings {
-            auto_cache: true,
-            tail_ttl: TailTtl::FiveMin,
-            drop_tools: vec![],
-            strip_ansi: true,
-            model_override: None,
-        },
-    };
-    let mut body = serde_json::json!({"model": "claude-x", "messages": []});
-    let err = crate::proxy::BodyTransform::transform(&t, &mut body).unwrap_err();
-    assert_eq!(err.to_string(), "pino transform not implemented");
-}
-
-#[test]
 fn pino_transform_apply_headers_is_noop_until_m4() {
     let t = PinoTransform {
         settings: PinoSettings {
@@ -163,4 +147,60 @@ fn tail_ttl_is_case_insensitive_like_node() {
     assert_eq!(v, TailTtl::OneHour);
     let v2: TailTtl = serde_json::from_str("\"5M\"").unwrap();
     assert_eq!(v2, TailTtl::FiveMin);
+}
+
+// M4.2 ===== real dispatch skeleton + cache constants + no-op gate. With every
+// feature off, `transform` must be a byte-faithful passthrough; the cache
+// constants must match the Node config. (`PinoSettings`/`TailTtl`/`PinoTransform`
+// are in scope via `use super::*;`; the constants + trait are imported below.)
+
+use super::{BREAKPOINT_CEILING, MIN_SYSTEM_CACHE_CHARS};
+use crate::proxy::BodyTransform;
+use serde_json::json;
+
+fn no_op_settings() -> PinoSettings {
+    PinoSettings {
+        auto_cache: false,
+        tail_ttl: TailTtl::FiveMin,
+        drop_tools: vec![],
+        strip_ansi: false,
+        model_override: None,
+    }
+}
+
+#[test]
+fn constants_match_node_config() {
+    assert_eq!(BREAKPOINT_CEILING, 4);
+    assert_eq!(MIN_SYSTEM_CACHE_CHARS, 500);
+}
+
+#[test]
+fn all_features_off_is_a_no_op() {
+    let t = PinoTransform {
+        settings: no_op_settings(),
+    };
+    let original = json!({
+        "model": "claude-sonnet-4-5",
+        "system": [{ "type": "text", "text": "you are helpful" }],
+        "tools": [{ "name": "Bash", "description": "run shell" }],
+        "messages": [
+            { "role": "user", "content": [{ "type": "text", "text": "hi" }] }
+        ]
+    });
+    let mut body = original.clone();
+    t.transform(&mut body).unwrap();
+    assert_eq!(
+        body, original,
+        "no feature enabled => byte-faithful passthrough"
+    );
+}
+
+#[test]
+fn non_object_body_is_left_untouched_and_ok() {
+    let t = PinoTransform {
+        settings: no_op_settings(),
+    };
+    let mut body = json!("not an object");
+    t.transform(&mut body).unwrap();
+    assert_eq!(body, json!("not an object"));
 }

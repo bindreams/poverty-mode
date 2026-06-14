@@ -1,7 +1,9 @@
 //! pino: prompt-cache breakpoint injection. M1 ships the settings struct and a
 //! fail-loud transform stub (R9); the real cache-injection logic lands in M4.
 
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::proxy::BodyTransform;
 
@@ -77,10 +79,59 @@ pub struct PinoTransform {
     pub settings: PinoSettings,
 }
 
+/// The Anthropic API allows at most 4 cache breakpoints per request.
+pub const BREAKPOINT_CEILING: usize = 4;
+
+/// Client-sent breakpoints on system blocks smaller than this waste a slot.
+pub const MIN_SYSTEM_CACHE_CHARS: usize = 500;
+
+/// `anthropic-beta` flag required for 1h cache TTL. This is an HTTP HEADER, not a
+/// body field, so the engine path (apply_headers / ensure_beta_header) applies it,
+/// never `transform`. Mirrors BETA_FLAG in reference/pino/src/config.js.
+pub const BETA_FLAG: &str = "extended-cache-ttl-2025-04-11";
+
 impl BodyTransform for PinoTransform {
-    fn transform(&self, _body: &mut serde_json::Value) -> anyhow::Result<()> {
-        anyhow::bail!("pino transform not implemented")
+    fn transform(&self, body: &mut Value) -> Result<()> {
+        // Only object bodies are mutable in any meaningful way; non-objects pass through.
+        if !body.is_object() {
+            return Ok(());
+        }
+        // Operation order mirrors reference/pino/src/server.js lines 70-98:
+        // 1. model override (replaces body.model + rewrites system self-references).
+        if let Some(model) = self.settings.model_override.as_deref() {
+            apply_model_override(body, model);
+        }
+        // 2. built-in default transform pipeline (drop_tools + reminder scrub +
+        //    restructureV123 + strip_ansi), in the Node transforms/default.js order.
+        apply_default_transform(body, &self.settings);
+        // 3. auto-cache: inject breakpoints within the 4-cap, force 1h except tail.
+        if self.settings.auto_cache {
+            apply_auto_cache(body, self.settings.tail_ttl);
+        }
+        Ok(())
     }
+
+    // R6: the engine calls this AFTER transform() and AFTER Host/Content-Length
+    // rewrite, only on a transformed POST /v1/messages. pino applies the 1h-cache
+    // beta header here (NOT in the body) when auto_cache is on. Wired in M4.10.
+    fn apply_headers(&self, _headers: &mut http::HeaderMap) {
+        // Implemented in Task M4.10.
+    }
+}
+
+// --- pipeline stages (filled in by later tasks) -----
+
+fn apply_model_override(_body: &mut Value, _model: &str) {
+    // Implemented in Task M4.3.
+}
+
+fn apply_default_transform(_body: &mut Value, _settings: &PinoSettings) {
+    // Implemented in Tasks M4.4 (strip_ansi), M4.5 (drop_tools + reminder scrub),
+    // and M4.5b (restructureV123).
+}
+
+fn apply_auto_cache(_body: &mut Value, _tail_ttl: TailTtl) {
+    // Implemented in Tasks M4.6-M4.9.
 }
 
 #[cfg(test)]
