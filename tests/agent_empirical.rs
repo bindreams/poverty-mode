@@ -46,7 +46,16 @@ async fn process_env_vs_settings_block_precedence() {
     // auth token (carried in extra_env) lands in BOTH belts identically, so the
     // base URL is the only differing value.
     let mut cmd = ClaudeAgent.build_command(
-        &["--print".to_string(), "say ok and stop".to_string()],
+        // Generic model (M6): argv[0] is the PROGRAM. Lead with "claude" so
+        // build_command's split_first() yields program="claude" and inserts
+        // `--settings <json>` between it and the user flags (argv[1..]). Omitting
+        // the program here would resolve program="--print" and spawn a nonexistent
+        // `--print` binary, never reaching the precedence assertions below.
+        &[
+            "claude".to_string(),
+            "--print".to_string(),
+            "say ok and stop".to_string(),
+        ],
         &settings_url,
         &[
             ("ENABLE_TOOL_SEARCH".to_string(), "true".to_string()),
