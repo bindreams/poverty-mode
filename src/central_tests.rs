@@ -330,3 +330,105 @@ fn run_status_text_errors_when_binary_is_missing() {
         "error should name the failed `status` invocation: {err}"
     );
 }
+
+// start/health argv + env =====
+
+#[test]
+fn configure_argv_sets_analytics_off_and_threaded_pinned_version() {
+    let argvs = configure_commands("0.3.7");
+    assert!(
+        argvs.iter().any(|a| a
+            == &vec![
+                "config".to_string(),
+                "set".to_string(),
+                "google-analytics".to_string(),
+                "off".to_string(),
+            ]),
+        "missing analytics-off config: {argvs:?}"
+    );
+    // The pinned-version MUST be the threaded version, not a const default.
+    assert!(
+        argvs.iter().any(|a| a
+            == &vec![
+                "config".to_string(),
+                "set".to_string(),
+                "pinned-version".to_string(),
+                "0.3.7".to_string(),
+            ]),
+        "missing/incorrect pinned-version config: {argvs:?}"
+    );
+}
+
+#[test]
+fn proxy_start_argv_is_proxy_start() {
+    assert_eq!(
+        proxy_start_argv(),
+        vec!["proxy".to_string(), "start".to_string()]
+    );
+}
+
+#[test]
+fn proxy_stop_argv_is_proxy_stop() {
+    assert_eq!(
+        proxy_stop_argv(),
+        vec!["proxy".to_string(), "stop".to_string()]
+    );
+}
+
+#[test]
+fn start_env_sets_wire_proxy_port_when_requested() {
+    let env = start_env(Some(19999));
+    assert_eq!(
+        env.iter()
+            .find(|(k, _)| k == "WIRE_PROXY_PORT")
+            .map(|(_, v)| v.as_str()),
+        Some("19999")
+    );
+}
+
+#[test]
+fn start_env_omits_wire_proxy_port_when_none() {
+    let env = start_env(None);
+    assert!(env.iter().all(|(k, _)| k != "WIRE_PROXY_PORT"));
+}
+
+#[test]
+fn health_url_targets_loopback_health_route() {
+    assert_eq!(health_url(19516), "http://127.0.0.1:19516/health");
+}
+
+#[test]
+fn proxy_pid_path_is_under_dot_wire() {
+    let p = proxy_pid_path().unwrap();
+    assert!(
+        p.ends_with(std::path::Path::new(".wire").join("proxy.pid")),
+        "{}",
+        p.display()
+    );
+}
+
+#[test]
+fn start_reuse_keeps_live_daemon_port() {
+    // On singleton reuse the LIVE daemon's port wins; a caller's requested port is NOT consulted (we
+    // never rebind a shared daemon). `reuse_decision` is the pure seam `start` uses for this choice.
+    let live = CentralInfo {
+        port: 19516,
+        secret: "live".to_string(),
+    };
+    // Healthy + existing => reuse, returning the live daemon's CentralInfo verbatim (port 19516),
+    // regardless of any port the caller would have requested.
+    assert_eq!(reuse_decision(Some(live.clone()), true), Some(live));
+    // Unhealthy => no reuse (start proceeds to (re)configure + start with the requested port).
+    assert_eq!(
+        reuse_decision(
+            Some(CentralInfo {
+                port: 1,
+                secret: "x".into()
+            }),
+            false
+        ),
+        None
+    );
+    // No existing config => no reuse.
+    assert_eq!(reuse_decision(None, true), None);
+}

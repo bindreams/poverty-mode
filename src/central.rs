@@ -397,6 +397,166 @@ pub fn ensure_logged_in(bin: &Path) -> anyhow::Result<()> {
     }
 }
 
+// start / health / stop =====
+
+/// The `jbcentral config set ...` argv lines we apply before starting: analytics off + the RESOLVED
+/// pinned version (threaded in by the orchestrator, R4 — never re-derived from a const here), so the
+/// singleton stays on the same version we installed.
+pub fn configure_commands(version: &str) -> Vec<Vec<String>> {
+    vec![
+        vec![
+            "config".to_string(),
+            "set".to_string(),
+            "google-analytics".to_string(),
+            "off".to_string(),
+        ],
+        vec![
+            "config".to_string(),
+            "set".to_string(),
+            "pinned-version".to_string(),
+            version.to_string(),
+        ],
+    ]
+}
+
+/// argv for starting the proxy daemon.
+pub fn proxy_start_argv() -> Vec<String> {
+    vec!["proxy".to_string(), "start".to_string()]
+}
+
+/// argv for stopping the proxy daemon.
+pub fn proxy_stop_argv() -> Vec<String> {
+    vec!["proxy".to_string(), "stop".to_string()]
+}
+
+/// Environment overlay for the start command. When a port is requested we set `WIRE_PROXY_PORT` so
+/// jbcentral binds it; otherwise we leave it to jbcentral's default/config.
+pub fn start_env(port: Option<u16>) -> Vec<(String, String)> {
+    match port {
+        Some(p) => vec![("WIRE_PROXY_PORT".to_string(), p.to_string())],
+        None => Vec::new(),
+    }
+}
+
+/// The local health-probe URL for a running central daemon.
+pub fn health_url(port: u16) -> String {
+    format!("http://127.0.0.1:{port}/health")
+}
+
+/// Path to jbcentral's daemon PID file: `~/.wire/proxy.pid` (spec 5.7).
+pub fn proxy_pid_path() -> anyhow::Result<PathBuf> {
+    let home = directories::BaseDirs::new()
+        .ok_or_else(|| anyhow!("cannot determine home directory"))?
+        .home_dir()
+        .to_path_buf();
+    Ok(home.join(".wire").join("proxy.pid"))
+}
+
+/// True iff `GET http://127.0.0.1:<port>/health` returns a success status.
+///
+/// **R5 contract:** synchronous `reqwest::blocking` GET — call via `spawn_blocking` from async code.
+pub fn health(port: u16) -> bool {
+    let url = health_url(port);
+    let client = match reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    client
+        .get(&url)
+        .send()
+        .map(|r| r.status().is_success())
+        .unwrap_or(false)
+}
+
+/// Pure decision (testable): given the parsed wire-config `existing` and whether its daemon is
+/// `healthy`, decide whether to reuse it. Reuse iff a config exists AND it is healthy. When reused,
+/// the LIVE daemon's port (inside `existing`) is what the caller gets — the caller's requested port is
+/// intentionally NOT consulted here (a shared singleton is never rebound). Asserted by
+/// `start_reuse_keeps_live_daemon_port`.
+fn reuse_decision(existing: Option<CentralInfo>, healthy: bool) -> Option<CentralInfo> {
+    match existing {
+        Some(info) if healthy => Some(info),
+        _ => None,
+    }
+}
+
+/// If a wire config already exists AND its daemon answers `/health`, return that `CentralInfo`
+/// (singleton reuse — spec 5.7/§9). The returned `port` is the LIVE daemon's port read from
+/// `~/.wire/config.json`, which may differ from a caller's requested port — see [`start`]'s reuse
+/// note. Returns `None` when there is nothing healthy to reuse.
+fn reuse_if_healthy() -> Option<CentralInfo> {
+    let info = read_wire_config().ok()?;
+    let healthy = health(info.port);
+    reuse_decision(Some(info), healthy)
+}
+
+/// Configure jbcentral (analytics off + the threaded pinned `version`, R4), set the requested port,
+/// start the daemon, then read `~/.wire/config.json` for the actual `proxy_port` + `proxy_secret`.
+///
+/// **Idempotent singleton (spec 5.7):** if `~/.wire/config.json` already describes a daemon that
+/// answers `/health`, that `CentralInfo` is returned immediately without re-configuring or restarting.
+///
+/// **Port semantics on reuse:** `port` is a REQUEST honored only when we actually start a new daemon.
+/// JB Central is a shared singleton, so when an existing healthy daemon is reused, the live daemon's
+/// already-bound port wins and the requested `port` is intentionally ignored (we never rebind a daemon
+/// other sessions may be using). Callers must use the returned `CentralInfo.port`, not the requested
+/// one. This is asserted by `start_reuse_keeps_live_daemon_port` in the unit tests.
+///
+/// **R5 contract:** synchronous (spawns child processes + blocking health GET). Call via
+/// `spawn_blocking` from async code.
+pub fn start(bin: &Path, port: Option<u16>, version: &str) -> anyhow::Result<CentralInfo> {
+    if let Some(info) = reuse_if_healthy() {
+        return Ok(info);
+    }
+
+    for argv in configure_commands(version) {
+        let status = std::process::Command::new(bin)
+            .args(&argv)
+            .status()
+            .with_context(|| format!("running {} {}", bin.display(), argv.join(" ")))?;
+        if !status.success() {
+            bail!(
+                "`jbcentral {}` failed (exit {:?})",
+                argv.join(" "),
+                status.code()
+            );
+        }
+    }
+
+    let mut cmd = std::process::Command::new(bin);
+    cmd.args(proxy_start_argv());
+    for (k, v) in start_env(port) {
+        cmd.env(k, v);
+    }
+    let status = cmd
+        .status()
+        .with_context(|| format!("running {} proxy start", bin.display()))?;
+    if !status.success() {
+        bail!("`jbcentral proxy start` failed (exit {:?})", status.code());
+    }
+
+    // jbcentral writes the actual port+secret here after the daemon binds; read it (do not guess).
+    let info =
+        read_wire_config().context("reading ~/.wire/config.json after jbcentral proxy start")?;
+    Ok(info)
+}
+
+/// Stop the central singleton daemon (`jbcentral proxy stop`). Best-effort: a not-running daemon is
+/// treated as already stopped (jbcentral returns non-zero in that case, which is still "stopped").
+///
+/// **R5 contract:** synchronous (spawns a child process). Call via `spawn_blocking` from async code.
+pub fn stop(bin: &Path) -> anyhow::Result<()> {
+    let status = std::process::Command::new(bin)
+        .args(proxy_stop_argv())
+        .status()
+        .with_context(|| format!("running {} proxy stop", bin.display()))?;
+    let _ = status;
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "central_tests.rs"]
 mod central_tests;
