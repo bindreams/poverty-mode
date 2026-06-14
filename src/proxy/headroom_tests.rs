@@ -20,19 +20,6 @@ fn headroom_settings_rejects_unknown_fields() {
     );
 }
 
-#[test]
-fn headroom_transform_fails_loud_until_m5() {
-    let t = HeadroomTransform {
-        settings: HeadroomSettings { compression: true },
-    };
-    let mut body = serde_json::json!({"messages": []});
-    let err = crate::proxy::BodyTransform::transform(&t, &mut body).unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        "headroom compression enabled but transform not implemented"
-    );
-}
-
 /// A representative Anthropic request body with a large, highly compressible
 /// JSON-array tool_result. With compression DISABLED, the transform must not
 /// touch a single byte — the serialized Value must be identical before/after.
@@ -69,5 +56,47 @@ fn disabled_compression_is_byte_equal_noop() {
     assert_eq!(
         before, after,
         "disabled compression must be a byte-equal no-op"
+    );
+}
+
+/// A body whose JSON-array tool_result is BELOW the 512-byte JSON-array
+/// threshold. The dispatcher returns NoChange, so even with compression
+/// enabled the body must be byte-identical after transform.
+fn tiny_array_body() -> serde_json::Value {
+    // Three small dicts -> well under 512 bytes when serialized as a string.
+    let array: Vec<serde_json::Value> = (0..3).map(|i| json!({ "id": i, "ok": true })).collect();
+    let payload = serde_json::to_string(&array).unwrap();
+    assert!(
+        payload.len() < 512,
+        "fixture must be below the 512B JSON-array threshold"
+    );
+    json!({
+        "model": "claude-sonnet-4-6",
+        "max_tokens": 64,
+        "system": "you are a helpful assistant",
+        "messages": [{
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": "toolu_pm_tiny",
+                "content": payload,
+            }],
+        }],
+    })
+}
+
+#[test]
+fn enabled_but_nothing_shrinks_is_byte_equal() {
+    let t = HeadroomTransform {
+        settings: HeadroomSettings { compression: true },
+    };
+    let mut body = tiny_array_body();
+    let before = serde_json::to_vec(&body).unwrap();
+    t.transform(&mut body)
+        .expect("enabled transform must be Ok on a valid body");
+    let after = serde_json::to_vec(&body).unwrap();
+    assert_eq!(
+        before, after,
+        "NoChange outcome must leave the body byte-identical"
     );
 }
