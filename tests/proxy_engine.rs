@@ -668,6 +668,46 @@ async fn no_log_file_means_no_file_written() {
     );
 }
 
+// CONTRACT GUARD (not a new TDD cycle): the 502-on-upstream-failure arm was
+// implemented in M3.9's forward(). This locks the fail-surface contract (spec
+// §11): a closed upstream yields 502 with an explanatory body, never a reset
+// connection / escaping Err.
+#[tokio::test]
+async fn upstream_down_yields_502() {
+    // Bind-and-immediately-drop a listener to get a port guaranteed closed.
+    let dead_port = {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let p = l.local_addr().unwrap().port();
+        drop(l);
+        p
+    };
+    let shutdown = std::sync::Arc::new(Notify::new());
+    let shutdown_fut = {
+        let s = shutdown.clone();
+        async move { s.notified().await }
+    };
+    let cfg = EngineConfig {
+        name: ProxyName::Pino,
+        listen: "127.0.0.1:0".parse().unwrap(),
+        upstream: upstream(&format!("http://127.0.0.1:{dead_port}")),
+        run_id: "01J0502".to_string(),
+        log_file: None,
+        transform: TransformKind::None,
+    };
+    let bound = bind_engine(cfg, shutdown_fut).await.expect("bind");
+    let port = bound.local_addr.port();
+
+    let (status, body) = raw_post(port, "/v1/messages", r#"{"messages":[]}"#).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert!(
+        body.contains("proxy upstream error"),
+        "502 body should explain the upstream failure, got: {body:?}"
+    );
+
+    shutdown.notify_waiters();
+    bound.handle.await.expect("join").expect("engine ok");
+}
+
 #[tokio::test]
 async fn drain_completes_in_flight_request_before_exit() {
     let gated = start_gated_stub(r#"{"drained":true}"#).await;
