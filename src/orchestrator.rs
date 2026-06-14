@@ -214,13 +214,20 @@ async fn build_via_manager(
     // Carry STRUCTURED hop fields; the manager renders the exact argv via the
     // single source of truth `proxy_child_args` once it knows each hop's real
     // back-to-front --upstream. No placeholder/strip/re-append dance.
+    //
+    // The body-log file is named per design spec §5.11 as
+    // `<state>/runs/<run-id>/<proxy>-<port>.log`, where `<port>` is the hop's REAL
+    // listening port — the value `status::enumerate_runs` parses back out. The port
+    // is OS-assigned and unknown here (hops bind `127.0.0.1:0` later), so we embed
+    // the `{port}` token; the engine substitutes its bound port at file-open
+    // (`proxy::resolve_log_file`). This keeps producer and consumer on the same
+    // contract instead of writing a hop index the consumer would misread as a port.
     let hop_specs: Vec<manager::HopSpec> = hops
         .iter()
-        .enumerate()
-        .map(|(i, hop)| manager::HopSpec {
+        .map(|hop| manager::HopSpec {
             proxy: hop.clone(),
             run_id: run_id.clone(),
-            log_file: run_dir.join(format!("{}-{}.log", hop.name.as_str(), i)),
+            log_file: run_dir.join(format!("{}-{{port}}.log", hop.name.as_str())),
         })
         .collect();
 

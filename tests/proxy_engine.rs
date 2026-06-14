@@ -638,6 +638,55 @@ async fn streaming_response_is_tee_d_to_log_file_when_configured() {
 }
 
 #[tokio::test]
+async fn tee_log_file_port_placeholder_resolves_to_bound_port() {
+    // The orchestrator builds each hop's body-log path BEFORE the OS assigns the
+    // ephemeral port, so it embeds the literal token `{port}`; the engine must
+    // substitute the real bound port at file-open so the on-disk file matches the
+    // design-spec §5.11 name `<proxy>-<port>.log` that `status::enumerate_runs`
+    // parses. Without substitution the file would be named with a non-port token
+    // (or a hop index) and status would report the WRONG port on every install.
+    let stub = start_stub_async(r#"{"ok":true}"#).await;
+    let shutdown = std::sync::Arc::new(Notify::new());
+    let shutdown_fut = {
+        let s = shutdown.clone();
+        async move { s.notified().await }
+    };
+    let dir = tempfile::tempdir().unwrap();
+    // The exact shape the orchestrator emits: `<dir>/<proxy>-{port}.log`.
+    let templated = dir.path().join("pino-{port}.log");
+    let cfg = EngineConfig {
+        name: ProxyName::Pino,
+        listen: "127.0.0.1:0".parse().unwrap(),
+        upstream: upstream(&format!("http://127.0.0.1:{}", stub.port)),
+        run_id: "01J0PORT".to_string(),
+        log_file: Some(templated),
+        transform: TransformKind::None,
+    };
+    let bound = bind_engine(cfg, shutdown_fut).await.expect("bind");
+    let port = bound.local_addr.port();
+
+    let (status, _) = raw_post(port, "/v1/messages", r#"{"messages":[]}"#).await;
+    assert_eq!(status, StatusCode::OK);
+
+    shutdown.notify_waiters();
+    bound.handle.await.expect("join").expect("engine ok");
+
+    // The file must land at the real-port name, not at the literal `{port}` token.
+    let resolved = dir.path().join(format!("pino-{port}.log"));
+    assert!(
+        resolved.exists(),
+        "engine must resolve {{port}} to the bound port {port}: expected {}",
+        resolved.display()
+    );
+    let literal = dir.path().join("pino-{port}.log");
+    assert!(
+        !literal.exists(),
+        "engine must NOT write the literal {{port}} token as a filename: {}",
+        literal.display()
+    );
+}
+
+#[tokio::test]
 async fn no_log_file_means_no_file_written() {
     let stub = start_stub_async(r#"{"ok":true}"#).await;
     let shutdown = std::sync::Arc::new(Notify::new());

@@ -363,7 +363,7 @@ pub async fn bind_engine(
         run_id: cfg.run_id,
         client: build_upstream_client()?,
         transform: cfg.transform.as_body_transform(),
-        log_file: cfg.log_file,
+        log_file: resolve_log_file(cfg.log_file, port),
     });
 
     // Print exactly one ReadyLine to stdout (compact JSON + newline + flush)
@@ -418,10 +418,29 @@ pub async fn bind_engine_with_boxed_transform(
         run_id: cfg.run_id,
         client: build_upstream_client()?,
         transform: Some(transform),
-        log_file: cfg.log_file,
+        log_file: resolve_log_file(cfg.log_file, port),
     });
     let handle = tokio::spawn(async move { serve_loop(listener, state, shutdown).await });
     Ok(BoundEngine { local_addr, handle })
+}
+
+/// Resolve a body-log path that may carry the `{port}` placeholder.
+///
+/// The orchestrator builds each hop's body-log path BEFORE the OS assigns the
+/// ephemeral port, so it embeds the literal token `{port}`; only the engine knows
+/// the real bound port. Substituting here makes the on-disk file land at the
+/// design-spec §5.11 name `<state>/runs/<run-id>/<proxy>-<port>.log` that
+/// `status::enumerate_runs` parses. A literal path (no token — e.g. standalone
+/// `poverty-mode proxy ... --body-log-file FILE`) passes through unchanged.
+fn resolve_log_file(path: Option<PathBuf>, port: u16) -> Option<PathBuf> {
+    path.map(|p| {
+        let s = p.to_string_lossy();
+        if s.contains("{port}") {
+            PathBuf::from(s.replace("{port}", &port.to_string()))
+        } else {
+            p
+        }
+    })
 }
 
 fn print_ready_line(name: &ProxyName, port: u16, run_id: &str) -> anyhow::Result<()> {
