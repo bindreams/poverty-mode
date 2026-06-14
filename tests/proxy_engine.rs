@@ -329,6 +329,242 @@ async fn forward_post_messages_recomputes_content_length() {
     bound.handle.await.expect("join").expect("engine ok");
 }
 
+// POST with content-type text/plain, to exercise the is_json_content_type guard
+// (a non-JSON POST to /v1/messages must NOT be transformed). Gated with its sole
+// caller (the `test-transforms` non-JSON test) so the default build has no dead code.
+#[cfg(feature = "test-transforms")]
+async fn raw_post_text(port: u16, path: &str, body: &str) -> StatusCode {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let stream = TcpStream::connect(addr).await.expect("connect");
+    let io = TokioIo::new(stream);
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
+        .await
+        .expect("handshake");
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("host", format!("127.0.0.1:{port}"))
+        .header("content-type", "text/plain")
+        .body(Full::<Bytes>::from(body.to_string()))
+        .unwrap();
+    let resp = sender.send_request(req).await.expect("send");
+    resp.status()
+}
+
+#[cfg(feature = "test-transforms")]
+#[tokio::test]
+async fn transform_and_apply_headers_run_on_post_messages() {
+    use poverty_mode::proxy::{bind_engine_with_boxed_transform, MarkerTransform};
+
+    let stub = start_stub_async(r#"{"ok":true}"#).await;
+    let shutdown = std::sync::Arc::new(Notify::new());
+    let shutdown_fut = {
+        let s = shutdown.clone();
+        async move { s.notified().await }
+    };
+    let cfg = fwd_cfg(
+        ProxyName::Pino,
+        "01J0XF",
+        &format!("http://127.0.0.1:{}", stub.port),
+    );
+    let bound =
+        bind_engine_with_boxed_transform(cfg, std::sync::Arc::new(MarkerTransform), shutdown_fut)
+            .await
+            .expect("bind");
+    let port = bound.local_addr.port();
+
+    let body = r#"{"model":"claude-x","messages":[]}"#;
+    let (status, _resp) = raw_post(port, "/v1/messages", body).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let cap = stub.last().expect("captured");
+    let received: serde_json::Value = serde_json::from_slice(&cap.body).unwrap();
+    assert_eq!(
+        received["__pm_test"],
+        serde_json::Value::Bool(true),
+        "body transform must run"
+    );
+    assert_eq!(received["model"], "claude-x");
+    assert_eq!(
+        cap.content_length.as_deref(),
+        Some(cap.body.len().to_string().as_str()),
+        "content-length must equal the transformed body length"
+    );
+    // R6: the apply_headers hook fired (x-pm-marker reached upstream). The
+    // canonical stub records anthropic-beta; for the marker we assert through a
+    // raw upstream read below in transform_apply_headers_hook_reaches_upstream.
+
+    shutdown.notify_waiters();
+    bound.handle.await.expect("join").expect("engine ok");
+}
+
+#[cfg(feature = "test-transforms")]
+#[tokio::test]
+async fn transform_apply_headers_hook_reaches_upstream() {
+    use poverty_mode::proxy::{bind_engine_with_boxed_transform, MarkerTransform};
+    // A bespoke upstream that records the `x-pm-marker` header, proving R6's
+    // apply_headers ran AND its mutation reached upstream.
+    use std::sync::{Arc as StdArc, Mutex};
+    let seen: StdArc<Mutex<Option<String>>> = StdArc::new(Mutex::new(None));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let up_port = listener.local_addr().unwrap().port();
+    let seen_loop = seen.clone();
+    tokio::spawn(async move {
+        loop {
+            let (stream, _) = match listener.accept().await {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let io = TokioIo::new(stream);
+            let seen = seen_loop.clone();
+            tokio::spawn(async move {
+                let svc = hyper::service::service_fn(move |req: Request<hyper::body::Incoming>| {
+                    let seen = seen.clone();
+                    async move {
+                        let marker = req
+                            .headers()
+                            .get("x-pm-marker")
+                            .and_then(|v| v.to_str().ok())
+                            .map(|s| s.to_string());
+                        *seen.lock().unwrap() = marker;
+                        let _ = req.into_body().collect().await;
+                        Ok::<_, std::convert::Infallible>(
+                            hyper::Response::builder()
+                                .status(StatusCode::OK)
+                                .header("content-type", "application/json")
+                                .body(Full::new(Bytes::from_static(b"{\"ok\":true}")))
+                                .unwrap(),
+                        )
+                    }
+                });
+                let _ = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(io, svc)
+                    .await;
+            });
+        }
+    });
+
+    let shutdown = std::sync::Arc::new(Notify::new());
+    let shutdown_fut = {
+        let s = shutdown.clone();
+        async move { s.notified().await }
+    };
+    let cfg = fwd_cfg(
+        ProxyName::Pino,
+        "01J0HK",
+        &format!("http://127.0.0.1:{up_port}"),
+    );
+    let bound =
+        bind_engine_with_boxed_transform(cfg, std::sync::Arc::new(MarkerTransform), shutdown_fut)
+            .await
+            .expect("bind");
+    let port = bound.local_addr.port();
+
+    let (status, _r) = raw_post(port, "/v1/messages", r#"{"messages":[]}"#).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        seen.lock().unwrap().as_deref(),
+        Some("applied"),
+        "R6 apply_headers must run on a transformed POST /v1/messages and reach upstream"
+    );
+
+    shutdown.notify_waiters();
+    bound.handle.await.expect("join").expect("engine ok");
+}
+
+#[cfg(feature = "test-transforms")]
+#[tokio::test]
+async fn transform_and_hook_do_not_run_off_messages_path() {
+    use poverty_mode::proxy::{bind_engine_with_boxed_transform, MarkerTransform};
+
+    let stub = start_stub_async(r#"{"ok":true}"#).await;
+    let shutdown = std::sync::Arc::new(Notify::new());
+    let shutdown_fut = {
+        let s = shutdown.clone();
+        async move { s.notified().await }
+    };
+    let cfg = fwd_cfg(
+        ProxyName::Pino,
+        "01J0XF2",
+        &format!("http://127.0.0.1:{}", stub.port),
+    );
+    let bound =
+        bind_engine_with_boxed_transform(cfg, std::sync::Arc::new(MarkerTransform), shutdown_fut)
+            .await
+            .expect("bind");
+    let port = bound.local_addr.port();
+
+    let body = r#"{"x":1}"#;
+    let (status, _resp) = raw_post(port, "/v1/other", body).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let cap = stub.last().expect("captured");
+    assert_eq!(
+        cap.body,
+        body.as_bytes().to_vec(),
+        "non-messages body must be byte-faithful"
+    );
+    assert!(
+        serde_json::from_slice::<serde_json::Value>(&cap.body)
+            .unwrap()
+            .get("__pm_test")
+            .is_none(),
+        "transform must not run off the messages path"
+    );
+
+    shutdown.notify_waiters();
+    bound.handle.await.expect("join").expect("engine ok");
+}
+
+#[cfg(feature = "test-transforms")]
+#[tokio::test]
+async fn transform_does_not_run_on_non_json_post_messages() {
+    use poverty_mode::proxy::{bind_engine_with_boxed_transform, MarkerTransform};
+
+    let stub = start_stub_async(r#"{"ok":true}"#).await;
+    let shutdown = std::sync::Arc::new(Notify::new());
+    let shutdown_fut = {
+        let s = shutdown.clone();
+        async move { s.notified().await }
+    };
+    let cfg = fwd_cfg(
+        ProxyName::Pino,
+        "01J0XF3",
+        &format!("http://127.0.0.1:{}", stub.port),
+    );
+    let bound =
+        bind_engine_with_boxed_transform(cfg, std::sync::Arc::new(MarkerTransform), shutdown_fut)
+            .await
+            .expect("bind");
+    let port = bound.local_addr.port();
+
+    // content-type text/plain on /v1/messages -> is_json_content_type guard bars
+    // the transform; body streams through byte-faithful.
+    let body = r#"{"model":"claude-x","messages":[]}"#;
+    let status = raw_post_text(port, "/v1/messages", body).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let cap = stub.last().expect("captured");
+    assert_eq!(
+        cap.body,
+        body.as_bytes().to_vec(),
+        "non-JSON body must be byte-faithful"
+    );
+    assert!(
+        serde_json::from_slice::<serde_json::Value>(&cap.body)
+            .unwrap()
+            .get("__pm_test")
+            .is_none(),
+        "transform must not run for a non-JSON content-type"
+    );
+
+    shutdown.notify_waiters();
+    bound.handle.await.expect("join").expect("engine ok");
+}
+
 #[tokio::test]
 async fn forward_passes_upstream_response_headers_verbatim() {
     // Stub that returns a distinctive response header alongside JSON.

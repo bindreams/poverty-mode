@@ -17,6 +17,12 @@ path = "src/lib.rs"
 name = "poverty-mode"
 path = "src/main.rs"
 
+[features]
+# Compiles in the deterministic `MarkerTransform` + `bind_engine_with_boxed_transform`
+# test seam (src/proxy.rs) so integration tests can drive the transform path
+# end-to-end. Off by default; enabled only for `cargo test --features test-transforms`.
+test-transforms = []
+
 [dependencies]
 clap = { version = "4.6", features = ["derive", "env"] }
 serde = { version = "1.0", features = ["derive"] }

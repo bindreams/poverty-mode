@@ -374,6 +374,55 @@ pub async fn bind_engine(
     Ok(BoundEngine { local_addr, handle })
 }
 
+/// Deterministic transform for integration tests: sets `body["__pm_test"]=true`
+/// in `transform`, and `x-pm-marker: applied` in `apply_headers`. Only compiled
+/// with the `test-transforms` feature. Proves the engine runs both the body
+/// transform and the R6 header hook on a transformed POST /v1/messages.
+#[cfg(feature = "test-transforms")]
+pub struct MarkerTransform;
+
+#[cfg(feature = "test-transforms")]
+impl BodyTransform for MarkerTransform {
+    fn transform(&self, body: &mut serde_json::Value) -> anyhow::Result<()> {
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert("__pm_test".to_string(), serde_json::Value::Bool(true));
+        }
+        Ok(())
+    }
+
+    fn apply_headers(&self, headers: &mut http::HeaderMap) {
+        headers.insert("x-pm-marker", http::HeaderValue::from_static("applied"));
+    }
+}
+
+/// Test seam: bind an engine whose transform is an explicitly-injected
+/// `Arc`-shared transform, bypassing `TransformKind`. Only compiled with
+/// `test-transforms`. Mirrors `bind_engine` exactly except it injects the
+/// transform directly. The parameter is `Arc<dyn BodyTransform + Send + Sync>`
+/// to match the engine field type (R22/R23d).
+#[cfg(feature = "test-transforms")]
+pub async fn bind_engine_with_boxed_transform(
+    cfg: EngineConfig,
+    transform: Arc<dyn BodyTransform + Send + Sync>,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<BoundEngine> {
+    let listener = TcpListener::bind(cfg.listen).await?;
+    let local_addr = listener.local_addr()?;
+    let port = local_addr.port();
+    print_ready_line(&cfg.name, port, &cfg.run_id)?;
+    let state = Arc::new(EngineState {
+        name: cfg.name,
+        port,
+        upstream: cfg.upstream,
+        run_id: cfg.run_id,
+        client: build_upstream_client()?,
+        transform: Some(transform),
+        log_file: cfg.log_file,
+    });
+    let handle = tokio::spawn(async move { serve_loop(listener, state, shutdown).await });
+    Ok(BoundEngine { local_addr, handle })
+}
+
 fn print_ready_line(name: &ProxyName, port: u16, run_id: &str) -> anyhow::Result<()> {
     let ready = ReadyLine {
         ready: true,
