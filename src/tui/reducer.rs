@@ -93,6 +93,20 @@ impl TuiState {
         self.hint
     }
 
+    /// A human-readable preview of the resulting request path, e.g.
+    /// `"claude → pino → headroom → api.anthropic.com"`. Used by the render
+    /// layer; lives here so it is pure and unit-testable.
+    pub fn chain_preview(&self) -> String {
+        let mut parts: Vec<&str> = vec!["claude"];
+        for item in &self.items {
+            if item.enabled {
+                parts.push(item.name.as_str());
+            }
+        }
+        parts.push("api.anthropic.com");
+        parts.join(" → ")
+    }
+
     /// Apply one action, returning the outcome.
     pub fn apply(&mut self, a: TuiAction) -> TuiOutcome {
         match a {

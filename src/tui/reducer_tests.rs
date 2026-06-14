@@ -400,6 +400,38 @@ fn confirm_carries_settings_into_resolved_chain() {
 }
 
 #[test]
+fn chain_preview_lists_enabled_in_order() {
+    let mut st = seed_all_disabled();
+    st.cursor = 0;
+    st.apply(TuiAction::Toggle); // pino
+    st.cursor = 1;
+    st.apply(TuiAction::Toggle); // headroom
+    assert_eq!(
+        st.chain_preview(),
+        "claude → pino → headroom → api.anthropic.com"
+    );
+}
+
+#[test]
+fn chain_preview_empty_when_none_enabled() {
+    let st = seed_all_disabled();
+    assert_eq!(st.chain_preview(), "claude → api.anthropic.com");
+}
+
+#[test]
+fn chain_preview_includes_central_last() {
+    let mut st = seed_all_disabled();
+    st.cursor = 0;
+    st.apply(TuiAction::Toggle); // pino
+    st.cursor = 2;
+    st.apply(TuiAction::Toggle); // central (already last)
+    assert_eq!(
+        st.chain_preview(),
+        "claude → pino → central → api.anthropic.com"
+    );
+}
+
+#[test]
 fn cancel_returns_cancel_outcome() {
     let mut st = seed_all_disabled();
     assert_eq!(st.apply(TuiAction::Cancel), TuiOutcome::Cancel);
