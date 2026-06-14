@@ -38,9 +38,9 @@ mod tiktoken_impl;
 pub use estimator::EstimatingCounter;
 #[cfg(feature = "hf-tokenizers")]
 pub use hf_impl::{HfTokenizer, HfTokenizerError};
-pub use registry::{detect_backend, get_tokenizer, Backend};
 #[cfg(feature = "hf-tokenizers")]
 pub use registry::{clear_hf_registrations, register_hf, try_register_hf};
+pub use registry::{detect_backend, get_tokenizer, Backend};
 pub use tiktoken_impl::{TiktokenCounter, TiktokenError};
 
 /// Counts tokens. Implementations must be thread-safe (`Send + Sync`).

@@ -33,11 +33,11 @@
 use std::sync::Arc;
 
 use crate::ccr::{CcrStore, InMemoryCcrStore};
-use crate::relevance::RelevanceScorer;
-#[cfg(feature = "embeddings")]
-use crate::relevance::HybridScorer;
 #[cfg(not(feature = "embeddings"))]
 use crate::relevance::BM25Scorer;
+#[cfg(feature = "embeddings")]
+use crate::relevance::HybridScorer;
+use crate::relevance::RelevanceScorer;
 use crate::transforms::anchor_selector::{AnchorConfig, AnchorSelector};
 
 /// The OSS default relevance scorer for the SmartCrusher pipeline.
