@@ -388,3 +388,149 @@ fn hot_zones_history_and_numeric_precision_preserved() {
         "live-zone tool_result must have been compressed ({tool_result_before} -> {tool_result_after})"
     );
 }
+
+// FIX-B: real byte-fidelity tests for the bytes-oriented seam =========
+//
+// These are NOT round-trips through `serde_json::to_vec`: they feed a
+// hand-authored COMPACT JSON body whose bytes DIFFER from serde_json's
+// canonical output in the cache-hot zone (a `1e1` number literal, an
+// escaped `\/`, and a non-ASCII `é` escape) and assert that the bytes
+// the transform emits preserve that cache-hot region BYTE-FOR-BYTE. A
+// transform that round-trips through `serde_json::Value` would canonicalize
+// those literals (`1e1`->`10.0`, `\/`->`/`, `é`->`é`) and FAIL here.
+
+/// A hand-authored COMPACT request body whose cache-hot zone (top-level
+/// `system` + `tools`) contains byte-forms serde_json would rewrite on a
+/// round-trip, alongside a large compressible JSON-array tool_result in the
+/// live zone (the latest user message) that the dispatcher WILL rewrite.
+fn noncanonical_hotzone_body() -> Vec<u8> {
+    let array: Vec<serde_json::Value> = (0..200)
+        .map(|i| json!({ "id": i, "status": "ok", "value": format!("repeat-pattern-{}", i % 3) }))
+        .collect();
+    // The tool_result content is itself a JSON string; embed it as a JSON
+    // string literal so the outer document is valid.
+    let payload = serde_json::to_string(&array).unwrap();
+    let payload_literal = serde_json::to_string(&payload).unwrap();
+    // Cache-hot zone literals serde_json::to_vec would NOT reproduce:
+    //   1e1            -> serde would emit 10.0
+    //   "a\/b"         -> serde would emit "a/b" (drops the redundant escape)
+    //   "café"    -> serde would emit "café" (collapses the unicode escape)
+    format!(
+        r#"{{"model":"claude-sonnet-4-6","max_tokens":1e1,"system":[{{"type":"text","text":"café a\/b stable preamble"}}],"tools":[{{"name":"Bash","description":"run a\/b shell"}}],"messages":[{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"toolu_pm_bytes","content":{payload_literal}}}]}}]}}"#
+    )
+    .into_bytes()
+}
+
+#[test]
+fn transform_bytes_preserves_noncanonical_cache_hot_zone_verbatim() {
+    let t = HeadroomTransform {
+        settings: HeadroomSettings { compression: true },
+    };
+    let raw = noncanonical_hotzone_body();
+
+    // Sanity: the cache-hot byte-forms really are non-canonical (a Value
+    // round-trip would change them), so this test is not vacuous.
+    let canonical = serde_json::to_vec(
+        &serde_json::from_slice::<serde_json::Value>(&raw).expect("fixture is valid JSON"),
+    )
+    .unwrap();
+    assert_ne!(
+        raw, canonical,
+        "fixture must use non-canonical byte-forms in the cache-hot zone"
+    );
+
+    let out = t
+        .transform_bytes(&raw)
+        .expect("enabled transform must be Ok")
+        .expect("a 200-dict tool_result must be compressed -> Some(bytes)");
+
+    // The compressible live-zone tool_result was rewritten -> the output is
+    // strictly smaller (proves the dispatcher actually ran).
+    assert!(
+        out.len() < raw.len(),
+        "live-zone compression must shrink the body ({} -> {})",
+        raw.len(),
+        out.len()
+    );
+
+    // BYTE-FOR-BYTE: every non-canonical cache-hot literal must survive in
+    // the emitted bytes EXACTLY as authored (no serde canonicalization).
+    let out_str = std::str::from_utf8(&out).expect("output is UTF-8");
+    assert!(
+        out_str.contains(r#""max_tokens":1e1"#),
+        "1e1 number literal must survive verbatim (would be 10.0 after a Value round-trip): {out_str}"
+    );
+    assert!(
+        out_str.contains(r#""café a\/b stable preamble""#),
+        "non-ASCII \\u00e9 and redundant \\/ escapes in `system` must survive verbatim: {out_str}"
+    );
+    assert!(
+        out_str.contains(r#""description":"run a\/b shell""#),
+        "redundant \\/ escape in `tools` must survive verbatim: {out_str}"
+    );
+}
+
+#[test]
+fn transform_bytes_nochange_returns_none() {
+    // Sub-512B JSON-array tool_result -> dispatcher returns NoChange -> the
+    // bytes-oriented seam returns None (engine forwards the ORIGINAL bytes).
+    let t = HeadroomTransform {
+        settings: HeadroomSettings { compression: true },
+    };
+    let raw = serde_json::to_vec(&tiny_array_body()).unwrap();
+    let out = t.transform_bytes(&raw).expect("transform must be Ok");
+    assert!(
+        out.is_none(),
+        "NoChange must map to None (forward original bytes verbatim)"
+    );
+}
+
+#[test]
+fn transform_bytes_disabled_returns_none() {
+    // compression off -> None (true byte passthrough), no dispatch attempted.
+    let t = HeadroomTransform {
+        settings: HeadroomSettings { compression: false },
+    };
+    let raw = serde_json::to_vec(&compressible_body()).unwrap();
+    let out = t.transform_bytes(&raw).expect("transform must be Ok");
+    assert!(out.is_none(), "disabled compression must map to None");
+}
+
+#[test]
+fn transform_bytes_reads_model_from_body_for_tokenizer_gate() {
+    use headroom_core::transforms::live_zone::DEFAULT_MODEL;
+    use headroom_core::transforms::{compress_anthropic_live_zone, AuthMode, LiveZoneOutcome};
+
+    // The body declares its own model (NOT the hardcoded DEFAULT_MODEL). The
+    // transform must dispatch with `body["model"]`, so its output equals a direct
+    // dispatcher call with that exact model string.
+    let mut body = compressible_body();
+    body["model"] = json!("claude-haiku-4-5-20251001");
+    assert_ne!(
+        body["model"].as_str().unwrap(),
+        DEFAULT_MODEL,
+        "fixture model must differ from DEFAULT_MODEL so the gate source is observable"
+    );
+    let raw = serde_json::to_vec(&body).unwrap();
+
+    let t = HeadroomTransform {
+        settings: HeadroomSettings { compression: true },
+    };
+    let via_transform = t
+        .transform_bytes(&raw)
+        .expect("transform must be Ok")
+        .expect("compressible body -> Some");
+
+    // Direct dispatch with the body's own model.
+    let expected =
+        match compress_anthropic_live_zone(&raw, 0, AuthMode::Payg, "claude-haiku-4-5-20251001")
+            .expect("dispatch ok")
+        {
+            LiveZoneOutcome::Modified { new_body, .. } => new_body.get().as_bytes().to_vec(),
+            LiveZoneOutcome::NoChange { .. } => panic!("expected Modified for a 200-dict body"),
+        };
+    assert_eq!(
+        via_transform, expected,
+        "transform_bytes must dispatch with body[\"model\"], not DEFAULT_MODEL"
+    );
+}

@@ -145,7 +145,36 @@ pub fn ensure_beta_header(headers: &mut HeaderMap) -> BetaHeaderStatus {
     }
 }
 
+impl PinoTransform {
+    /// True when at least one body-mutating feature is active. Mirrors reference
+    /// pino's `mutate` guard (`AUTO_CACHE || transformFn || MODEL_OVERRIDE`,
+    /// reference/pino/src/server.js:59) where `transformFn` is the default
+    /// pipeline driven by `drop_tools` / `strip_ansi`. When NONE is active, pino
+    /// forwards the original bytes untouched (a TRUE byte passthrough).
+    fn has_active_feature(&self) -> bool {
+        self.settings.auto_cache
+            || !self.settings.drop_tools.is_empty()
+            || self.settings.strip_ansi
+            || self.settings.model_override.is_some()
+    }
+}
+
 impl BodyTransform for PinoTransform {
+    // FIX-B: pino's byte seam. With NO feature active, return None (TRUE byte
+    // passthrough — the engine forwards the original request bytes verbatim,
+    // matching reference pino's `mutate=false` arm). With any feature active,
+    // parse -> mutate -> serialize -> Some: pino re-serialization is acceptable
+    // because the prompt cache relies on cross-turn CONSISTENCY (a stable
+    // canonical form per turn), which this preserves.
+    fn transform_bytes(&self, raw: &[u8]) -> Result<Option<Vec<u8>>> {
+        if !self.has_active_feature() {
+            return Ok(None);
+        }
+        let mut body: Value = serde_json::from_slice(raw)?;
+        self.transform(&mut body)?;
+        Ok(Some(serde_json::to_vec(&body)?))
+    }
+
     fn transform(&self, body: &mut Value) -> Result<()> {
         // Only object bodies are mutable in any meaningful way; non-objects pass through.
         if !body.is_object() {

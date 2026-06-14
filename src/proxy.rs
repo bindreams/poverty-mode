@@ -257,13 +257,39 @@ impl TransformKind {
 
 /// A request-body mutation applied to a transformed `POST /v1/messages`.
 ///
-/// `transform` mutates the parsed JSON body in place. `apply_headers` is called
-/// by the engine AFTER `transform()` and AFTER the Host/Content-Length rewrite,
+/// `transform_bytes` is the byte-fidelity seam (FIX-B): it takes the ORIGINAL
+/// request bytes and returns `None` when nothing changed (the engine forwards
+/// the original bytes verbatim, preserving the prompt cache byte-for-byte) or
+/// `Some(bytes)` to forward exactly those bytes. `transform` is the legacy
+/// `Value`-in-place hook the default `transform_bytes` round-trips through;
+/// transforms whose output must be byte-surgical (headroom) override
+/// `transform_bytes` directly and never touch `serde_json::Value`.
+///
+/// `apply_headers` is called by the engine AFTER a transform ran (i.e. when
+/// `transform_bytes` returned `Some`) and AFTER the Host/Content-Length rewrite,
 /// only on a transformed POST `/v1/messages` (R6). The default is a no-op;
-/// `PinoTransform` overrides it (the override is filled in M4).
+/// `PinoTransform` overrides it.
 pub trait BodyTransform: Send + Sync {
     /// Mutate the parsed JSON request body in place.
     fn transform(&self, body: &mut serde_json::Value) -> anyhow::Result<()>;
+
+    /// Transform the ORIGINAL request bytes (FIX-B).
+    ///
+    /// Returns `Ok(None)` when there is NO change — the engine forwards the
+    /// original request bytes verbatim (byte-faithful, prompt-cache-preserving).
+    /// Returns `Ok(Some(bytes))` to forward exactly `bytes`.
+    ///
+    /// The default implementation parses to a `serde_json::Value`, runs
+    /// [`BodyTransform::transform`], and re-serializes — a canonicalizing
+    /// round-trip that is acceptable where cross-turn consistency (not raw
+    /// byte-fidelity) is what the prompt cache needs (pino). Transforms that
+    /// must preserve the upstream's cache-hot bytes exactly (headroom's
+    /// byte-surgical output) OVERRIDE this and never round-trip through `Value`.
+    fn transform_bytes(&self, raw: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
+        let mut value: serde_json::Value = serde_json::from_slice(raw)?;
+        self.transform(&mut value)?;
+        Ok(Some(serde_json::to_vec(&value)?))
+    }
 
     /// Adjust outbound headers after a transform. Default: no-op (R6).
     fn apply_headers(&self, _headers: &mut http::HeaderMap) {}
@@ -619,51 +645,42 @@ async fn forward(
             Ok(b) => b.to_bytes(),
             Err(e) => return Ok(bad_gateway(format!("reading request body: {e}"))),
         };
+        // FIX-B byte-fidelity seam: keep the ORIGINAL request bytes; only
+        // replace them when `transform_bytes` returns `Some`. `None` forwards
+        // the original bytes VERBATIM (headroom byte-surgical output and pino's
+        // true passthrough both ride this), so the cache-hot zone is never
+        // canonicalized through `serde_json::Value`.
         let mut out_body: Vec<u8> = body_bytes.to_vec();
         let mut did_transform = false;
 
         if !out_body.is_empty() {
             if let Some(transform) = state.transform.as_ref() {
-                match serde_json::from_slice::<serde_json::Value>(&out_body) {
-                    Ok(value) => {
-                        // R22/R23d/R20: run the transform on a blocking worker via
-                        // an `Arc` clone so CPU-heavy transforms (M5 compress)
-                        // never block the executor. The closure returns the
-                        // transformed JSON on success or the transform error.
-                        let transform = transform.clone();
-                        let outcome = tokio::task::spawn_blocking(move || {
-                            let mut value = value;
-                            transform.transform(&mut value).map(|()| value)
-                        })
-                        .await;
-                        match outcome {
-                            Ok(Ok(value)) => match serde_json::to_vec(&value) {
-                                Ok(bytes) => {
-                                    out_body = bytes;
-                                    did_transform = true;
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "serialize after transform failed, forwarding original body: {e}"
-                                    );
-                                }
-                            },
-                            Ok(Err(e)) => {
-                                // Fail-loud-in-logs, byte-faithful body (matches
-                                // reference "WARN transform threw, skipping").
-                                // Never forwards a half-transformed body, never
-                                // `?`-propagates a transform error to the client.
-                                tracing::warn!("transform failed, forwarding original body: {e}");
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "transform task join failed, forwarding original body: {e}"
-                                );
-                            }
-                        }
+                // R22/R23d/R20: run the transform on a blocking worker via an
+                // `Arc` clone so CPU-heavy transforms (headroom compress) never
+                // block the executor. The closure returns the transform's
+                // byte-level decision (None = no change, Some = new bytes) or
+                // its error.
+                let transform = transform.clone();
+                let raw = out_body.clone();
+                let outcome =
+                    tokio::task::spawn_blocking(move || transform.transform_bytes(&raw)).await;
+                match outcome {
+                    Ok(Ok(Some(bytes))) => {
+                        out_body = bytes;
+                        did_transform = true;
+                    }
+                    Ok(Ok(None)) => {
+                        // No change: forward the original bytes verbatim.
+                    }
+                    Ok(Err(e)) => {
+                        // Fail-loud-in-logs, byte-faithful body (matches
+                        // reference "WARN transform threw, skipping"). Never
+                        // forwards a half-transformed body, never `?`-propagates
+                        // a transform error to the client.
+                        tracing::warn!("transform failed, forwarding original body: {e}");
                     }
                     Err(e) => {
-                        tracing::warn!("JSON parse failed, forwarding original body: {e}");
+                        tracing::warn!("transform task join failed, forwarding original body: {e}");
                     }
                 }
             }

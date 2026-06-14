@@ -1619,3 +1619,116 @@ fn full_pipeline_parity_realistic_body() {
         BETA_FLAG
     );
 }
+
+// FIX-B: pino byte-fidelity seam =====================================
+//
+// pino re-serialization is acceptable (prompt-cache relies on cross-turn
+// CONSISTENCY, which a stable serialize preserves), but a TRUE passthrough
+// (None) is required when NO feature is active, matching reference pino which
+// only mutates when AUTO_CACHE / a transform / MODEL_OVERRIDE is set.
+
+fn all_off_settings() -> PinoSettings {
+    PinoSettings {
+        auto_cache: false,
+        tail_ttl: TailTtl::FiveMin,
+        drop_tools: vec![],
+        strip_ansi: false,
+        model_override: None,
+    }
+}
+
+#[test]
+fn transform_bytes_all_features_off_is_true_passthrough_none() {
+    let t = PinoTransform {
+        settings: all_off_settings(),
+    };
+    // Non-canonical byte-forms: if pino round-tripped through Value it would
+    // canonicalize these; None proves it never parsed/re-serialized at all.
+    let raw =
+        br#"{"model":"claude-x","max_tokens":1e1,"messages":[{"role":"user","content":"a\/b"}]}"#;
+    let out = t.transform_bytes(raw).expect("all-off transform is Ok");
+    assert!(
+        out.is_none(),
+        "all-features-off pino must be a TRUE byte passthrough (None)"
+    );
+}
+
+#[test]
+fn transform_bytes_auto_cache_on_returns_some_mutated() {
+    let t = PinoTransform {
+        settings: PinoSettings {
+            auto_cache: true,
+            ..all_off_settings()
+        },
+    };
+    let raw = br#"{"model":"claude-x","system":[{"type":"text","text":"hi"}],"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}"#;
+    let out = t
+        .transform_bytes(raw)
+        .expect("auto_cache transform is Ok")
+        .expect("auto_cache is an active feature -> Some (re-serialized + mutated)");
+    let v: serde_json::Value = serde_json::from_slice(&out).expect("output is valid JSON");
+    assert!(
+        count_cache_breakpoints(&v) > 0,
+        "auto_cache must have injected at least one cache breakpoint"
+    );
+}
+
+#[test]
+fn transform_bytes_drop_tools_on_returns_some() {
+    let t = PinoTransform {
+        settings: PinoSettings {
+            drop_tools: vec!["Bash".to_string()],
+            ..all_off_settings()
+        },
+    };
+    let raw = br#"{"model":"claude-x","tools":[{"name":"Bash"},{"name":"Read"}],"messages":[{"role":"user","content":"hi"}]}"#;
+    let out = t
+        .transform_bytes(raw)
+        .expect("drop_tools transform is Ok")
+        .expect("drop_tools is an active feature -> Some");
+    let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    let names: Vec<&str> = v["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["Read"], "Bash must be dropped");
+}
+
+#[test]
+fn transform_bytes_model_override_on_returns_some() {
+    let t = PinoTransform {
+        settings: PinoSettings {
+            model_override: Some("claude-sonnet-4-6".to_string()),
+            ..all_off_settings()
+        },
+    };
+    let raw = br#"{"model":"claude-x","messages":[{"role":"user","content":"hi"}]}"#;
+    let out = t
+        .transform_bytes(raw)
+        .expect("model_override transform is Ok")
+        .expect("model_override is an active feature -> Some");
+    let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(v["model"], json!("claude-sonnet-4-6"));
+}
+
+#[test]
+fn transform_bytes_strip_ansi_on_returns_some() {
+    let t = PinoTransform {
+        settings: PinoSettings {
+            strip_ansi: true,
+            ..all_off_settings()
+        },
+    };
+    // ESC is JSON-escaped as backslash-u-001b (a literal ESC byte inside a JSON string is
+    // invalid); strip_ansi must still remove the decoded CSI sequence.
+    let raw =
+        br#"{"model":"claude-x","messages":[{"role":"user","content":"\u001b[31mred\u001b[0m"}]}"#;
+    let out = t
+        .transform_bytes(raw)
+        .expect("strip_ansi transform is Ok")
+        .expect("strip_ansi is an active feature -> Some");
+    let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(v["messages"][0]["content"], json!("red"), "ANSI stripped");
+}

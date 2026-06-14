@@ -329,6 +329,122 @@ async fn forward_post_messages_recomputes_content_length() {
     bound.handle.await.expect("join").expect("engine ok");
 }
 
+// FIX-B: a pino hop with ALL features off is a TRUE byte passthrough — the
+// engine forwards the ORIGINAL request bytes verbatim (transform_bytes -> None),
+// even when those bytes are non-canonical, and applies NO beta header (matching
+// reference pino's `mutate=false` arm).
+#[tokio::test]
+async fn pino_all_features_off_forwards_bytes_verbatim_no_beta() {
+    use poverty_mode::proxy::pino::{PinoSettings, TailTtl};
+
+    let stub = start_stub_async(r#"{"ok":true}"#).await;
+    let shutdown = std::sync::Arc::new(Notify::new());
+    let shutdown_fut = {
+        let s = shutdown.clone();
+        async move { s.notified().await }
+    };
+    let cfg = EngineConfig {
+        name: ProxyName::Pino,
+        listen: "127.0.0.1:0".parse().unwrap(),
+        upstream: upstream(&format!("http://127.0.0.1:{}", stub.port)),
+        run_id: "01J0PINOPASS".to_string(),
+        log_file: None,
+        transform: TransformKind::Pino(PinoSettings {
+            auto_cache: false,
+            tail_ttl: TailTtl::FiveMin,
+            drop_tools: vec![],
+            strip_ansi: false,
+            model_override: None,
+        }),
+    };
+    let bound = bind_engine(cfg, shutdown_fut).await.expect("bind");
+    let port = bound.local_addr.port();
+
+    // Non-canonical byte-forms (1e1, redundant \/): a Value round-trip would
+    // canonicalize these. Byte-equal forwarding proves the true passthrough.
+    let body =
+        r#"{"model":"claude-x","max_tokens":1e1,"messages":[{"role":"user","content":"a\/b"}]}"#;
+    let (status, _resp) = raw_post(port, "/v1/messages", body).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let cap = stub.last().expect("captured");
+    assert_eq!(
+        cap.body,
+        body.as_bytes().to_vec(),
+        "all-features-off pino must forward the original bytes verbatim"
+    );
+    assert_eq!(
+        cap.content_length.as_deref(),
+        Some(body.len().to_string().as_str())
+    );
+    assert!(
+        cap.anthropic_beta.is_none(),
+        "no beta header when no feature is active (apply_headers must not fire)"
+    );
+
+    shutdown.notify_waiters();
+    bound.handle.await.expect("join").expect("engine ok");
+}
+
+// FIX-B: a pino hop with auto_cache ON re-serializes + injects breakpoints AND
+// applies the 1h-cache beta header (apply_headers fires on the active transform).
+#[tokio::test]
+async fn pino_auto_cache_on_injects_and_applies_beta() {
+    use poverty_mode::proxy::pino::{PinoSettings, TailTtl, BETA_FLAG};
+
+    let stub = start_stub_async(r#"{"ok":true}"#).await;
+    let shutdown = std::sync::Arc::new(Notify::new());
+    let shutdown_fut = {
+        let s = shutdown.clone();
+        async move { s.notified().await }
+    };
+    let cfg = EngineConfig {
+        name: ProxyName::Pino,
+        listen: "127.0.0.1:0".parse().unwrap(),
+        upstream: upstream(&format!("http://127.0.0.1:{}", stub.port)),
+        run_id: "01J0PINOCACHE".to_string(),
+        log_file: None,
+        transform: TransformKind::Pino(PinoSettings {
+            auto_cache: true,
+            tail_ttl: TailTtl::FiveMin,
+            drop_tools: vec![],
+            strip_ansi: false,
+            model_override: None,
+        }),
+    };
+    let bound = bind_engine(cfg, shutdown_fut).await.expect("bind");
+    let port = bound.local_addr.port();
+
+    let body = r#"{"model":"claude-x","system":[{"type":"text","text":"hi"}],"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}"#;
+    let (status, _resp) = raw_post(port, "/v1/messages", body).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let cap = stub.last().expect("captured");
+    let received: serde_json::Value =
+        serde_json::from_slice(&cap.body).expect("forwarded body is JSON");
+    let breakpoints = serde_json::to_string(&received)
+        .unwrap()
+        .matches("cache_control")
+        .count();
+    assert!(
+        breakpoints > 0,
+        "auto_cache must inject at least one cache breakpoint"
+    );
+    assert_eq!(
+        cap.anthropic_beta.as_deref(),
+        Some(BETA_FLAG),
+        "auto_cache must apply the 1h-cache beta header via apply_headers"
+    );
+    assert_eq!(
+        cap.content_length.as_deref(),
+        Some(cap.body.len().to_string().as_str()),
+        "content-length must equal the transformed body length"
+    );
+
+    shutdown.notify_waiters();
+    bound.handle.await.expect("join").expect("engine ok");
+}
+
 // POST with content-type text/plain, to exercise the is_json_content_type guard
 // (a non-JSON POST to /v1/messages must NOT be transformed). Gated with its sole
 // caller (the `test-transforms` non-JSON test) so the default build has no dead code.
