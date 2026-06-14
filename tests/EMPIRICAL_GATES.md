@@ -115,3 +115,32 @@ If/when CI provisions `claude` (logged-in, with credentials), add a dedicated jo
 that runs `cargo test --test agent_empirical -- --ignored`. Do **not** enable it
 on the default test job — the gates are excluded there by design (R7: default
 `cargo test` runs only non-`#[ignore]` tests; no central login in CI).
+
+## Central live suite
+
+The JB Central integration's genuinely external actions (download, interactive login, daemon
+start/health/stop) live in `tests/central_live.rs`, gated behind `#[ignore]` so the default
+`cargo test` never blocks on a network download or a browser-OAuth flow.
+
+**Prerequisites (human-provisioned; NOT run in CI — see R7):**
+
+- Network access to JetBrains' public S3 (`jetbrains-central-cli.s3.eu-west-1.amazonaws.com`).
+- A JetBrains **AI Pro** subscription and an interactive browser login (`jbcentral login`).
+
+**Run the central live suite deliberately:**
+
+```
+cargo test --test central_live -- --ignored
+```
+
+This installs the sha256-pinned `jbcentral` (default version `0.2.9`), performs the interactive login,
+starts the singleton daemon, asserts `/health`, and stops it. There is **no** skip-on-missing: when
+run, every test must pass (fail loudly otherwise). CI runs only the default `cargo test` and therefore
+never touches this suite (R7).
+
+**Where results are recorded:** record each manual run's date, host OS/arch, resolved `jbcentral`
+version, and pass/fail outcome in the table below.
+
+| Date | Host (os/arch) | jbcentral version | Result | Notes |
+| ---- | -------------- | ----------------- | ------ | ----- |
+|      |                |                   |        |       |
