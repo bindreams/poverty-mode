@@ -103,6 +103,11 @@ pub enum Command {
     /// SIGTERM and exits 42, then sleep. Used by signal-forwarding tests.
     #[command(name = "__sigwait", hide = true)]
     SigWait { marker: String },
+
+    /// Hidden: print the value of env var <name> to stdout and exit 0. Used as a
+    /// deterministic in-repo "agent" in run-precedence tests.
+    #[command(name = "__printenv", hide = true)]
+    PrintEnv { name: String },
 }
 
 /// Arguments for the `proxy` subcommand (R23b). The positional `which` selects
@@ -491,6 +496,12 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
                 }
             }
             std::thread::sleep(std::time::Duration::from_secs(3600));
+            Ok(())
+        }
+        Command::PrintEnv { name } => {
+            print!("{}", std::env::var(&name).unwrap_or_default());
+            use std::io::Write as _;
+            std::io::stdout().flush().ok();
             Ok(())
         }
     }

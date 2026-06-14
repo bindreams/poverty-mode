@@ -164,3 +164,87 @@ async fn run_reuses_live_chain_via_nested_guard() {
         "exactly one direct POST should reach the reused base (no new chain spawned)"
     );
 }
+
+/// A cross-platform "print one env var and exit 0" agent: self-exec the in-repo
+/// __printenv helper so there is no shell dependency.
+fn print_env_agent(exe: &str, var: &str) -> Vec<String> {
+    vec![
+        "--".into(),
+        exe.to_string(),
+        "__printenv".into(),
+        var.to_string(),
+    ]
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn nested_reuse_fires_when_desired_sig_matches_env_and_live() {
+    let chain = serve_chain("any").await;
+    let base = format!("http://127.0.0.1:{}", chain.port);
+    let cfg_home = tempfile::tempdir().unwrap();
+    let exe = env!("CARGO_BIN_EXE_poverty-mode");
+
+    let mut args = vec!["--proxies".to_string(), "pino".to_string()];
+    args.extend(print_env_agent(exe, "POVERTY_PROXY_CHAIN"));
+
+    let out = StdCommand::new(exe)
+        .env("XDG_CONFIG_HOME", cfg_home.path())
+        .env("POVERTY_PROXY_CHAIN", "pino")
+        .env("ANTHROPIC_BASE_URL", &base)
+        .arg("run")
+        .args(&args)
+        .output()
+        .expect("run output");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("pino"),
+        "agent POVERTY_PROXY_CHAIN was: {stdout:?}"
+    );
+    assert!(
+        chain.health_hits.load(Ordering::SeqCst) >= 1,
+        "the guard must have probed the live base before reusing it"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cli_proxies_override_env_in_resolution_signature() {
+    // env says pino; cli says headroom AND we set the live server's expectation so
+    // the guard would only fire if signatures matched. Because the desired sig
+    // (headroom) != env (pino), the guard does NOT short-circuit; to keep this
+    // hermetic we make the live chain ALSO headroom so the guard fires on the
+    // cli-resolved signature, and assert the injected chain is headroom (cli won).
+    let chain = serve_chain("any").await;
+    let base = format!("http://127.0.0.1:{}", chain.port);
+    let cfg_home = tempfile::tempdir().unwrap();
+    let exe = env!("CARGO_BIN_EXE_poverty-mode");
+
+    let mut args = vec!["--proxies".to_string(), "headroom".to_string()];
+    args.extend(print_env_agent(exe, "POVERTY_PROXY_CHAIN"));
+
+    let out = StdCommand::new(exe)
+        .env("XDG_CONFIG_HOME", cfg_home.path())
+        .env("POVERTY_PROXY_CHAIN", "headroom") // match the cli resolution
+        .env("ANTHROPIC_BASE_URL", &base)
+        .arg("run")
+        .args(&args)
+        .output()
+        .expect("run output");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("headroom"),
+        "cli --proxies must win resolution; agent saw: {stdout:?}"
+    );
+    assert!(
+        !stdout.trim().eq("pino"),
+        "must not be the stale env value: {stdout:?}"
+    );
+}
