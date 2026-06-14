@@ -260,3 +260,131 @@ fn shrinks_git_diff_tool_result_diff_compressor() {
         "whole body must be smaller after diff compression ({bt} -> {at})"
     );
 }
+
+/// A body that combines:
+///  (a) a cache-hot top-level `system` block and `tools` array (must survive
+///      byte-identical);
+///  (b) HISTORY: an older assistant turn before the latest user message (must
+///      survive byte-identical);
+///  (c) a `thinking` hot-zone block INSIDE the latest user message, sitting next
+///      to the compressible tool_result (must survive byte-identical — proves
+///      HOT_ZONE_BLOCK_TYPES exclusion);
+///  (d) a compressible 200-dict JSON-array tool_result that WILL be rewritten;
+///  (e) a high-precision integer literal and a `1.0` float that must not
+///      collapse under f64.
+fn mixed_body() -> serde_json::Value {
+    let array: Vec<serde_json::Value> = (0..200)
+        .map(|i| json!({ "id": i, "status": "ok", "value": format!("repeat-pattern-{}", i % 3) }))
+        .collect();
+    let payload = serde_json::to_string(&array).unwrap();
+    // 12345678901234567 cannot be represented exactly as f64; with
+    // arbitrary_precision serde_json keeps the literal digits.
+    serde_json::from_str(&format!(
+        r#"{{
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 64,
+            "metadata": {{ "big": 12345678901234567, "frac": 1.0 }},
+            "system": [
+                {{ "type": "text", "text": "you are a helpful assistant with a long stable preamble" }}
+            ],
+            "tools": [
+                {{ "name": "Bash", "description": "run a shell command", "input_schema": {{ "type": "object" }} }}
+            ],
+            "messages": [
+                {{ "role": "user", "content": [{{ "type": "text", "text": "earlier question from the user" }}] }},
+                {{ "role": "assistant", "content": [{{ "type": "text", "text": "earlier assistant answer that is part of cache history" }}] }},
+                {{
+                    "role": "user",
+                    "content": [
+                        {{ "type": "thinking", "thinking": "internal reasoning that must never be rewritten" }},
+                        {{
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_pm_mixed",
+                            "content": {payload:?}
+                        }}
+                    ]
+                }}
+            ]
+        }}"#,
+        payload = payload
+    ))
+    .expect("mixed_body is valid JSON")
+}
+
+#[test]
+fn hot_zones_history_and_numeric_precision_preserved() {
+    let t = HeadroomTransform {
+        settings: HeadroomSettings { compression: true },
+    };
+    let mut body = mixed_body();
+
+    // Snapshot every region that must survive byte-identical.
+    let system_before = serde_json::to_vec(&body["system"]).unwrap();
+    let tools_before = serde_json::to_vec(&body["tools"]).unwrap();
+    let history_user_before = serde_json::to_vec(&body["messages"][0]).unwrap();
+    let history_assistant_before = serde_json::to_vec(&body["messages"][1]).unwrap();
+    let thinking_before = serde_json::to_vec(&body["messages"][2]["content"][0]).unwrap();
+    let big_before = body["metadata"]["big"].to_string();
+    let frac_before = body["metadata"]["frac"].to_string();
+    // The compressible tool_result is messages[2].content[1] (after the thinking block).
+    let tool_result_before = body["messages"][2]["content"][1]["content"]
+        .as_str()
+        .expect("tool_result content is a string")
+        .len();
+
+    t.transform(&mut body)
+        .expect("enabled transform must be Ok");
+
+    // (a) Cache-hot top-level zones byte-identical.
+    assert_eq!(
+        system_before,
+        serde_json::to_vec(&body["system"]).unwrap(),
+        "system block must be untouched"
+    );
+    assert_eq!(
+        tools_before,
+        serde_json::to_vec(&body["tools"]).unwrap(),
+        "tools array must be untouched"
+    );
+    // (b) History (older user + assistant turns) byte-identical.
+    assert_eq!(
+        history_user_before,
+        serde_json::to_vec(&body["messages"][0]).unwrap(),
+        "older user turn (history) must be untouched"
+    );
+    assert_eq!(
+        history_assistant_before,
+        serde_json::to_vec(&body["messages"][1]).unwrap(),
+        "older assistant turn (history) must be untouched"
+    );
+    // (c) thinking hot-zone block inside the latest user message byte-identical.
+    assert_eq!(
+        thinking_before,
+        serde_json::to_vec(&body["messages"][2]["content"][0]).unwrap(),
+        "thinking block in the live zone must be excluded and untouched"
+    );
+    // (e) High-precision integer literal preserved exactly (no f64 collapse).
+    assert_eq!(big_before, "12345678901234567");
+    assert_eq!(
+        big_before,
+        body["metadata"]["big"].to_string(),
+        "large integer literal must survive the round-trip exactly"
+    );
+    // 1.0 must not collapse to 1.
+    assert_eq!(frac_before, "1.0");
+    assert_eq!(
+        frac_before,
+        body["metadata"]["frac"].to_string(),
+        "float literal 1.0 must not collapse to 1"
+    );
+    // (d) The live-zone tool_result WAS rewritten -> the survival above is
+    // meaningful, not vacuous (something actually happened).
+    let tool_result_after = body["messages"][2]["content"][1]["content"]
+        .as_str()
+        .expect("tool_result content is still a string")
+        .len();
+    assert!(
+        tool_result_after < tool_result_before,
+        "live-zone tool_result must have been compressed ({tool_result_before} -> {tool_result_after})"
+    );
+}
