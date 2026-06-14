@@ -3,9 +3,10 @@
 //! Per R23b the `proxy` command is the TUPLE variant `Command::Proxy(ProxyArgs)`;
 //! `ProxyArgs` carries a positional `which: ProxyName` plus three flattened
 //! argument groups (`common`, `pino`, `headroom`). The dispatcher selects the
-//! relevant group from `which`. Each handler is a `NotImplemented` stub; later
-//! milestones FILL them. The proxy identity flag is `--run-id` (a per-run ULID
-//! shared by all hops, R10).
+//! relevant group from `which`. M3 FILLS the `proxy` handler (build
+//! [`EngineConfig`] from the flags, then run the async engine); the remaining
+//! handlers are `NotImplemented` stubs that later milestones FILL. The proxy
+//! identity flag is `--run-id` (a per-run ULID shared by all hops, R10).
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -13,7 +14,9 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand};
 
 use crate::error::Error;
-use crate::proxy::ProxyName;
+use crate::proxy::headroom::HeadroomSettings;
+use crate::proxy::pino::{PinoSettings, TailTtl};
+use crate::proxy::{self, EngineConfig, ProxyName, TransformKind, Upstream};
 
 /// Run an AI coding agent behind a user-chosen chain of local HTTP proxies.
 #[derive(Parser, Debug)]
@@ -103,6 +106,24 @@ pub struct ProxyArgs {
     pub headroom: HeadroomArgs,
 }
 
+impl ProxyArgs {
+    /// Resolved `auto_cache`: default false; `--auto-cache` on, `--no-auto-cache`
+    /// off (clap `overrides_with` makes the last flag win).
+    pub fn auto_cache(&self) -> bool {
+        self.pino.auto_cache && !self.pino.no_auto_cache
+    }
+
+    /// Resolved `strip_ansi`: default TRUE; `--no-strip-ansi` turns it off.
+    pub fn strip_ansi(&self) -> bool {
+        !self.pino.no_strip_ansi
+    }
+
+    /// Resolved `compression`: default false; `--compression` on, `--no-compression` off.
+    pub fn compression(&self) -> bool {
+        self.headroom.compression && !self.headroom.no_compression
+    }
+}
+
 /// Restrict the `which` positional to the first-party proxies (`pino`/`headroom`).
 /// `central` is a downloaded singleton, never run via `proxy`, so it (and any
 /// unknown name) is rejected with a clap `InvalidValue` error.
@@ -142,23 +163,35 @@ pub struct CommonProxyArgs {
 
 /// pino-only transform flags (flattened onto [`ProxyArgs`]; read by the
 /// dispatcher when `which == ProxyName::Pino`).
+///
+/// `auto_cache` / `strip_ansi` are presence flags with `--no-*` companions
+/// (MINOR finding): each pair carries the positive flag plus its negation, and
+/// the resolved value is read via [`ProxyArgs::auto_cache`] / [`ProxyArgs::strip_ansi`]
+/// (clap `overrides_with` makes the last-specified flag win).
 #[derive(Args, Debug)]
 pub struct PinoArgs {
-    /// Enable cache-breakpoint injection.
-    #[arg(long)]
+    /// Inject prompt-cache breakpoints. Presence flag (default off).
+    #[arg(long, overrides_with = "no_auto_cache")]
     pub auto_cache: bool,
+    /// Disable cache-breakpoint injection (negates `--auto-cache`).
+    #[arg(long = "no-auto-cache", overrides_with = "auto_cache")]
+    pub no_auto_cache: bool,
 
-    /// Rolling-tail cache TTL.
-    #[arg(long, value_name = "TTL", value_parser = ["5m", "1h"])]
-    pub tail_ttl: Option<String>,
+    /// Rolling-tail cache TTL (`5m` default, or `1h`).
+    #[arg(long, value_name = "TTL", value_enum, default_value_t = TailTtlArg::FiveMin)]
+    pub tail_ttl: TailTtlArg,
 
     /// Tool names to drop from `tools` and scrub from reminders.
     #[arg(long, value_delimiter = ',', value_name = "CSV")]
-    pub drop_tools: Option<Vec<String>>,
+    pub drop_tools: Vec<String>,
 
-    /// Strip ANSI escape sequences from text content.
-    #[arg(long, value_name = "BOOL")]
-    pub strip_ansi: Option<bool>,
+    /// Strip ANSI escape sequences from text content. Presence flag (default on);
+    /// disable with `--no-strip-ansi`.
+    #[arg(long = "strip-ansi", overrides_with = "no_strip_ansi")]
+    pub strip_ansi: bool,
+    /// Disable ANSI stripping (negates the default-on behavior).
+    #[arg(long = "no-strip-ansi", overrides_with = "strip_ansi")]
+    pub no_strip_ansi: bool,
 
     /// Override the requested model identifier.
     #[arg(long, value_name = "MODEL")]
@@ -167,11 +200,37 @@ pub struct PinoArgs {
 
 /// headroom-only flag (flattened onto [`ProxyArgs`]; read by the dispatcher when
 /// `which == ProxyName::Headroom`).
+///
+/// `compression` is a presence flag with a `--no-compression` companion (MINOR
+/// finding); the resolved value is read via [`ProxyArgs::compression`].
 #[derive(Args, Debug)]
 pub struct HeadroomArgs {
-    /// Enable context compression (headroom).
-    #[arg(long, value_name = "BOOL")]
-    pub compression: Option<bool>,
+    /// Enable context compression. Presence flag (default off).
+    #[arg(long, overrides_with = "no_compression")]
+    pub compression: bool,
+    /// Disable compression (negates `--compression`; explicit off is the default).
+    #[arg(long = "no-compression", overrides_with = "compression")]
+    pub no_compression: bool,
+}
+
+/// `--tail-ttl` value enum mapping to [`TailTtl`] (`5m` / `1h`).
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TailTtlArg {
+    /// 5-minute rolling tail (default).
+    #[value(name = "5m")]
+    FiveMin,
+    /// 1-hour rolling tail.
+    #[value(name = "1h")]
+    OneHour,
+}
+
+impl From<TailTtlArg> for TailTtl {
+    fn from(a: TailTtlArg) -> Self {
+        match a {
+            TailTtlArg::FiveMin => TailTtl::FiveMin,
+            TailTtlArg::OneHour => TailTtl::OneHour,
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -194,12 +253,67 @@ pub enum ConfigAction {
     Path,
 }
 
-/// Dispatch a parsed CLI to the matching subcommand handler. Every handler is a
-/// `NotImplemented` stub; later milestones FILL them.
+/// Build the [`TransformKind`] for the chosen proxy from its (resolved) CLI
+/// flags. The presence/`--no-*` pairs are folded by the [`ProxyArgs`] accessors;
+/// empty `--drop-tools` entries (e.g. trailing comma) are dropped.
+pub fn transform_from_proxy_args(args: &ProxyArgs) -> TransformKind {
+    match args.which {
+        ProxyName::Pino => TransformKind::Pino(PinoSettings {
+            auto_cache: args.auto_cache(),
+            tail_ttl: args.pino.tail_ttl.into(),
+            drop_tools: args
+                .pino
+                .drop_tools
+                .iter()
+                .filter(|s| !s.is_empty())
+                .cloned()
+                .collect(),
+            strip_ansi: args.strip_ansi(),
+            model_override: args.pino.model_override.clone(),
+        }),
+        ProxyName::Headroom => TransformKind::Headroom(HeadroomSettings {
+            compression: args.compression(),
+        }),
+        // `which` is parsed by `parse_first_party_proxy`, which only accepts
+        // `pino`/`headroom`; `central` can never reach here.
+        ProxyName::Central => unreachable!("central is not a first-party proxy"),
+    }
+}
+
+/// Build the full [`EngineConfig`] for a `proxy` invocation from its parsed args.
+pub fn engine_config_from_proxy_args(args: &ProxyArgs) -> EngineConfig {
+    EngineConfig {
+        name: args.which,
+        listen: args.common.listen,
+        upstream: Upstream {
+            url: args.common.upstream.clone(),
+        },
+        run_id: args.common.run_id.clone(),
+        log_file: args.common.body_log_file.clone(),
+        transform: transform_from_proxy_args(args),
+    }
+}
+
+/// Dispatch a parsed CLI to the matching subcommand handler. The `proxy` arm is
+/// FILLED here (M3): it builds the [`EngineConfig`] and runs the async engine to
+/// completion on a fresh multi-thread runtime. The remaining handlers are
+/// `NotImplemented` stubs that later milestones FILL.
 pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
         Command::Run { .. } => Err(Error::NotImplemented("run").into()),
-        Command::Proxy(_) => Err(Error::NotImplemented("proxy").into()),
+        Command::Proxy(args) => {
+            // DEFERRED TO M6 (R22 parent-death wiring): M6 inserts
+            // `crate::orchestrator::teardown::spawn_death_watcher_from_env();` as
+            // the FIRST statement of this arm so the macOS death-pipe backstop
+            // fires (the child terminates on parent death via read-end EOF, R23h).
+            // It cannot be added in M3 because `teardown` is authored in M6; M3
+            // surfaces the deferral here rather than silently omitting it.
+            let cfg = engine_config_from_proxy_args(&args);
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?;
+            rt.block_on(proxy::run_proxy(cfg))
+        }
         Command::Central { .. } => Err(Error::NotImplemented("central").into()),
         Command::Config { .. } => Err(Error::NotImplemented("config").into()),
         Command::Status => Err(Error::NotImplemented("status").into()),

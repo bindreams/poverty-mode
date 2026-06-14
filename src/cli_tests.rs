@@ -1,6 +1,16 @@
 use super::*;
 use clap::Parser;
 
+fn parse_proxy(args: &[&str]) -> ProxyArgs {
+    let mut full = vec!["poverty-mode", "proxy"];
+    full.extend_from_slice(args);
+    let cli = Cli::parse_from(full);
+    match cli.command {
+        Command::Proxy(a) => a,
+        other => panic!("expected proxy subcommand, got {other:?}"),
+    }
+}
+
 #[test]
 fn parses_run_with_proxies_and_trailing_agent() {
     let cli = Cli::try_parse_from([
@@ -57,8 +67,7 @@ fn parses_proxy_pino_with_transform_flags() {
         "1h",
         "--drop-tools",
         "WebFetch,WebSearch",
-        "--strip-ansi",
-        "true",
+        "--no-strip-ansi",
         "--model-override",
         "claude-3-5-haiku",
     ])
@@ -72,13 +81,13 @@ fn parses_proxy_pino_with_transform_flags() {
             assert_eq!(args.common.listen.to_string(), "127.0.0.1:0");
             assert_eq!(args.common.upstream.as_str(), "https://api.anthropic.com/");
             assert_eq!(args.common.run_id, "01ARZ");
-            assert!(args.pino.auto_cache);
-            assert_eq!(args.pino.tail_ttl.as_deref(), Some("1h"));
+            assert!(args.auto_cache());
+            assert_eq!(args.pino.tail_ttl, TailTtlArg::OneHour);
             assert_eq!(
                 args.pino.drop_tools,
-                Some(vec!["WebFetch".to_string(), "WebSearch".to_string()])
+                vec!["WebFetch".to_string(), "WebSearch".to_string()]
             );
-            assert_eq!(args.pino.strip_ansi, Some(true));
+            assert!(!args.strip_ansi());
             assert_eq!(
                 args.pino.model_override.as_deref(),
                 Some("claude-3-5-haiku")
@@ -101,14 +110,13 @@ fn parses_proxy_headroom_with_compression_flag() {
         "--run-id",
         "01ARZ",
         "--compression",
-        "true",
     ])
     .expect("proxy headroom argv should parse");
     match cli.command {
         Command::Proxy(args) => {
             assert_eq!(args.which, ProxyName::Headroom);
             assert_eq!(args.common.run_id, "01ARZ");
-            assert_eq!(args.headroom.compression, Some(true));
+            assert!(args.compression());
         }
         other => panic!("expected Proxy, got {other:?}"),
     }
@@ -155,8 +163,8 @@ fn proxy_pino_reads_pino_group_via_which() {
     match cli.command {
         Command::Proxy(args) => {
             assert_eq!(args.which, ProxyName::Pino);
-            assert!(args.pino.auto_cache);
-            assert_eq!(args.headroom.compression, None);
+            assert!(args.auto_cache());
+            assert!(!args.compression());
         }
         other => panic!("expected Proxy, got {other:?}"),
     }
@@ -277,4 +285,93 @@ fn dispatch_run_returns_not_implemented() {
         err.to_string().contains("not yet implemented: run"),
         "got: {err}"
     );
+}
+
+#[test]
+fn proxy_bool_flags_are_presence_with_negations() {
+    // Resolved values are read via the accessors (auto_cache(), strip_ansi(),
+    // compression()), which fold the raw presence flag + its --no-* companion.
+    // strip_ansi defaults true; --no-strip-ansi turns it off. auto_cache defaults
+    // false; --auto-cache turns it on.
+    let a = parse_proxy(&[
+        "pino",
+        "--listen",
+        "127.0.0.1:0",
+        "--upstream",
+        "http://127.0.0.1:9/",
+        "--run-id",
+        "r",
+    ]);
+    assert!(a.strip_ansi(), "strip_ansi defaults true");
+    assert!(!a.auto_cache(), "auto_cache defaults false");
+
+    let a = parse_proxy(&[
+        "pino",
+        "--listen",
+        "127.0.0.1:0",
+        "--upstream",
+        "http://127.0.0.1:9/",
+        "--run-id",
+        "r",
+        "--auto-cache",
+        "--no-strip-ansi",
+    ]);
+    assert!(a.auto_cache(), "--auto-cache is a presence flag");
+    assert!(!a.strip_ansi(), "--no-strip-ansi negates the default");
+
+    // compression defaults false; --compression turns it on.
+    let a = parse_proxy(&[
+        "headroom",
+        "--listen",
+        "127.0.0.1:0",
+        "--upstream",
+        "http://127.0.0.1:9/",
+        "--run-id",
+        "r",
+        "--compression",
+    ]);
+    assert!(a.compression(), "--compression is a presence flag");
+}
+
+#[test]
+fn proxy_transform_kind_matches_chosen_proxy() {
+    let a = parse_proxy(&[
+        "pino",
+        "--listen",
+        "127.0.0.1:0",
+        "--upstream",
+        "http://127.0.0.1:9/",
+        "--run-id",
+        "r",
+        "--auto-cache",
+        "--tail-ttl",
+        "1h",
+        "--drop-tools",
+        "NotebookEdit,CronList",
+    ]);
+    match transform_from_proxy_args(&a) {
+        TransformKind::Pino(s) => {
+            assert!(s.auto_cache);
+            assert_eq!(
+                s.drop_tools,
+                vec!["NotebookEdit".to_string(), "CronList".to_string()]
+            );
+        }
+        other => panic!("expected pino transform, got {other:?}"),
+    }
+
+    let a = parse_proxy(&[
+        "headroom",
+        "--listen",
+        "127.0.0.1:0",
+        "--upstream",
+        "http://127.0.0.1:9/",
+        "--run-id",
+        "r",
+        "--compression",
+    ]);
+    match transform_from_proxy_args(&a) {
+        TransformKind::Headroom(s) => assert!(s.compression),
+        other => panic!("expected headroom transform, got {other:?}"),
+    }
 }
