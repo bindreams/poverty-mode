@@ -452,13 +452,28 @@ pub fn proxy_pid_path() -> anyhow::Result<PathBuf> {
     Ok(home.join(".wire").join("proxy.pid"))
 }
 
+/// Per-request bound for the blocking central health probe (see [`health`]). Bounds
+/// an external event (a daemon that accepts the TCP connection but never answers
+/// `/health`) so a detached `spawn_blocking` probe cannot outlive a cancelled
+/// caller future and leak a blocking-pool thread. Mirrors
+/// `orchestrator::HEALTH_PROBE_TIMEOUT`.
+const HEALTH_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// True iff `GET http://127.0.0.1:<port>/health` returns a success status.
 ///
 /// **R5 contract:** synchronous `reqwest::blocking` GET — call via `spawn_blocking` from async code.
+///
+/// The client carries a bounded per-request timeout. This is the sanctioned
+/// human-surfaced failure bound on an EXTERNAL event (a central daemon that
+/// accepts the connection but never answers `/health`), NOT a sync-by-sleep. It
+/// guarantees an unresponsive daemon fails the probe instead of hanging, so a
+/// detached `spawn_blocking` probe cannot outlive a cancelled caller future and
+/// leak a blocking-pool thread.
 pub fn health(port: u16) -> bool {
     let url = health_url(port);
     let client = match reqwest::blocking::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .timeout(HEALTH_PROBE_TIMEOUT)
         .build()
     {
         Ok(c) => c,
