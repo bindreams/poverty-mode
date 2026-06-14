@@ -644,3 +644,25 @@ fn nested_reuse_decision_none_when_desired_chain_empty() {
     );
     assert!(got.is_none(), "empty desired chain must not short-circuit");
 }
+
+#[test]
+fn hop_log_file_embeds_literal_port_token_per_proxy() {
+    let dir = std::path::Path::new("runs").join("01ABC");
+    // §5.11 consumer parses `<proxy>-<port>.log`; the producer must emit the literal
+    // `{port}` token (the engine resolves it to the real bound port), NOT a hop index
+    // like `pino-0.log`. Reverting the producer to a hop index fails this assertion.
+    assert_eq!(
+        hop_log_file(&dir, ProxyName::Pino)
+            .file_name()
+            .unwrap()
+            .to_string_lossy(),
+        "pino-{port}.log"
+    );
+    assert_eq!(
+        hop_log_file(&dir, ProxyName::Headroom)
+            .file_name()
+            .unwrap()
+            .to_string_lossy(),
+        "headroom-{port}.log"
+    );
+}

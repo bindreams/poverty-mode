@@ -197,6 +197,15 @@ fn self_spawn_exe() -> anyhow::Result<std::path::PathBuf> {
 /// Build the chain through a `&mut dyn ProxyManager` (R15 seam), run + signal-
 /// forward the agent (signal forwarding added in M6.11), then shut the manager
 /// down. Fail-closed deadline added in M6.12.
+/// Body-log filename for a hop (design §5.11: `<proxy>-<port>.log`). The port is
+/// OS-assigned at bind time, so we emit the literal `{port}` token here; the engine
+/// substitutes the real bound port at file-open (`proxy::resolve_log_file`), and
+/// `status::enumerate_runs` parses it back. Kept a named fn so the producer side is
+/// test-pinned (a regression to a hop-index name like `pino-0.log` fails loudly).
+fn hop_log_file(run_dir: &std::path::Path, name: ProxyName) -> std::path::PathBuf {
+    run_dir.join(format!("{}-{{port}}.log", name.as_str()))
+}
+
 async fn build_via_manager(
     manager: &mut dyn manager::ProxyManager,
     chain: &[ResolvedProxy],
@@ -227,7 +236,7 @@ async fn build_via_manager(
         .map(|hop| manager::HopSpec {
             proxy: hop.clone(),
             run_id: run_id.clone(),
-            log_file: run_dir.join(format!("{}-{{port}}.log", hop.name.as_str())),
+            log_file: hop_log_file(&run_dir, hop.name),
         })
         .collect();
 
