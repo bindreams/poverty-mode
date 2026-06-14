@@ -5,11 +5,22 @@
 //! these types. `proxy::pino` and `proxy::headroom` (this module's submodules)
 //! hold per-proxy settings + transforms.
 
+use std::convert::Infallible;
+use std::io::Write;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
 
+use bytes::Bytes;
+use http_body_util::Full;
+use hyper::body::Incoming;
+use hyper::service::service_fn;
+use hyper::{Request, Response, StatusCode};
+use hyper_util::rt::TokioIo;
+use hyper_util::server::graceful::GracefulShutdown;
 use serde::{Deserialize, Serialize};
+use tokio::net::TcpListener;
 
 pub mod headroom;
 pub mod pino;
@@ -299,6 +310,210 @@ pub struct HealthBody {
     pub upstream: String,
     /// The per-run ULID (identity).
     pub run_id: String,
+}
+
+/// Internal per-connection shared context.
+struct EngineState {
+    name: ProxyName,
+    port: u16,
+    upstream: Upstream,
+    run_id: String,
+    #[allow(dead_code)] // M3.9 wires this into the forward path.
+    client: reqwest::Client,
+    // R22/R23d: the engine stores `Arc<dyn BodyTransform + Send + Sync>` so the
+    // forward path can clone the `Arc` into a `tokio::task::spawn_blocking`
+    // closure (covers pino's cheap mutation AND headroom's CPU-heavy compress,
+    // R20). M5 reuses this exact field and does NOT re-type it. A `Box` would
+    // foreclose that design (it cannot be moved into a 'static blocking closure
+    // and still be reused), so M3 authors `Arc` now.
+    #[allow(dead_code)] // M3.9 wires this into the forward path.
+    transform: Option<Arc<dyn BodyTransform + Send + Sync>>,
+    #[allow(dead_code)] // M3.9 wires this into the forward path.
+    log_file: Option<std::path::PathBuf>,
+}
+
+/// A bound, serving engine. `local_addr` is the real bound address (ephemeral
+/// port resolved); `handle` resolves when the serve loop drains and exits.
+pub struct BoundEngine {
+    pub local_addr: SocketAddr,
+    pub handle: tokio::task::JoinHandle<anyhow::Result<()>>,
+}
+
+/// Bind the listener, print the ReadyLine to stdout, and spawn the serve loop.
+/// Returns the real bound address immediately (so an in-process caller learns
+/// the ephemeral port without polling). `shutdown` resolving begins a graceful
+/// drain; the returned `handle` resolves once all in-flight connections finish.
+pub async fn bind_engine(
+    cfg: EngineConfig,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<BoundEngine> {
+    let listener = TcpListener::bind(cfg.listen).await?;
+    let local_addr = listener.local_addr()?;
+    let port = local_addr.port();
+
+    // Print exactly one ReadyLine to stdout (compact JSON + newline + flush)
+    // AFTER a successful bind and BEFORE accepting connections. This is the
+    // synchronization point the orchestrator reads as a blocking pipe read.
+    print_ready_line(&cfg.name, port, &cfg.run_id)?;
+
+    let state = Arc::new(EngineState {
+        name: cfg.name,
+        port,
+        upstream: cfg.upstream,
+        run_id: cfg.run_id,
+        client: build_upstream_client()?,
+        transform: cfg.transform.as_body_transform(),
+        log_file: cfg.log_file,
+    });
+
+    let handle = tokio::spawn(async move { serve_loop(listener, state, shutdown).await });
+    Ok(BoundEngine { local_addr, handle })
+}
+
+fn print_ready_line(name: &ProxyName, port: u16, run_id: &str) -> anyhow::Result<()> {
+    let ready = ReadyLine {
+        ready: true,
+        port,
+        proxy: name.as_str().to_string(),
+        run_id: run_id.to_string(),
+    };
+    let stdout = std::io::stdout();
+    let mut lock = stdout.lock();
+    serde_json::to_writer(&mut lock, &ready)?;
+    lock.write_all(b"\n")?;
+    lock.flush()?;
+    Ok(())
+}
+
+async fn serve_loop(
+    listener: TcpListener,
+    state: Arc<EngineState>,
+    shutdown: impl std::future::Future<Output = ()> + Send,
+) -> anyhow::Result<()> {
+    let graceful = GracefulShutdown::new();
+    // http1-only Builder: the locked manifest (R2/R23a) enables hyper
+    // ["server","http1"] and hyper-util ["tokio","server","server-graceful"] —
+    // NOT server-auto/http2 — so we use the http1 connection server (matching the
+    // canonical stub). `serve_connection` returns an owned `http1::Connection`
+    // (no borrow of the builder), which directly implements `GracefulConnection`,
+    // so `graceful.watch(conn)` wraps it without an `into_owned()` step.
+    let builder = hyper::server::conn::http1::Builder::new();
+    tokio::pin!(shutdown);
+
+    loop {
+        tokio::select! {
+            accepted = listener.accept() => {
+                let (stream, _peer) = match accepted {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                let io = TokioIo::new(stream);
+                let st = state.clone();
+                let svc = service_fn(move |req: Request<Incoming>| {
+                    let st = st.clone();
+                    async move { handle_request(st, req).await }
+                });
+                let conn = builder.serve_connection(io, svc);
+                let watched = graceful.watch(conn);
+                tokio::spawn(async move {
+                    let _ = watched.await;
+                });
+            }
+            _ = &mut shutdown => {
+                // Stop accepting; drain in-flight connections to completion.
+                break;
+            }
+        }
+    }
+    // Await all in-flight connection futures. No timeout: the only human-surfaced
+    // numeric bound lives on the orchestrator's readiness deadline (M6), never here.
+    graceful.shutdown().await;
+    Ok(())
+}
+
+/// Request handler: answer the local health probe; otherwise forward upstream.
+///
+/// Returns `Result<_, Infallible>` (R23e): hyper-util's `serve_connection`
+/// requires `S::Error: Into<Box<dyn std::error::Error + Send + Sync>>`, which
+/// `anyhow::Error` does NOT satisfy. Every internal failure is converted to a
+/// local 502 response, never propagated as the service error.
+async fn handle_request(
+    state: Arc<EngineState>,
+    req: Request<Incoming>,
+) -> Result<Response<Full<Bytes>>, Infallible> {
+    if req.method() == hyper::Method::GET && is_health_path(req.uri().path(), state.name) {
+        return Ok(health_response(&state));
+    }
+    forward(state, req).await
+}
+
+/// True when `path` is this proxy's local health path (`/__pm/health` for
+/// first-party, `/health` for central). Named for what it checks (not "messages").
+fn is_health_path(path: &str, name: ProxyName) -> bool {
+    path == name.health_path()
+}
+
+fn health_response(state: &EngineState) -> Response<Full<Bytes>> {
+    let body = HealthBody {
+        proxy: state.name.as_str().to_string(),
+        port: state.port,
+        upstream: state.upstream.host_header(),
+        run_id: state.run_id.clone(),
+    };
+    let json = serde_json::to_vec(&body).unwrap_or_else(|_| b"{}".to_vec());
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "application/json")
+        .header("x-pm-proxy", state.name.as_str())
+        .body(Full::new(Bytes::from(json)))
+        .unwrap()
+}
+
+/// Placeholder forward — returns 502 so the scaffolding compiles and binds. M3.9
+/// replaces this with the real streaming/buffering forward; M3.9's tests assert
+/// 200, which this placeholder cannot satisfy (its genuine red phase). Returns
+/// `Result<_, Infallible>` (R23e); M3.9 keeps the `Infallible` error and only
+/// switches the body type to `EngineBody`.
+async fn forward(
+    _state: Arc<EngineState>,
+    _req: Request<Incoming>,
+) -> Result<Response<Full<Bytes>>, Infallible> {
+    Ok(Response::builder()
+        .status(StatusCode::BAD_GATEWAY)
+        .body(Full::new(Bytes::from_static(b"not yet implemented")))
+        .unwrap())
+}
+
+/// Run the engine to completion, draining on OS signal. Public entry per contract.
+pub async fn run_proxy(cfg: EngineConfig) -> anyhow::Result<()> {
+    run_proxy_with_shutdown(cfg, default_shutdown_signal()).await
+}
+
+/// Test/orchestrator seam: run the engine, draining when `shutdown` resolves.
+pub async fn run_proxy_with_shutdown(
+    cfg: EngineConfig,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<()> {
+    let bound = bind_engine(cfg, shutdown).await?;
+    bound.handle.await??;
+    Ok(())
+}
+
+/// The real OS shutdown signal: Ctrl-C everywhere; SIGTERM additionally on Unix.
+async fn default_shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut term = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = term.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 #[cfg(test)]

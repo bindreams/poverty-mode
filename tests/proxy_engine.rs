@@ -7,7 +7,15 @@ use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper::{Request, StatusCode};
 use hyper_util::rt::TokioIo;
+use poverty_mode::proxy::{bind_engine, EngineConfig, ProxyName, TransformKind, Upstream};
 use tokio::net::TcpStream;
+use tokio::sync::Notify;
+
+fn upstream(s: &str) -> Upstream {
+    Upstream {
+        url: url::Url::parse(s).unwrap(),
+    }
+}
 
 async fn raw_post(port: u16, path: &str, body: &str) -> (StatusCode, String) {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
@@ -46,4 +54,34 @@ async fn stub_records_the_last_request_and_accessors() {
     assert_eq!(cap.body, br#"{"hi":1}"#.to_vec());
     assert_eq!(stub.count(), 1);
     assert_eq!(stub.first_segment().as_deref(), Some("v1"));
+}
+
+#[tokio::test]
+async fn bind_engine_reports_real_ephemeral_port_and_drains() {
+    let stub = start_stub_async(r#"{"ok":true}"#).await;
+    let shutdown = std::sync::Arc::new(Notify::new());
+    let shutdown_fut = {
+        let s = shutdown.clone();
+        async move { s.notified().await }
+    };
+    let cfg = EngineConfig {
+        name: ProxyName::Pino,
+        listen: "127.0.0.1:0".parse().unwrap(),
+        upstream: upstream(&format!("http://127.0.0.1:{}", stub.port)),
+        run_id: "01J0BIND".to_string(),
+        log_file: None,
+        transform: TransformKind::None,
+    };
+    let bound = bind_engine(cfg, shutdown_fut).await.expect("bind");
+    assert_ne!(bound.local_addr.port(), 0, "must report a real bound port");
+    assert_eq!(bound.local_addr.ip().to_string(), "127.0.0.1");
+
+    // Trigger drain and confirm the serve task exits cleanly. `notify_one`
+    // (not `notify_waiters`) stores a permit when no waiter is yet registered,
+    // so the wakeup is never lost to a spawn-vs-notify race: the serve task's
+    // `notified().await` consumes the stored permit and the loop breaks. With
+    // `notify_waiters` the notification would be dropped whenever the spawned
+    // serve task had not yet polled its shutdown future, hanging the drain.
+    shutdown.notify_one();
+    bound.handle.await.expect("join").expect("engine ok");
 }
