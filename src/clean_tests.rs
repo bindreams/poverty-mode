@@ -142,3 +142,27 @@ fn execute_clean_plan_removes_run_dirs_and_clears_cache() {
     assert!(cache.exists());
     assert!(!cache.join("bin").exists());
 }
+
+#[test]
+fn execute_clean_plan_tolerates_already_absent_paths() {
+    // A run dir scheduled for deletion can vanish between planning and execution
+    // (concurrent run, manual rm). Removal must treat NotFound as success, never
+    // abort the whole clean. Likewise a never-created cache dir is cleared+recreated.
+    let tmp = tempfile::tempdir().unwrap();
+    let runs_root = tmp.path().join("runs");
+    let cache = tmp.path().join("cache"); // never created
+    fs::create_dir_all(runs_root.join(B)).unwrap();
+
+    let plan = CleanPlan {
+        // A is already gone; B exists. Both must succeed.
+        run_dirs_to_delete: vec![runs_root.join(A), runs_root.join(B)],
+        cache_dir_to_clear: Some(cache.clone()),
+        stop_central: false,
+    };
+    execute_clean_plan(&plan).unwrap();
+
+    assert!(!runs_root.join(A).exists());
+    assert!(!runs_root.join(B).exists());
+    // The absent cache dir is recreated empty so subsequent runs find it present.
+    assert!(cache.is_dir());
+}

@@ -403,3 +403,57 @@ fn prune_run_dirs_no_op_when_runs_dir_absent() {
     prune_run_dirs_in(&runs, 3).unwrap();
     assert!(!runs.exists());
 }
+
+#[test]
+fn prune_run_dirs_never_removes_non_ulid_directories() {
+    // A non-run directory under runs/ (e.g. a user's scratch dir) must NEVER be
+    // pruned, regardless of how many real runs are kept. Only valid-ULID dirs are
+    // runs; everything else is left untouched (same gate as `clean`).
+    let tmp = tempfile::TempDir::new().unwrap();
+    let runs = tmp.path().join("runs");
+    std::fs::create_dir_all(&runs).unwrap();
+    std::fs::create_dir(runs.join("my-scratch-notes")).unwrap();
+    std::fs::create_dir(runs.join("01000000000000000000000001")).unwrap();
+    std::fs::create_dir(runs.join("01000000000000000000000002")).unwrap();
+
+    // keep=0 removes every *run*, but the non-ULID dir is not a run.
+    prune_run_dirs_in(&runs, 0).unwrap();
+
+    assert!(
+        runs.join("my-scratch-notes").is_dir(),
+        "a non-ULID directory must never be pruned"
+    );
+    assert!(!runs.join("01000000000000000000000001").exists());
+    assert!(!runs.join("01000000000000000000000002").exists());
+}
+
+#[test]
+fn enumerate_run_ids_returns_ulid_dirs_sorted_skipping_others() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let runs = tmp.path().join("runs");
+    std::fs::create_dir_all(&runs).unwrap();
+    // Created out of order to prove the result is sorted ascending.
+    std::fs::create_dir(runs.join("01000000000000000000000003")).unwrap();
+    std::fs::create_dir(runs.join("01000000000000000000000001")).unwrap();
+    std::fs::create_dir(runs.join("01000000000000000000000002")).unwrap();
+    // Non-ULID dir and a stray file are both excluded.
+    std::fs::create_dir(runs.join("my-scratch-notes")).unwrap();
+    std::fs::write(runs.join("stray.txt"), b"x").unwrap();
+
+    let ids = enumerate_run_ids(&runs).unwrap();
+    assert_eq!(
+        ids,
+        vec![
+            "01000000000000000000000001".to_string(),
+            "01000000000000000000000002".to_string(),
+            "01000000000000000000000003".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn enumerate_run_ids_empty_when_runs_dir_absent() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let runs = tmp.path().join("runs"); // never created
+    assert!(enumerate_run_ids(&runs).unwrap().is_empty());
+}

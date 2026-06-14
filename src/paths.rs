@@ -179,37 +179,53 @@ pub fn prune_run_dirs(keep: usize) -> anyhow::Result<()> {
     prune_run_dirs_in(&runs, keep)
 }
 
-/// Keep the `keep` most-recent run directories in `runs_dir` and remove the rest.
-/// Recency is by directory-name lexical order (ULID run-ids sort by creation
-/// time — no mtime/timer is consulted). Non-directory entries are ignored. A
-/// missing `runs_dir` is a no-op. Removal errors are surfaced (not swallowed).
-fn prune_run_dirs_in(runs_dir: &Path, keep: usize) -> anyhow::Result<()> {
+/// List the valid-ULID run-id subdirectories of `runs_dir`, sorted ascending
+/// (oldest first; ULID order == chronological). The canonical "what is a run dir"
+/// primitive: a directory counts as a run ONLY if its name is a valid ULID, so a
+/// non-run directory (e.g. a user's scratch dir) is never returned — and therefore
+/// never pruned. Non-directory entries are ignored. A missing `runs_dir` yields an
+/// empty list. Shared by `prune_run_dirs_in` (here) and `crate::clean` so both
+/// agree on which directories are runs.
+pub(crate) fn enumerate_run_ids(runs_dir: &Path) -> anyhow::Result<Vec<String>> {
     let read = match fs::read_dir(runs_dir) {
         Ok(r) => r,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => {
             return Err(anyhow::Error::from(e))
                 .with_context(|| format!("reading runs dir {}", runs_dir.display()));
         }
     };
 
-    let mut dirs: Vec<(String, PathBuf)> = Vec::new();
+    let mut ids: Vec<String> = Vec::new();
     for entry in read {
         let entry = entry.with_context(|| format!("reading entry under {}", runs_dir.display()))?;
         let file_type = entry
             .file_type()
             .with_context(|| format!("stat {}", entry.path().display()))?;
-        if file_type.is_dir() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            dirs.push((name, entry.path()));
+        if !file_type.is_dir() {
+            continue;
+        }
+        if let Some(name) = entry.file_name().to_str() {
+            if ulid::Ulid::from_string(name).is_ok() {
+                ids.push(name.to_string());
+            }
         }
     }
+    ids.sort();
+    Ok(ids)
+}
 
-    // Sort ascending by name: oldest first, newest last.
-    dirs.sort_by(|a, b| a.0.cmp(&b.0));
-
-    let remove_count = dirs.len().saturating_sub(keep);
-    for (_name, path) in dirs.into_iter().take(remove_count) {
+/// Keep the `keep` most-recent run directories in `runs_dir` and remove the rest.
+/// Recency is by directory-name lexical order (ULID run-ids sort by creation
+/// time — no mtime/timer is consulted). Only valid-ULID directories are runs, so a
+/// non-run directory is never pruned (via `enumerate_run_ids`). A missing `runs_dir`
+/// is a no-op. Removal errors are surfaced (not swallowed).
+fn prune_run_dirs_in(runs_dir: &Path, keep: usize) -> anyhow::Result<()> {
+    // Ascending => oldest first; keep the newest `keep`, remove the leading ones.
+    let ids = enumerate_run_ids(runs_dir)?;
+    let remove_count = ids.len().saturating_sub(keep);
+    for id in ids.into_iter().take(remove_count) {
+        let path = runs_dir.join(&id);
         fs::remove_dir_all(&path)
             .with_context(|| format!("pruning old run dir {}", path.display()))?;
     }
