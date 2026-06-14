@@ -2,6 +2,7 @@
 //! with a race-free READY handshake, wire + signal-forward the agent, run it, and
 //! tear the chain down (children survive parent death — see `teardown`).
 
+pub mod manager;
 pub mod teardown;
 
 use crate::config::ResolvedProxy;
@@ -255,6 +256,48 @@ where
         }
         return Ok(parsed);
     }
+}
+
+use crate::proxy::HealthBody;
+
+/// Per-request bound for the blocking health probe (see `health_probe`). Bounds an
+/// external event (an unresponsive hop) so a detached `spawn_blocking` probe
+/// cannot outlive a cancelled readiness deadline.
+const HEALTH_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Blocking `GET <base>/__pm/health`, parsed into a `HealthBody`, or `None` on
+/// any failure (not listening, non-200, wrong body). SYNCHRONOUS — callers in an
+/// async context MUST run it via `tokio::task::spawn_blocking` (R5).
+///
+/// The client carries a bounded per-request timeout. This is the sanctioned
+/// human-surfaced failure bound on an EXTERNAL event (a hop's HTTP server that
+/// never answers), NOT a sync-by-sleep. It also guarantees that if the caller's
+/// `start_hops` future is cancelled on the readiness deadline, the detached
+/// `spawn_blocking` probe cannot run forever on the blocking pool — it
+/// self-terminates at the timeout, so no leaked blocking task outlives the run.
+pub fn health_probe(base: &url::Url) -> Option<HealthBody> {
+    let url = base.join("/__pm/health").ok()?;
+    let client = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(HEALTH_PROBE_TIMEOUT)
+        .build()
+        .ok()?;
+    let resp = client.get(url).send().ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    // Parse the body via `text()` + `serde_json` rather than `Response::json` so
+    // we do not require reqwest's `json` cargo feature (R2 owns the dep set:
+    // features = ["rustls-tls-native-roots", "stream", "blocking"], no "json").
+    let body = resp.text().ok()?;
+    serde_json::from_str::<HealthBody>(&body).ok()
+}
+
+/// Convenience: the live per-run `run_id` reported by `/__pm/health` (R10), or
+/// `None`. Used by `EphemeralManager` to confirm a hop's identity at startup.
+/// SYNCHRONOUS — run via `spawn_blocking` from async (R5).
+pub fn health_chain_id(base: &url::Url) -> Option<String> {
+    health_probe(base).map(|h| h.run_id)
 }
 
 #[cfg(test)]
