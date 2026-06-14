@@ -607,6 +607,99 @@ pub fn nested_reuse_check(desired_chain: &[ResolvedProxy]) -> Option<url::Url> {
     })
 }
 
+use crate::agent::claude::ClaudeAgent;
+
+/// High-level `run` orchestration (R5-safe): nested-reuse short-circuit, central
+/// daemon start (when central is tail), tail resolution, then `build_and_run`
+/// with the v1 ClaudeAgent. `chain` is the already-resolved chain (caller applies
+/// cli>env>file precedence + optional TUI). Returns the agent's exit status.
+///
+/// R5: this is `async` and awaited from the runtime, so the two BLOCKING probes
+/// (`nested_reuse_check`, which uses `reqwest::blocking`, and `ensure_central_started`,
+/// which calls the synchronous central install/login/start/health machinery) are
+/// dispatched off the executor via `tokio::task::spawn_blocking`. Calling either
+/// synchronously here would panic ("Cannot start a runtime from within a runtime").
+pub async fn run_command(
+    chain: Vec<ResolvedProxy>,
+    argv: &[String],
+) -> anyhow::Result<std::process::ExitStatus> {
+    let agent = ClaudeAgent;
+
+    // Design §7 nested-reuse: run the BLOCKING health probe off the executor (R5).
+    let chain_for_probe = chain.clone();
+    let reuse = tokio::task::spawn_blocking(move || nested_reuse_check(&chain_for_probe))
+        .await
+        .map_err(|e| anyhow::anyhow!("nested-reuse probe task join error: {e}"))?;
+    if let Some(base) = reuse {
+        let env = compute_agent_env(&chain, central_is_tail(&chain));
+        let cmd = agent.build_command(argv, &base, &env);
+        return run_agent_forwarding_signals(cmd, agent.name()).await;
+    }
+
+    // Resolve the tail upstream. Start central first if it is the tail — its
+    // ensure/install/login/start/health calls are R5-blocking, so run them off
+    // the executor via spawn_blocking.
+    let inputs = if central_is_tail(&chain) {
+        let chain_for_central = chain.clone();
+        let info = tokio::task::spawn_blocking(move || ensure_central_started(&chain_for_central))
+            .await
+            .map_err(|e| anyhow::anyhow!("central start task join error: {e}"))??;
+        TailInputs {
+            central: Some(info),
+            preexisting_base_url: None,
+        }
+    } else {
+        TailInputs {
+            central: None,
+            preexisting_base_url: std::env::var("ANTHROPIC_BASE_URL").ok(),
+        }
+    };
+    let tail = resolve_tail_upstream(&inputs)?;
+
+    build_and_run(chain, tail, &agent, argv).await
+}
+
+/// Ensure the Central singleton is installed, logged in, and started; return its
+/// CentralInfo (port + secret). Central is always the tail and is never torn down
+/// on session exit (design §5.7/§9). SYNCHRONOUS (R5-blocking calls, incl.
+/// interactive login) — callers run it via `spawn_blocking`.
+///
+/// The install/login/start/health primitives this delegates to live in
+/// `crate::central` and are FILLED by M8 (`central::ensure_installed`,
+/// `central::ensure_logged_in`, `central::start`, `central::health`,
+/// `central::pinned_version` — see the M8 milestone contract). Until M8 lands,
+/// requesting a central tail fails LOUDLY here (never a silent no-op or a fake
+/// `CentralInfo`); the orchestration wiring around it — off-executor dispatch
+/// (R5), version resolved once and threaded into `start` (R4) — is in place so M8
+/// only fills the `central::*` bodies. The shape below is what M8 makes live:
+///
+/// ```ignore
+/// let version = central::pinned_version(pinned.as_deref());
+/// let bin = central::ensure_installed(&version)?;
+/// central::ensure_logged_in(&bin)?;
+/// let info = central::start(&bin, port, &version)?;
+/// if !central::health(info.port) {
+///     anyhow::bail!("JB Central started but /health did not report healthy");
+/// }
+/// Ok(info)
+/// ```
+fn ensure_central_started(chain: &[ResolvedProxy]) -> anyhow::Result<CentralInfo> {
+    // Caller invariant: only reached when central is the tail (see `run_command`).
+    debug_assert!(
+        matches!(
+            chain.last().map(|p| &p.settings),
+            Some(ProxySettings::Central(_))
+        ),
+        "ensure_central_started called without a central tail"
+    );
+    let _ = chain;
+    anyhow::bail!(
+        "JB Central is requested as the chain tail, but central install/start \
+         support is not yet wired (milestone M8). Run without a `central` tail, \
+         or wait for the JB Central milestone."
+    );
+}
+
 #[cfg(test)]
 #[path = "orchestrator_tests.rs"]
 mod orchestrator_tests;

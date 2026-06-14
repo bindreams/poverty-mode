@@ -78,6 +78,16 @@ fn serialize_then_parse_round_trips() {
 use crate::central::CentralInfo;
 
 #[test]
+fn central_is_tail_true_only_when_last_is_central() {
+    assert!(central_is_tail(&[pino_rp(), central_rp()]));
+    assert!(central_is_tail(&[central_rp()]));
+    assert!(!central_is_tail(&[pino_rp(), headroom_rp()]));
+    assert!(!central_is_tail(&[]));
+    // central not last is not "tail" by this positional predicate.
+    assert!(!central_is_tail(&[central_rp(), pino_rp()]));
+}
+
+#[test]
 fn tail_is_central_wire_url_when_central_is_tail() {
     let inputs = TailInputs {
         central: Some(CentralInfo {

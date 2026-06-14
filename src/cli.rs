@@ -319,7 +319,51 @@ pub fn engine_config_from_proxy_args(args: &ProxyArgs) -> EngineConfig {
 /// `NotImplemented` stubs that later milestones FILL.
 pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
-        Command::Run { .. } => Err(Error::NotImplemented("run").into()),
+        Command::Run {
+            proxies,
+            interactive,
+            save,
+            no_save: _no_save,
+            agent_argv,
+        } => {
+            let config = crate::config::Config::load_or_create()?;
+            let cli_names: Option<Vec<ProxyName>> = match proxies {
+                Some(csv) => Some(
+                    csv.iter()
+                        .map(|s| match s.as_str() {
+                            "pino" => Ok(ProxyName::Pino),
+                            "headroom" => Ok(ProxyName::Headroom),
+                            "central" => Ok(ProxyName::Central),
+                            other => Err(anyhow::anyhow!("unknown proxy name '{other}'")),
+                        })
+                        .collect::<anyhow::Result<Vec<_>>>()?,
+                ),
+                None => None,
+            };
+            let env_chain = std::env::var("POVERTY_PROXY_CHAIN").ok();
+            let chain = config.resolve_chain(cli_names.as_deref(), env_chain.as_deref())?;
+
+            if interactive {
+                // M9 wires the TUI; until then, --interactive is an explicit error
+                // (never a silent no-op).
+                anyhow::bail!("--interactive requires the TUI (milestone M9)");
+            }
+            if save {
+                // --save persists the resolved order/enabled-set via M2's
+                // canonical helper (R22/R23i): `Config::save_resolved_chain(&self,
+                // chain: &[ResolvedProxy]) -> anyhow::Result<()>` (atomic write).
+                config.save_resolved_chain(&chain)?;
+            }
+
+            // `dispatch` is synchronous; `run_command` is async (R5: its blocking
+            // probes are dispatched off the executor via `spawn_blocking`). Drive
+            // it on a fresh multi-thread runtime, mirroring the `proxy` arm.
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?;
+            let status = rt.block_on(crate::orchestrator::run_command(chain, &agent_argv))?;
+            std::process::exit(status.code().unwrap_or(1));
+        }
         Command::Proxy(args) => {
             // Test-only fail-closed shim: a child whose OWN env has
             // PM_TEST_FAIL_PROXY=1 exits 1 before binding, so the orchestrator's

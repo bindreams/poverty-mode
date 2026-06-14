@@ -277,13 +277,25 @@ fn proxy_body_log_file_does_not_set_global_log_file() {
     }
 }
 
+// Characterization (labeled per R12): the `Run` arm is now WIRED by M6.13 — it is
+// no longer the M1 `NotImplemented("run")` stub. We drive `--interactive` so the
+// arm reaches its M9-deferral bail WITHOUT execing an agent or calling
+// `process::exit` (the happy path does both). A hermetic `XDG_CONFIG_HOME` keeps
+// `Config::load_or_create` from reading the developer's real config.
 #[test]
-fn dispatch_run_returns_not_implemented() {
-    let cli = Cli::try_parse_from(["poverty-mode", "run", "--", "claude"]).unwrap();
+fn dispatch_run_is_wired_not_the_not_implemented_stub() {
+    let _guard = crate::test_support::ConfigHomeGuard::new();
+    let cli =
+        Cli::try_parse_from(["poverty-mode", "run", "--interactive", "--", "claude"]).unwrap();
     let err = dispatch(cli).unwrap_err();
+    let msg = err.to_string();
     assert!(
-        err.to_string().contains("not yet implemented: run"),
-        "got: {err}"
+        !msg.contains("not yet implemented: run"),
+        "run is wired now; must not return the M1 NotImplemented stub: {msg}"
+    );
+    assert!(
+        msg.contains("--interactive") && msg.to_lowercase().contains("tui"),
+        "run --interactive should defer to the M9 TUI: {msg}"
     );
 }
 

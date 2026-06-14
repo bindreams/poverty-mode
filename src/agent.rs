@@ -6,6 +6,8 @@
 //! `&dyn Agent`; M7 adds the `claude` submodule and the inline `--settings`
 //! wiring without re-typing the trait.
 
+pub mod claude;
+
 use url::Url;
 
 /// An AI agent the proxy chain fronts.
