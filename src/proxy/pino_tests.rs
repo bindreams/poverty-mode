@@ -1262,3 +1262,144 @@ fn rewrite_leaves_non_ephemeral_alone() {
     rewrite_cache_control(&mut body, &HashSet::new());
     assert_eq!(body["x"]["cache_control"]["ttl"], json!("5m"));
 }
+
+// M4.9 ===== apply_auto_cache pipeline (strip-intermediate -> inject -> normalize-tail
+// ===== -> rewrite). End-to-end through PinoTransform::transform (server.js 88-98).
+
+fn auto_cache_settings(tail: TailTtl) -> PinoSettings {
+    PinoSettings {
+        auto_cache: true,
+        tail_ttl: tail,
+        drop_tools: vec![],
+        strip_ansi: false,
+        model_override: None,
+    }
+}
+
+#[test]
+fn auto_cache_end_to_end_caps_at_four_and_keeps_tail_at_configured_ttl() {
+    let t = PinoTransform {
+        settings: auto_cache_settings(TailTtl::FiveMin),
+    };
+    let mut body = json!({
+        "tools": [ { "name": "Bash" }, { "name": "Read" } ],
+        "system": [ { "type": "text", "text": "s".repeat(600) } ],
+        "messages": [
+            { "role": "user", "content": [ { "type": "text", "text": "r".repeat(600) } ] },
+            { "role": "assistant", "content": [ { "type": "text", "text": "mid", "cache_control": { "type": "ephemeral", "ttl": "5m" } } ] },
+            { "role": "user", "content": [ { "type": "text", "text": "tail turn" } ] }
+        ]
+    });
+    t.transform(&mut body).unwrap();
+
+    assert_eq!(count_cache_breakpoints(&body), 4);
+    assert!(
+        body["messages"][1]["content"][0]
+            .get("cache_control")
+            .is_none(),
+        "intermediate breakpoint stripped"
+    );
+    assert_eq!(body["tools"][1]["cache_control"]["ttl"], json!("1h"));
+    assert_eq!(body["system"][0]["cache_control"]["ttl"], json!("1h"));
+    assert_eq!(
+        body["messages"][0]["content"][0]["cache_control"]["ttl"],
+        json!("1h")
+    );
+    assert_eq!(
+        body["messages"][2]["content"][0]["cache_control"]["ttl"],
+        json!("5m")
+    );
+}
+
+#[test]
+fn auto_cache_rewrites_every_ephemeral_to_1h_except_client_tail() {
+    let t = PinoTransform {
+        settings: auto_cache_settings(TailTtl::FiveMin),
+    };
+    let mut body = json!({
+        "system": [ { "type": "text", "text": "s".repeat(600), "cache_control": { "type": "ephemeral" } } ],
+        "messages": [
+            { "role": "user", "content": [ { "type": "text", "text": "first" } ] },
+            { "role": "user", "content": [ { "type": "text", "text": "client tail", "cache_control": { "type": "ephemeral", "ttl": "1h" } } ] }
+        ]
+    });
+    t.transform(&mut body).unwrap();
+    assert_eq!(body["system"][0]["cache_control"]["ttl"], json!("1h"));
+    assert_eq!(
+        body["messages"][1]["content"][0]["cache_control"]["ttl"],
+        json!("5m")
+    );
+}
+
+#[test]
+fn auto_cache_tail_ttl_1h_keeps_tail_at_1h() {
+    let t = PinoTransform {
+        settings: auto_cache_settings(TailTtl::OneHour),
+    };
+    let mut body = json!({
+        "messages": [ { "role": "user", "content": [ { "type": "text", "text": "only turn" } ] } ]
+    });
+    t.transform(&mut body).unwrap();
+    assert_eq!(
+        body["messages"][0]["content"][0]["cache_control"]["ttl"],
+        json!("1h")
+    );
+    assert_eq!(count_cache_breakpoints(&body), 1);
+}
+
+#[test]
+fn auto_cache_disabled_does_not_inject_any_breakpoint() {
+    let t = PinoTransform {
+        settings: PinoSettings {
+            auto_cache: false,
+            tail_ttl: TailTtl::FiveMin,
+            drop_tools: vec![],
+            strip_ansi: false,
+            model_override: None,
+        },
+    };
+    let mut body = json!({
+        "tools": [ { "name": "Bash" } ],
+        "system": [ { "type": "text", "text": "s".repeat(600) } ],
+        "messages": [ { "role": "user", "content": [ { "type": "text", "text": "hi" } ] } ]
+    });
+    t.transform(&mut body).unwrap();
+    assert_eq!(count_cache_breakpoints(&body), 0);
+}
+
+// Finding 1/8: prove restructureV123 runs BEFORE injection inside transform and the
+// cache breakpoint lands on the RESTRUCTURED layout. A core-context block in the tail
+// is moved to msg0 by restructure, then the msg0 cache pass targets that moved block.
+#[test]
+fn auto_cache_targets_restructured_layout_not_pre_restructure() {
+    let t = PinoTransform {
+        settings: auto_cache_settings(TailTtl::FiveMin),
+    };
+    let mut body = json!({
+        "messages": [
+            { "role": "user", "content": [ { "type": "text", "text": "msg0 prose" } ] },
+            { "role": "assistant", "content": [ { "type": "text", "text": "mid turn" } ] },
+            { "role": "user", "content": [
+                { "type": "text", "text": "claudeMd core context block" },
+                { "type": "text", "text": "latest user turn" }
+            ] }
+        ]
+    });
+    t.transform(&mut body).unwrap();
+    // After restructure: msg0 = [core, "msg0 prose"]; tail (now index 2) = ["latest user turn"].
+    assert_eq!(
+        body["messages"][0]["content"][0]["text"],
+        json!("claudeMd core context block")
+    );
+    // msg0 dedicated breakpoint goes on msg0's LAST cacheable block ("msg0 prose") at 1h.
+    assert_eq!(
+        body["messages"][0]["content"][1]["cache_control"]["ttl"],
+        json!("1h")
+    );
+    // Tail breakpoint on the last message's only block at 5m.
+    assert_eq!(
+        body["messages"][2]["content"][0]["cache_control"]["ttl"],
+        json!("5m")
+    );
+    assert_eq!(count_cache_breakpoints(&body), 2);
+}

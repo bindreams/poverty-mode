@@ -812,8 +812,15 @@ fn rewrite_walk(node: &mut Value, path: String, skip: &HashSet<String>) {
     }
 }
 
-fn apply_auto_cache(_body: &mut Value, _tail_ttl: TailTtl) {
-    // Implemented in Tasks M4.6-M4.9.
+fn apply_auto_cache(body: &mut Value, tail_ttl: TailTtl) {
+    // Mirrors the AUTO_CACHE block of reference/pino/src/server.js (lines 88-98).
+    strip_intermediate_message_breakpoints(body);
+    let injected_tail = inject_breakpoint_if_absent(body, tail_ttl);
+    let client_tail = normalize_tail_breakpoints(body, tail_ttl);
+    let mut skip: HashSet<String> = HashSet::new();
+    skip.extend(injected_tail);
+    skip.extend(client_tail);
+    rewrite_cache_control(body, &skip);
 }
 
 #[cfg(test)]
