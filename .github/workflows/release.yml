@@ -1,0 +1,88 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: release (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            ext: zip
+          - os: macos-13
+            target: x86_64-apple-darwin
+            ext: tar.gz
+          - os: macos-14
+            target: aarch64-apple-darwin
+            ext: tar.gz
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            ext: tar.gz
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            ext: tar.gz
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      # `shasum -a 256` is available under bash on every GitHub runner (incl.
+      # windows-latest), giving a uniform `sha256sum -c`-compatible sidecar. The
+      # LICENSE/README copies are not error-silenced: a missing file fails the release.
+      - name: Package (unix)
+        if: ${{ matrix.ext == 'tar.gz' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="poverty-mode"
+          stage="poverty-mode-${{ matrix.target }}"
+          mkdir "$stage"
+          cp "target/${{ matrix.target }}/release/$bin" "$stage/"
+          cp README.md LICENSE-MIT LICENSE-APACHE "$stage/"
+          tar -czf "$stage.tar.gz" "$stage"
+          shasum -a 256 "$stage.tar.gz" > "$stage.tar.gz.sha256"
+
+      # 7z is preinstalled on windows-latest GitHub runners.
+      - name: Package (windows)
+        if: ${{ matrix.ext == 'zip' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="poverty-mode.exe"
+          stage="poverty-mode-${{ matrix.target }}"
+          mkdir "$stage"
+          cp "target/${{ matrix.target }}/release/$bin" "$stage/"
+          cp README.md LICENSE-MIT LICENSE-APACHE "$stage/"
+          7z a "$stage.zip" "$stage"
+          shasum -a 256 "$stage.zip" > "$stage.zip.sha256"
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            poverty-mode-${{ matrix.target }}.${{ matrix.ext }}
+            poverty-mode-${{ matrix.target }}.${{ matrix.ext }}.sha256
