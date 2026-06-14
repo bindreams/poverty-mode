@@ -496,41 +496,91 @@ fn transform_bytes_disabled_returns_none() {
     assert!(out.is_none(), "disabled compression must map to None");
 }
 
+/// A body whose live-zone tool_result is a grep/`file:line:content` search
+/// block sized just over the 512 B SearchResults threshold. At this margin the
+/// token-validation gate (live_zone.rs `compressed_tokens < original_tokens`)
+/// FLIPS by tokenizer family: the Claude estimator (3.5 chars/token, used for
+/// every `claude-*` model incl. DEFAULT_MODEL) rejects the compression
+/// (NoChange), while the OpenAI tiktoken BPE counter accepts it (Modified).
+/// This is the lever that makes `body["model"]` observable in the output.
+fn model_sensitive_search_payload() -> String {
+    let mut results = String::new();
+    for i in 0..8 {
+        results.push_str(&format!(
+            "src/module_{}.rs:{}:    let value = compute(input, config); // match\n",
+            i % 7,
+            (i % 400) + 1
+        ));
+    }
+    // Just over the 512 B SearchResults threshold so the keep/compress decision
+    // sits exactly on the token gate.
+    assert!(
+        (512..768).contains(&results.len()),
+        "fixture must straddle the gate just past 512 B; got {}",
+        results.len()
+    );
+    results
+}
+
 #[test]
 fn transform_bytes_reads_model_from_body_for_tokenizer_gate() {
     use headroom_core::transforms::live_zone::DEFAULT_MODEL;
     use headroom_core::transforms::{compress_anthropic_live_zone, AuthMode, LiveZoneOutcome};
 
-    // The body declares its own model (NOT the hardcoded DEFAULT_MODEL). The
-    // transform must dispatch with `body["model"]`, so its output equals a direct
-    // dispatcher call with that exact model string.
+    /// Run the dispatcher directly and reduce to the forwarded bytes (Modified)
+    /// or None (NoChange).
+    fn dispatch(raw: &[u8], model: &str) -> Option<Vec<u8>> {
+        match compress_anthropic_live_zone(raw, 0, AuthMode::Payg, model).expect("dispatch ok") {
+            LiveZoneOutcome::Modified { new_body, .. } => Some(new_body.get().as_bytes().to_vec()),
+            LiveZoneOutcome::NoChange { .. } => None,
+        }
+    }
+
+    // The body declares a tiktoken-family model that routes to a DIFFERENT
+    // backend (BPE) than DEFAULT_MODEL (the Claude 3.5 chars/token estimator).
+    let body_model = "gpt-4o";
+    assert_ne!(body_model, DEFAULT_MODEL);
     let mut body = compressible_body();
-    body["model"] = json!("claude-haiku-4-5-20251001");
-    assert_ne!(
-        body["model"].as_str().unwrap(),
-        DEFAULT_MODEL,
-        "fixture model must differ from DEFAULT_MODEL so the gate source is observable"
-    );
+    body["model"] = json!(body_model);
+    body["messages"][0]["content"][0]["content"] = json!(model_sensitive_search_payload());
     let raw = serde_json::to_vec(&body).unwrap();
 
+    // DISCRIMINATOR: at this margin the token gate flips by tokenizer family. A
+    // hardcoded DEFAULT_MODEL (or any `claude-*`) yields NoChange (None); the
+    // body's own `gpt-4o` yields Modified (Some). These MUST differ, otherwise
+    // the test could not catch a regression to a hardcoded model.
+    let with_default = dispatch(&raw, DEFAULT_MODEL);
+    let with_body_model = dispatch(&raw, body_model);
+    assert!(
+        with_default.is_none(),
+        "DEFAULT_MODEL (Claude estimator) must reject this borderline block -> NoChange"
+    );
+    assert!(
+        with_body_model.is_some(),
+        "the body's tiktoken model must accept this borderline block -> Modified"
+    );
+    assert_ne!(
+        with_default, with_body_model,
+        "fixture must be a genuine discriminator: output differs by model"
+    );
+
+    // The transform must read `body[\"model\"]` for the gate, so its output
+    // matches a direct dispatch with the body's model (Some) and NOT a hardcoded
+    // DEFAULT_MODEL dispatch (None). If the impl ignored body["model"] and used
+    // DEFAULT_MODEL, this would be None and the unwrap below would panic.
     let t = HeadroomTransform {
         settings: HeadroomSettings { compression: true },
     };
     let via_transform = t
         .transform_bytes(&raw)
         .expect("transform must be Ok")
-        .expect("compressible body -> Some");
+        .expect(
+            "body declares a tiktoken model -> Some (a hardcoded DEFAULT_MODEL would yield None)",
+        );
 
-    // Direct dispatch with the body's own model.
-    let expected =
-        match compress_anthropic_live_zone(&raw, 0, AuthMode::Payg, "claude-haiku-4-5-20251001")
-            .expect("dispatch ok")
-        {
-            LiveZoneOutcome::Modified { new_body, .. } => new_body.get().as_bytes().to_vec(),
-            LiveZoneOutcome::NoChange { .. } => panic!("expected Modified for a 200-dict body"),
-        };
     assert_eq!(
-        via_transform, expected,
+        Some(&via_transform),
+        with_body_model.as_ref(),
         "transform_bytes must dispatch with body[\"model\"], not DEFAULT_MODEL"
     );
 }
