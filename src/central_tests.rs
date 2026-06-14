@@ -218,3 +218,77 @@ fn latest_version_url_targets_latest_version_txt() {
         "https://jetbrains-central-cli.s3.eu-west-1.amazonaws.com/jbcentral/latest/version.txt"
     );
 }
+
+// install layout =====
+
+#[test]
+fn binary_name_is_platform_specific() {
+    let name = jbcentral_binary_name();
+    if cfg!(windows) {
+        assert_eq!(name, "jbcentral.exe");
+    } else {
+        assert_eq!(name, "jbcentral");
+    }
+}
+
+#[test]
+fn install_dir_uses_shared_tool_dir_constant() {
+    let root = std::path::Path::new("/tmp/pm-cache");
+    let dir = install_dir_in(root, "0.2.9");
+    let expected = root.join("bin").join(INSTALL_TOOL_DIR).join("0.2.9");
+    assert_eq!(dir, expected);
+    // The tool dir is the single shared constant — never "central".
+    assert!(dir.to_string_lossy().contains("jbcentral"));
+    assert!(!dir
+        .to_string_lossy()
+        .contains(&format!("bin{}central", std::path::MAIN_SEPARATOR)));
+}
+
+#[test]
+fn is_installed_in_false_when_absent_true_when_flat() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    assert!(!is_installed_in(root, "0.2.9"));
+
+    // Flat layout: binary directly under the version dir.
+    let dir = install_dir_in(root, "0.2.9");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(jbcentral_binary_name()), b"fake").unwrap();
+    assert!(is_installed_in(root, "0.2.9"));
+}
+
+#[test]
+fn installed_binary_path_in_resolves_flat_layout() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let dir = install_dir_in(root, "0.2.9");
+    std::fs::create_dir_all(&dir).unwrap();
+    let flat = dir.join(jbcentral_binary_name());
+    std::fs::write(&flat, b"fake").unwrap();
+
+    let resolved = installed_binary_path_in(root, "0.2.9").unwrap();
+    assert_eq!(resolved, flat);
+}
+
+#[test]
+fn installed_binary_path_in_resolves_nested_layout() {
+    // Nested layout: binary one dir deep (some archives nest under jbcentral-<ver>/).
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let dir = install_dir_in(root, "0.2.9");
+    let nested = dir.join("jbcentral-0.2.9");
+    std::fs::create_dir_all(&nested).unwrap();
+    let bin = nested.join(jbcentral_binary_name());
+    std::fs::write(&bin, b"fake").unwrap();
+
+    // is_installed_in must ALSO see the nested binary (consistency with status/clean in M10).
+    assert!(is_installed_in(root, "0.2.9"));
+    let resolved = installed_binary_path_in(root, "0.2.9").unwrap();
+    assert_eq!(resolved, bin);
+}
+
+#[test]
+fn installed_binary_path_in_none_when_dir_missing() {
+    let tmp = tempfile::tempdir().unwrap();
+    assert!(installed_binary_path_in(tmp.path(), "0.2.9").is_none());
+}

@@ -10,11 +10,13 @@
 //! network — is synchronous/blocking. Callers in an async context (the orchestrator,
 //! M6) MUST invoke them via `tokio::task::spawn_blocking`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context};
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 
+use crate::download;
+use crate::paths;
 use crate::proxy::Upstream;
 
 /// The default jbcentral version this build manages (R4). Single source of truth.
@@ -206,6 +208,103 @@ pub fn resolve_version_from(cfg_pinned: Option<&str>, base: &str) -> String {
 /// **R5 contract:** synchronous — call via `spawn_blocking` from async code.
 pub fn resolve_version(cfg_pinned: Option<&str>) -> String {
     resolve_version_from(cfg_pinned, crate::download::JBCENTRAL_S3_BASE)
+}
+
+// install layout =====
+
+/// The on-disk name of the jbcentral binary for the host OS.
+pub fn jbcentral_binary_name() -> &'static str {
+    if cfg!(windows) {
+        "jbcentral.exe"
+    } else {
+        "jbcentral"
+    }
+}
+
+/// `<cache_root>/bin/{INSTALL_TOOL_DIR}/<version>` — the directory an asset extracts into (R4).
+pub fn install_dir_in(cache_root: &Path, version: &str) -> PathBuf {
+    cache_root.join("bin").join(INSTALL_TOOL_DIR).join(version)
+}
+
+/// Recursively find the jbcentral binary under `dir`. Handles assets that nest the binary one or more
+/// levels deep. Deterministic: directory entries are sorted before descent so the result is stable.
+pub fn find_binary_under(dir: &Path) -> Option<PathBuf> {
+    let target = jbcentral_binary_name();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let mut entries: Vec<PathBuf> = match std::fs::read_dir(&d) {
+            Ok(rd) => rd.flatten().map(|e| e.path()).collect(),
+            Err(_) => continue,
+        };
+        entries.sort();
+        for path in entries {
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.file_name().and_then(|s| s.to_str()) == Some(target) {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+/// Resolve the installed jbcentral binary path for `version` under `cache_root`, scanning the version
+/// dir so BOTH flat (`<dir>/jbcentral`) and nested (`<dir>/jbcentral-<ver>/jbcentral`) layouts return
+/// the real path. `None` if the version dir does not contain the binary. This is the canonical
+/// resolver shared with M10 status/clean.
+pub fn installed_binary_path_in(cache_root: &Path, version: &str) -> Option<PathBuf> {
+    let dir = install_dir_in(cache_root, version);
+    if !dir.is_dir() {
+        return None;
+    }
+    find_binary_under(&dir)
+}
+
+/// True iff the jbcentral binary for `version` is installed under `cache_root` (flat or nested).
+pub fn is_installed_in(cache_root: &Path, version: &str) -> bool {
+    installed_binary_path_in(cache_root, version).is_some()
+}
+
+/// Ensure `jbcentral` of `version` is installed in the managed bin cache; return the path to the
+/// binary. Idempotent: if already present (flat or nested), returns its resolved path without
+/// downloading. The download is sha256-verified against the per-version pin (R14, fail-closed): a
+/// known target with no pin is an error.
+///
+/// **R5 contract:** synchronous (network + filesystem). Call via `spawn_blocking` from async code.
+pub fn ensure_installed(version: &str) -> anyhow::Result<PathBuf> {
+    let cache_root = paths::cache_dir().context("resolving cache dir")?;
+    if let Some(bin) = installed_binary_path_in(&cache_root, version) {
+        return Ok(bin);
+    }
+
+    let os = download::host_os()?;
+    let arch = download::host_arch()?;
+    let url = download::jbcentral_asset_url(version, os, arch)?;
+
+    // Mandatory checksum (R14): a known target MUST have a pin. Missing pin => fail closed.
+    let sha = download::pinned_sha256(version, os, arch).ok_or_else(|| {
+        anyhow!(
+            "no pinned sha256 for jbcentral {version} ({os}/{arch}); refusing to download \
+             unverified (populate the pin per Task M8.12)"
+        )
+    })?;
+
+    let dest = install_dir_in(&cache_root, version);
+    download::download_verify_extract(&url, Some(sha), &dest)
+        .with_context(|| format!("downloading jbcentral {version} for {os}/{arch}"))?;
+
+    let bin = installed_binary_path_in(&cache_root, version)
+        .ok_or_else(|| anyhow!("jbcentral binary not found after extracting {url}"))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&bin)?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&bin, perms)?;
+    }
+
+    Ok(bin)
 }
 
 #[cfg(test)]
