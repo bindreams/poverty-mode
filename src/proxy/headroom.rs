@@ -22,8 +22,18 @@ pub struct HeadroomTransform {
 }
 
 impl BodyTransform for HeadroomTransform {
-    fn transform(&self, _body: &mut serde_json::Value) -> anyhow::Result<()> {
-        anyhow::bail!("headroom transform not implemented")
+    fn transform(&self, body: &mut serde_json::Value) -> anyhow::Result<()> {
+        if !self.settings.compression {
+            // Disabled: byte-faithful passthrough. Do not touch `body`.
+            let _ = body;
+            return Ok(());
+        }
+        // Enabled path is implemented in Task M5.3 (calls
+        // headroom_core::transforms::compress_anthropic_live_zone). Until then
+        // it stays fail-loud rather than a silent no-op (R9): a config that
+        // enables compression but hits this stub must error, never silently
+        // forward uncompressed bytes as if compression "succeeded".
+        anyhow::bail!("headroom compression enabled but transform not implemented");
     }
 }
 
