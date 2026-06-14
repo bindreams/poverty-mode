@@ -331,19 +331,32 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
         Command::SpawnHolder => {
             use crate::orchestrator::teardown::ProxyGroup;
             let exe = std::env::current_exe()?;
-            let mut group = ProxyGroup::new()?;
-            let spawned = group.spawn(&exe, &["__sleep".to_string()])?;
-            println!("{}", spawned.pid);
-            println!("HOLDER_READY");
-            use std::io::Write as _;
-            std::io::stdout().flush().ok();
-            // Leak the group so neither Drop nor kill_all runs: we want the OS to
-            // reap the child purely because THIS holder dies. (Unix: closing the
-            // death-pipe write end + PR_SET_PDEATHSIG; Windows: job handle close.)
-            std::mem::forget(group);
-            loop {
-                std::thread::park();
-            }
+            // `ProxyGroup::spawn` uses `tokio::process::Command` on Unix, whose
+            // child construction requires an active Tokio runtime context (it
+            // registers a pidfd/SIGCHLD reactor and panics if there is none).
+            // `dispatch` is synchronous, so build a runtime and do the spawn +
+            // park INSIDE `block_on`. The runtime is never dropped (we park
+            // forever inside it), and the group is `mem::forget`-ten — so neither
+            // the runtime nor `Drop`/`kill_all` ever reaps the child. The OS must
+            // reap it purely because THIS holder dies (Unix: death-pipe write end
+            // close + PR_SET_PDEATHSIG; Windows: job handle close).
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            rt.block_on(async {
+                let mut group = ProxyGroup::new()?;
+                let spawned = group.spawn(&exe, &["__sleep".to_string()])?;
+                println!("{}", spawned.pid);
+                println!("HOLDER_READY");
+                use std::io::Write as _;
+                std::io::stdout().flush().ok();
+                std::mem::forget(group);
+                loop {
+                    std::thread::park();
+                }
+                #[allow(unreachable_code)]
+                anyhow::Ok(())
+            })
         }
         Command::Sleep => {
             crate::orchestrator::teardown::spawn_death_watcher_from_env();
