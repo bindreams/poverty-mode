@@ -351,11 +351,10 @@ pub async fn bind_engine(
     let local_addr = listener.local_addr()?;
     let port = local_addr.port();
 
-    // Print exactly one ReadyLine to stdout (compact JSON + newline + flush)
-    // AFTER a successful bind and BEFORE accepting connections. This is the
-    // synchronization point the orchestrator reads as a blocking pipe read.
-    print_ready_line(&cfg.name, port, &cfg.run_id)?;
-
+    // Complete ALL fallible initialization BEFORE the ReadyLine: `ready:true` is
+    // the orchestrator's blocking sync point (R10) and must mean the engine is
+    // actually serving. Building the upstream client is the only fallible step
+    // here (`as_body_transform` is infallible), so it precedes `print_ready_line`.
     let state = Arc::new(EngineState {
         name: cfg.name,
         port,
@@ -365,6 +364,11 @@ pub async fn bind_engine(
         transform: cfg.transform.as_body_transform(),
         log_file: cfg.log_file,
     });
+
+    // Print exactly one ReadyLine to stdout (compact JSON + newline + flush)
+    // AFTER successful bind + init and BEFORE accepting connections. This is the
+    // synchronization point the orchestrator reads as a blocking pipe read.
+    print_ready_line(&state.name, port, &state.run_id)?;
 
     let handle = tokio::spawn(async move { serve_loop(listener, state, shutdown).await });
     Ok(BoundEngine { local_addr, handle })
