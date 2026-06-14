@@ -81,6 +81,10 @@ pub struct CentralSettings {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Defaults {
+    /// The `ENABLE_TOOL_SEARCH` value the orchestrator emits into the agent env
+    /// (spec §5.8). Default `true`: a non-first-party base URL otherwise disables
+    /// Claude Code MCP tool search, and our proxies forward `tool_reference`
+    /// blocks. Setting it `false` disables MCP tool search through the proxy.
     pub enable_tool_search: bool,
 }
 

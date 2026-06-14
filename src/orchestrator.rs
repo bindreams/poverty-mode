@@ -73,10 +73,23 @@ pub fn resolve_tail_upstream(inputs: &TailInputs) -> anyhow::Result<Upstream> {
 /// `ANTHROPIC_BASE_URL` is intentionally NOT included: the agent sets it from
 /// its `base_url` argument (the chain head). `central_is_tail` controls the
 /// dummy `ANTHROPIC_AUTH_TOKEN=wire-proxy` (central injects the real JWT).
-pub fn compute_agent_env(chain: &[ResolvedProxy], central_is_tail: bool) -> Vec<(String, String)> {
+///
+/// The orchestrator ORIGINATES `ENABLE_TOOL_SEARCH` (M7 contract) and emits the
+/// caller's `enable_tool_search` value verbatim (`config.defaults.enable_tool_search`,
+/// default `true`). Setting it `false` disables Claude Code MCP tool search through
+/// the proxy: a non-first-party base URL otherwise turns tool search off, so the
+/// key is always emitted, never omitted.
+pub fn compute_agent_env(
+    chain: &[ResolvedProxy],
+    central_is_tail: bool,
+    enable_tool_search: bool,
+) -> Vec<(String, String)> {
     let mut env = vec![
         ("POVERTY_PROXY_CHAIN".to_string(), serialize_chain(chain)),
-        ("ENABLE_TOOL_SEARCH".to_string(), "true".to_string()),
+        (
+            "ENABLE_TOOL_SEARCH".to_string(),
+            enable_tool_search.to_string(),
+        ),
     ];
     if central_is_tail {
         env.push(("ANTHROPIC_AUTH_TOKEN".to_string(), "wire-proxy".to_string()));
@@ -132,8 +145,9 @@ pub async fn build_and_run(
     tail_upstream: Upstream,
     agent: &dyn Agent,
     argv: &[String],
+    enable_tool_search: bool,
 ) -> anyhow::Result<std::process::ExitStatus> {
-    build_and_run_with_fault(chain, tail_upstream, agent, argv, false).await
+    build_and_run_with_fault(chain, tail_upstream, agent, argv, enable_tool_search, false).await
 }
 
 /// Like [`build_and_run`], but constructs an [`manager::EphemeralManager`] with a
@@ -145,6 +159,7 @@ pub async fn build_and_run_with_fault(
     tail_upstream: Upstream,
     agent: &dyn Agent,
     argv: &[String],
+    enable_tool_search: bool,
     fault: bool,
 ) -> anyhow::Result<std::process::ExitStatus> {
     let (hops, central_tail) = split_trailing_central(&chain);
@@ -153,7 +168,7 @@ pub async fn build_and_run_with_fault(
         // No first-party proxies to spawn: the agent talks directly to the tail
         // upstream (for central-only, that is the wire URL). agent_env still
         // reflects central_tail for the auth override.
-        let env = compute_agent_env(&chain, central_tail);
+        let env = compute_agent_env(&chain, central_tail, enable_tool_search);
         let cmd = agent.build_command(argv, &tail_upstream.url, &env);
         let status = run_agent_forwarding_signals(cmd, agent.name()).await?;
         return Ok(status);
@@ -170,6 +185,7 @@ pub async fn build_and_run_with_fault(
         &tail_upstream,
         agent,
         argv,
+        enable_tool_search,
     )
     .await
 }
@@ -206,6 +222,7 @@ fn hop_log_file(run_dir: &std::path::Path, name: ProxyName) -> std::path::PathBu
     run_dir.join(format!("{}-{{port}}.log", name.as_str()))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn build_via_manager(
     manager: &mut dyn manager::ProxyManager,
     chain: &[ResolvedProxy],
@@ -214,6 +231,7 @@ async fn build_via_manager(
     tail_upstream: &Upstream,
     agent: &dyn Agent,
     argv: &[String],
+    enable_tool_search: bool,
 ) -> anyhow::Result<std::process::ExitStatus> {
     let run_id = crate::paths::new_run_id();
     // `ensure_run_dir` hardens the dir to 0700 on POSIX (the run dir holds proxy
@@ -269,7 +287,7 @@ async fn build_via_manager(
         .ok_or_else(|| anyhow::anyhow!("manager returned no running hops"))?;
     let head_base_url = head.base_url.clone();
 
-    let agent_env = compute_agent_env(chain, central_tail);
+    let agent_env = compute_agent_env(chain, central_tail, enable_tool_search);
     let agent_cmd = agent.build_command(argv, &head_base_url, &agent_env);
     let status_result = run_agent_forwarding_signals(agent_cmd, agent.name()).await;
 
@@ -628,7 +646,9 @@ use crate::agent::claude::ClaudeAgent;
 /// High-level `run` orchestration (R5-safe): nested-reuse short-circuit, central
 /// daemon start (when central is tail), tail resolution, then `build_and_run`
 /// with the v1 ClaudeAgent. `chain` is the already-resolved chain (caller applies
-/// cli>env>file precedence + optional TUI). Returns the agent's exit status.
+/// cli>env>file precedence + optional TUI). `enable_tool_search` is the resolved
+/// `config.defaults.enable_tool_search` (default `true`), threaded into the agent
+/// env. Returns the agent's exit status.
 ///
 /// R5: this is `async` and awaited from the runtime, so the two BLOCKING probes
 /// (`nested_reuse_check`, which uses `reqwest::blocking`, and `ensure_central_started`,
@@ -638,6 +658,7 @@ use crate::agent::claude::ClaudeAgent;
 pub async fn run_command(
     chain: Vec<ResolvedProxy>,
     argv: &[String],
+    enable_tool_search: bool,
 ) -> anyhow::Result<std::process::ExitStatus> {
     let agent = ClaudeAgent;
 
@@ -647,7 +668,7 @@ pub async fn run_command(
         .await
         .map_err(|e| anyhow::anyhow!("nested-reuse probe task join error: {e}"))?;
     if let Some(base) = reuse {
-        let env = compute_agent_env(&chain, central_is_tail(&chain));
+        let env = compute_agent_env(&chain, central_is_tail(&chain), enable_tool_search);
         let cmd = agent.build_command(argv, &base, &env);
         return run_agent_forwarding_signals(cmd, agent.name()).await;
     }
@@ -672,7 +693,7 @@ pub async fn run_command(
     };
     let tail = resolve_tail_upstream(&inputs)?;
 
-    build_and_run(chain, tail, &agent, argv).await
+    build_and_run(chain, tail, &agent, argv, enable_tool_search).await
 }
 
 /// The Central install/login/start/health operations the orchestrator drives,

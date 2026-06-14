@@ -168,22 +168,34 @@ fn get<'a>(env: &'a [(String, String)], key: &str) -> Option<&'a str> {
 #[test]
 fn agent_env_always_sets_chain_and_tool_search() {
     let chain = vec![pino_rp(), headroom_rp()];
-    let env = compute_agent_env(&chain, false);
+    let env = compute_agent_env(&chain, false, true);
     assert_eq!(get(&env, "POVERTY_PROXY_CHAIN"), Some("pino,headroom"));
     assert_eq!(get(&env, "ENABLE_TOOL_SEARCH"), Some("true"));
 }
 
 #[test]
+fn agent_env_emits_configured_tool_search_value() {
+    // FIX-E: the `enable_tool_search` knob is honest — the configured value flows
+    // into ENABLE_TOOL_SEARCH verbatim (the orchestrator still ORIGINATES the key,
+    // M7 contract), so a `false` config disables MCP tool search through the proxy.
+    let chain = vec![pino_rp(), headroom_rp()];
+    let env_off = compute_agent_env(&chain, false, false);
+    assert_eq!(get(&env_off, "ENABLE_TOOL_SEARCH"), Some("false"));
+    let env_on = compute_agent_env(&chain, false, true);
+    assert_eq!(get(&env_on, "ENABLE_TOOL_SEARCH"), Some("true"));
+}
+
+#[test]
 fn agent_env_omits_auth_token_for_non_central_tail() {
     let chain = vec![pino_rp()];
-    let env = compute_agent_env(&chain, false);
+    let env = compute_agent_env(&chain, false, true);
     assert_eq!(get(&env, "ANTHROPIC_AUTH_TOKEN"), None);
 }
 
 #[test]
 fn agent_env_sets_wire_proxy_auth_token_for_central_tail() {
     let chain = vec![pino_rp(), central_rp()];
-    let env = compute_agent_env(&chain, true);
+    let env = compute_agent_env(&chain, true, true);
     assert_eq!(get(&env, "ANTHROPIC_AUTH_TOKEN"), Some("wire-proxy"));
     assert_eq!(get(&env, "POVERTY_PROXY_CHAIN"), Some("pino,central"));
     assert_eq!(get(&env, "ENABLE_TOOL_SEARCH"), Some("true"));
@@ -193,14 +205,14 @@ fn agent_env_sets_wire_proxy_auth_token_for_central_tail() {
 fn agent_env_never_includes_base_url_key() {
     // ANTHROPIC_BASE_URL is set by the Agent from its base_url arg, not here.
     let chain = vec![pino_rp(), central_rp()];
-    let env = compute_agent_env(&chain, true);
+    let env = compute_agent_env(&chain, true, true);
     assert_eq!(get(&env, "ANTHROPIC_BASE_URL"), None);
 }
 
 #[test]
 fn agent_env_for_empty_chain_has_empty_chain_value() {
     let chain: Vec<ResolvedProxy> = vec![];
-    let env = compute_agent_env(&chain, false);
+    let env = compute_agent_env(&chain, false, true);
     assert_eq!(get(&env, "POVERTY_PROXY_CHAIN"), Some(""));
     assert_eq!(get(&env, "ENABLE_TOOL_SEARCH"), Some("true"));
     assert_eq!(get(&env, "ANTHROPIC_AUTH_TOKEN"), None);

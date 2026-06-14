@@ -412,7 +412,11 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()?;
-            let status = rt.block_on(crate::orchestrator::run_command(chain, &agent_argv))?;
+            let status = rt.block_on(crate::orchestrator::run_command(
+                chain,
+                &agent_argv,
+                config.defaults.enable_tool_search,
+            ))?;
             std::process::exit(status.code().unwrap_or(1));
         }
         Command::Proxy(args) => {

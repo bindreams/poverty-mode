@@ -83,7 +83,7 @@ async fn sigterm_is_forwarded_to_agent_and_status_reflects_it() {
         }
     });
 
-    let status = orchestrator::build_and_run(chain, tail, &agent, &[])
+    let status = orchestrator::build_and_run(chain, tail, &agent, &[], true)
         .await
         .expect("build_and_run with signal");
     killer.await.unwrap();

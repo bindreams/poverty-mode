@@ -124,7 +124,7 @@ async fn build_and_run_fails_closed_when_a_hop_never_readies() {
     };
     let chain = vec![pino_passthrough()];
 
-    let result = orchestrator::build_and_run_with_fault(chain, tail, &agent, &[], true).await;
+    let result = orchestrator::build_and_run_with_fault(chain, tail, &agent, &[], true, true).await;
     assert!(result.is_err(), "build must fail when a hop never readies");
     assert!(
         agent.seen_base.lock().unwrap().is_none(),

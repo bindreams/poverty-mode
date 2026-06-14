@@ -103,7 +103,7 @@ async fn empty_chain_execs_agent_pointed_at_tail_unchanged() {
     let chain: Vec<ResolvedProxy> = vec![];
     let argv = vec!["--print".to_string(), "hi".to_string()];
 
-    let status = orchestrator::build_and_run(chain, tail, &agent, &argv)
+    let status = orchestrator::build_and_run(chain, tail, &agent, &argv, true)
         .await
         .expect("build_and_run empty chain");
     assert!(status.success(), "agent exit status should be success");
@@ -123,6 +123,28 @@ async fn empty_chain_execs_agent_pointed_at_tail_unchanged() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn disabling_tool_search_threads_false_to_agent_env() {
+    // FIX-E end-to-end: `enable_tool_search = false` reaches the agent as
+    // ENABLE_TOOL_SEARCH=false (the key is still ORIGINATED by the orchestrator —
+    // M7 contract — but its value is honest).
+    let agent = RecordingAgent::default();
+    let tail = Upstream {
+        url: Url::parse("https://api.anthropic.com").unwrap(),
+    };
+    let chain: Vec<ResolvedProxy> = vec![];
+
+    let status = orchestrator::build_and_run(chain, tail, &agent, &[], false)
+        .await
+        .expect("build_and_run tool-search-off");
+    assert!(status.success());
+
+    let env = agent.seen_env.lock().unwrap().clone();
+    assert!(env
+        .iter()
+        .any(|(k, v)| k == "ENABLE_TOOL_SEARCH" && v == "false"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn central_only_chain_execs_agent_at_wire_url_with_auth_token() {
     // chain = [central]; no first-party hops. tail_upstream is the wire URL.
     let agent = RecordingAgent::default();
@@ -131,7 +153,7 @@ async fn central_only_chain_execs_agent_at_wire_url_with_auth_token() {
     };
     let chain = vec![central_rp()];
 
-    let status = orchestrator::build_and_run(chain, tail, &agent, &[])
+    let status = orchestrator::build_and_run(chain, tail, &agent, &[], true)
         .await
         .expect("build_and_run central-only");
     assert!(status.success());
@@ -192,7 +214,7 @@ async fn two_hop_chain_wires_head_to_tail_and_request_reaches_upstream() {
     let agent = PostingAgent::default();
     let chain = vec![pino_passthrough(), headroom_passthrough()];
 
-    let status = orchestrator::build_and_run(chain, tail, &agent, &[])
+    let status = orchestrator::build_and_run(chain, tail, &agent, &[], true)
         .await
         .expect("build_and_run two-hop");
     assert!(
@@ -226,7 +248,7 @@ async fn trailing_central_strips_hop_and_carries_secret_path_to_tail() {
     let agent = PostingAgent::default();
     let chain = vec![pino_passthrough(), central_rp()];
 
-    let status = orchestrator::build_and_run(chain, tail, &agent, &[])
+    let status = orchestrator::build_and_run(chain, tail, &agent, &[], true)
         .await
         .expect("build_and_run trailing-central");
     assert!(status.success());
