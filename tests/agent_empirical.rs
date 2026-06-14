@@ -231,3 +231,39 @@ async fn subagent_inherits_chain_endpoint() {
          and record in EMPIRICAL_GATES.md"
     );
 }
+
+// Characterization guard (R12): asserts the recorded-results doc exists and
+// carries the load-bearing sections. Not a red→green behavior test.
+#[test]
+fn empirical_gates_doc_has_required_sections() {
+    let doc = include_str!("EMPIRICAL_GATES.md");
+    assert!(
+        doc.contains("--ignored"),
+        "must document the opt-in run flag"
+    );
+    assert!(doc.contains("agent_empirical"), "must name the test target");
+    assert!(
+        doc.contains("not run in normal CI") || doc.contains("not part of normal CI"),
+        "must state the gates are excluded from normal CI"
+    );
+    assert!(
+        doc.contains("Recorded results"),
+        "must have a place where observed results are recorded (R8)"
+    );
+    assert!(
+        doc.to_lowercase().contains("load-bearing") || doc.to_lowercase().contains("belt"),
+        "must record which belt is authoritative and why the other is kept (R8 follow-up)"
+    );
+    assert!(
+        doc.to_lowercase().contains("remote") || doc.to_lowercase().contains("cloud"),
+        "must document the remote/cloud execution bypass (spec §8)"
+    );
+    assert!(
+        doc.to_lowercase().contains("windows"),
+        "must confirm Windows inline-JSON arg passing (spec §12)"
+    );
+    assert!(
+        doc.to_lowercase().contains("central"),
+        "must forward-reference the live-central suite (R7)"
+    );
+}
