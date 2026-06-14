@@ -233,3 +233,182 @@ pub fn build_status_report(
         runs: enumerate_runs(runs_root)?,
     })
 }
+
+// rendering + live probe + dispatch (M10.3) =====
+
+use std::fmt::Write as _;
+
+/// Render a status report as a human-facing multi-line string (pure).
+pub fn render_status(report: &StatusReport) -> String {
+    let mut out = String::new();
+
+    let _ = writeln!(out, "components:");
+    for fp in &report.first_party {
+        let _ = writeln!(out, "  {fp} (built-in)");
+    }
+    match &report.central.install {
+        CentralInstall::NotInstalled => {
+            let _ = writeln!(out, "  central: not installed");
+        }
+        CentralInstall::Installed { versions } => {
+            let _ = writeln!(out, "  central: installed {}", versions.join(", "));
+        }
+    }
+
+    let _ = writeln!(out, "central:");
+    match &report.central.run {
+        CentralRun::Stopped => {
+            let _ = writeln!(out, "  state: stopped");
+        }
+        CentralRun::Running { port } => {
+            let _ = writeln!(out, "  state: running on port {port}");
+        }
+    }
+    let login = match report.central.login {
+        CentralLogin::Unknown => "unknown",
+        CentralLogin::LoggedOut => "logged out",
+        CentralLogin::LoggedIn => "logged in",
+    };
+    let _ = writeln!(out, "  login: {login}");
+
+    let _ = writeln!(out, "runs:");
+    if report.runs.is_empty() {
+        let _ = writeln!(out, "  no live runs");
+    } else {
+        for run in &report.runs {
+            let proxies: Vec<String> = run
+                .proxies
+                .iter()
+                .map(|p| format!("{}:{}", p.name, p.port))
+                .collect();
+            let _ = writeln!(out, "  {}  [{}]", run.run_id, proxies.join(", "));
+        }
+    }
+
+    out
+}
+
+/// Minimal parsed view of `~/.wire/config.json` for the live central probe.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WireConfig {
+    pub port: Option<u16>,
+}
+
+/// Build a `CentralProbe` from the two independent sources (pure).
+///
+/// - `versions_present`: an install exists under `<cache>/bin/jbcentral/`.
+/// - `wire`: the parsed `~/.wire/config.json`, if any.
+/// - `login`: the tri-state parsed from `jbcentral status` (Unknown if not probed).
+///
+/// `running` is left `false` here; the caller flips it to the real `/health` result
+/// for the carried port (see `run_status`). With no install we emit a fully dead
+/// probe so login is forced Unknown by `build_status_report`.
+pub fn assemble_probe(
+    versions_present: bool,
+    wire: Option<WireConfig>,
+    login: CentralLogin,
+) -> CentralProbe {
+    if !versions_present {
+        return CentralProbe {
+            running: false,
+            login: CentralLogin::Unknown,
+            port: None,
+        };
+    }
+    CentralProbe {
+        running: false,
+        login,
+        port: wire.and_then(|w| w.port),
+    }
+}
+
+/// Run the blocking `/health` probe off the async runtime (R5: never block the
+/// executor). Returns whether `http://127.0.0.1:<port>/health` answered healthy.
+pub async fn probe_health_blocking(port: u16) -> Result<bool> {
+    let running = tokio::task::spawn_blocking(move || crate::central::health(port)).await?;
+    Ok(running)
+}
+
+/// Read `~/.wire/config.json` for the live central probe. Missing/invalid -> port None.
+///
+/// Mirrors `central::parse_wire_config`'s port coercion (some jbcentral builds write
+/// `proxy_port` as a string), but unlike that helper this never requires `proxy_secret`:
+/// the status probe only needs the port to decide whether to `/health`-check.
+fn read_wire_config() -> Option<WireConfig> {
+    let home = directories::BaseDirs::new()?.home_dir().to_path_buf();
+    let cfg = home.join(".wire").join("config.json");
+    let text = std::fs::read_to_string(&cfg).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let port = match json.get("proxy_port") {
+        Some(serde_json::Value::Number(n)) => n.as_u64().and_then(|v| u16::try_from(v).ok()),
+        Some(serde_json::Value::String(s)) => s.trim().parse::<u16>().ok(),
+        _ => None,
+    };
+    Some(WireConfig { port })
+}
+
+/// Locate the newest installed central binary under `<cache>/bin/jbcentral/<ver>/`.
+/// Returns the executable path (`jbcentral` / `jbcentral.exe`) if present.
+fn newest_central_binary(cache_dir: &Path) -> Result<Option<PathBuf>> {
+    let versions = central_versions(cache_dir)?;
+    let Some(latest) = versions.last() else {
+        return Ok(None);
+    };
+    let dir = cache_dir
+        .join("bin")
+        .join(crate::central::INSTALL_TOOL_DIR)
+        .join(latest);
+    let exe = if cfg!(windows) {
+        "jbcentral.exe"
+    } else {
+        "jbcentral"
+    };
+    let path = dir.join(exe);
+    Ok(path.exists().then_some(path))
+}
+
+/// Gather real inputs and print the status report. Side-effecting async entry point.
+///
+/// All blocking work (`central::health`, `jbcentral status` parsing) runs via
+/// `spawn_blocking` so the tokio executor is never blocked (R5).
+///
+/// Note: `central`'s `/health` carries no identity (unlike the first-party
+/// `/__pm/health`). We trust the configured port's `/health` here because central is
+/// a forced singleton with a fixed JetBrains destination -- there is no port-squatter
+/// identity concern that motivates the first-party hops' identity check.
+pub async fn run_status() -> Result<()> {
+    let cache = crate::paths::cache_dir()?;
+    let runs_root = crate::paths::state_dir()?.join("runs");
+
+    let cache_for_blocking = cache.clone();
+    // Off-runtime: install scan, wire-config read, jbcentral status parse, health.
+    let probe = tokio::task::spawn_blocking(move || -> Result<CentralProbe> {
+        let versions = central_versions(&cache_for_blocking)?;
+        if versions.is_empty() {
+            return Ok(assemble_probe(false, None, CentralLogin::Unknown));
+        }
+        let wire = read_wire_config();
+        // Login truth from `jbcentral status` (R20), not from any secret on disk.
+        // `run_status_text` (R23c) yields the status stdout; the canonical
+        // `classify_login_status(code, stdout, stderr)` (R23c) is fed that stdout
+        // (code/stderr unavailable through the stdout-only helper -> None / "").
+        let login = match newest_central_binary(&cache_for_blocking)? {
+            Some(bin) => crate::central::run_status_text(&bin)
+                .map(|stdout| {
+                    CentralLogin::from(crate::central::classify_login_status(None, &stdout, ""))
+                })
+                .unwrap_or(CentralLogin::Unknown),
+            None => CentralLogin::Unknown,
+        };
+        let mut probe = assemble_probe(true, wire, login);
+        if let Some(port) = probe.port {
+            probe.running = crate::central::health(port);
+        }
+        Ok(probe)
+    })
+    .await??;
+
+    let report = build_status_report(&cache, &runs_root, &probe)?;
+    print!("{}", render_status(&report));
+    Ok(())
+}

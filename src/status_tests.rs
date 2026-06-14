@@ -265,3 +265,114 @@ fn report_includes_live_runs() {
     assert_eq!(report.runs.len(), 1);
     assert_eq!(report.runs[0].run_id, NEWER);
 }
+
+// --- render_status (pure) -----
+
+#[test]
+fn render_status_lists_components_central_and_runs() {
+    let report = StatusReport {
+        first_party: vec!["pino".to_string(), "headroom".to_string()],
+        central: CentralStatus {
+            install: CentralInstall::Installed {
+                versions: vec!["0.2.9".to_string()],
+            },
+            run: CentralRun::Running { port: 53117 },
+            login: CentralLogin::LoggedIn,
+        },
+        runs: vec![RunRecord {
+            run_id: NEWER.to_string(),
+            dir: PathBuf::from("/state/runs").join(NEWER),
+            proxies: vec![ProxyLog {
+                name: "pino".to_string(),
+                port: 40001,
+                log: PathBuf::from("/state/runs")
+                    .join(NEWER)
+                    .join("pino-40001.log"),
+            }],
+        }],
+    };
+
+    let out = render_status(&report);
+    assert!(out.contains("pino (built-in)"), "got: {out}");
+    assert!(out.contains("headroom (built-in)"), "got: {out}");
+    assert!(out.contains("central: installed 0.2.9"), "got: {out}");
+    assert!(out.contains("running on port 53117"), "got: {out}");
+    assert!(out.contains("logged in"), "got: {out}");
+    assert!(out.contains(NEWER), "got: {out}");
+    assert!(out.contains("pino:40001"), "got: {out}");
+}
+
+#[test]
+fn render_status_handles_not_installed_and_no_runs() {
+    let report = StatusReport {
+        first_party: vec!["pino".to_string(), "headroom".to_string()],
+        central: CentralStatus {
+            install: CentralInstall::NotInstalled,
+            run: CentralRun::Stopped,
+            login: CentralLogin::Unknown,
+        },
+        runs: vec![],
+    };
+    let out = render_status(&report);
+    assert!(out.contains("central: not installed"), "got: {out}");
+    assert!(out.contains("no live runs"), "got: {out}");
+}
+
+// --- probe assembly permutations (pure) -----
+
+#[test]
+fn assemble_probe_no_install_yields_dead_probe() {
+    // Even if a wire config exists, with no install we never probe.
+    let wire = WireConfig { port: Some(53117) };
+    let probe = assemble_probe(false, Some(wire), CentralLogin::LoggedIn);
+    assert!(!probe.running);
+    assert_eq!(probe.port, None);
+    assert_eq!(probe.login, CentralLogin::Unknown);
+}
+
+#[test]
+fn assemble_probe_installed_no_wire_config() {
+    // Installed but no ~/.wire/config.json: no port, so not running; login from arg.
+    let probe = assemble_probe(true, None, CentralLogin::LoggedOut);
+    assert_eq!(probe.port, None);
+    assert!(!probe.running);
+    assert_eq!(probe.login, CentralLogin::LoggedOut);
+}
+
+#[test]
+fn assemble_probe_installed_with_wire_config_carries_port_and_login() {
+    let wire = WireConfig { port: Some(53117) };
+    let probe = assemble_probe(true, Some(wire), CentralLogin::LoggedIn);
+    assert_eq!(probe.port, Some(53117));
+    // `running` is decided by the caller's health check, fed via the WireConfig path
+    // in run_status; assemble_probe records the port and login and leaves running
+    // for the health-probe step, so here running stays false until health runs.
+    assert_eq!(probe.login, CentralLogin::LoggedIn);
+}
+
+// --- R5-safe async entry: blocking probe must not panic on the runtime thread -----
+
+#[tokio::test]
+async fn run_status_async_entry_does_not_panic_on_blocking_probe() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    // A throwaway HTTP/1.1 server that answers any request with 200 on /health.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        // Answer exactly one connection then stop (the probe makes one GET).
+        if let Ok((mut sock, _)) = listener.accept() {
+            let mut buf = [0u8; 1024];
+            let _ = sock.read(&mut buf);
+            let _ = sock
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+        }
+    });
+
+    // Drive the R5-safe spawn_blocking probe wrapper directly: if `central::health`
+    // were called on the runtime thread it would panic; awaiting the wrapper must not.
+    let running = probe_health_blocking(port).await.unwrap();
+    assert!(running, "fake /health should report running");
+    server.join().unwrap();
+}

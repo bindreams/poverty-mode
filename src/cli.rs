@@ -423,7 +423,16 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
         }
         Command::Central { .. } => Err(Error::NotImplemented("central").into()),
         Command::Config { .. } => Err(Error::NotImplemented("config").into()),
-        Command::Status => Err(Error::NotImplemented("status").into()),
+        Command::Status => {
+            // `dispatch` is synchronous; `run_status` is async (R5: its blocking
+            // central health/`jbcentral status` probes run off the executor via
+            // `spawn_blocking`). Drive it on a fresh multi-thread runtime, mirroring
+            // the `run`/`proxy` arms (R23g: MODIFY the M3 NotImplemented arm).
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?;
+            rt.block_on(crate::status::run_status())
+        }
         Command::Doctor => Err(Error::NotImplemented("doctor").into()),
         Command::Clean => Err(Error::NotImplemented("clean").into()),
         Command::SpawnHolder => {
