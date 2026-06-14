@@ -84,6 +84,69 @@ pub fn compute_agent_env(chain: &[ResolvedProxy], central_is_tail: bool) -> Vec<
     env
 }
 
+use crate::agent::Agent;
+
+/// True iff the chain's last hop is the must-be-last (Central) proxy.
+pub fn central_is_tail(chain: &[ResolvedProxy]) -> bool {
+    chain.last().map(|p| p.name.must_be_last()).unwrap_or(false)
+}
+
+/// Split off a SINGLE trailing must-be-last (Central) entry, returning
+/// (first_party_hops, central_is_tail). Asserts (debug) that no non-trailing
+/// entry is must_be_last (the central-last contract; `resolve_chain` enforces it).
+fn split_trailing_central(chain: &[ResolvedProxy]) -> (Vec<ResolvedProxy>, bool) {
+    match chain.split_last() {
+        Some((last, init)) if last.name.must_be_last() => {
+            debug_assert!(
+                init.iter().all(|p| !p.name.must_be_last()),
+                "central-last contract violated: a non-trailing entry is must_be_last"
+            );
+            (init.to_vec(), true)
+        }
+        _ => {
+            debug_assert!(
+                chain.iter().all(|p| !p.name.must_be_last()),
+                "central-last contract violated: a non-trailing entry is must_be_last"
+            );
+            (chain.to_vec(), false)
+        }
+    }
+}
+
+/// Build the chain (back-to-front, race-free, via the ProxyManager seam), run the
+/// agent against the head, forward signals, wait, then tear the chain down.
+/// Returns the agent's exit status.
+///
+/// No-first-party-hop cases (truly empty chain, OR central-only): exec the agent
+/// unchanged, pointed straight at `tail_upstream` (design §6/§11 "easy to not
+/// use"; for central-only, `tail_upstream` is the central wire URL).
+pub async fn build_and_run(
+    chain: Vec<ResolvedProxy>,
+    tail_upstream: Upstream,
+    agent: &dyn Agent,
+    argv: &[String],
+) -> anyhow::Result<std::process::ExitStatus> {
+    let (hops, central_tail) = split_trailing_central(&chain);
+
+    if hops.is_empty() {
+        // No first-party proxies to spawn: the agent talks directly to the tail
+        // upstream (for central-only, that is the wire URL). agent_env still
+        // reflects central_tail for the auth override.
+        let env = compute_agent_env(&chain, central_tail);
+        let mut cmd = agent.build_command(argv, &tail_upstream.url, &env);
+        let status = cmd
+            .status()
+            .await
+            .map_err(|e| anyhow::anyhow!("spawning agent '{}': {e}", agent.name()))?;
+        return Ok(status);
+    }
+
+    // Multi-hop build is implemented in M6.10. Signal the gap explicitly rather
+    // than silently mis-running (this bail is replaced in M6.10).
+    let _ = (&hops, central_tail);
+    anyhow::bail!("multi-hop chain build is implemented in M6.10")
+}
+
 use std::path::PathBuf;
 
 use crate::config::ProxySettings;

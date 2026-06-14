@@ -4,6 +4,7 @@
 //! is declared here so later milestones extend the crate by FILLING stubs, never
 //! by adding `mod` to `main.rs`. Integration tests `use poverty_mode::...`.
 
+pub mod agent;
 pub mod central;
 pub mod cli;
 pub mod config;

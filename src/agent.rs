@@ -1,0 +1,30 @@
+//! The agent seam: the AI agent process the chain fronts.
+//!
+//! The orchestrator (M6) drives any agent through this trait so the concrete
+//! agent (v1: `claude`, filled in by M7's `agent::claude::ClaudeAgent`) is just
+//! one impl. The trait is defined here, in M6, because `build_and_run` takes a
+//! `&dyn Agent`; M7 adds the `claude` submodule and the inline `--settings`
+//! wiring without re-typing the trait.
+
+use url::Url;
+
+/// An AI agent the proxy chain fronts.
+///
+/// `build_command` returns a fully-prepared, not-yet-spawned child command. The
+/// agent sets `ANTHROPIC_BASE_URL` from `base_url` (the chain head — NOT carried
+/// in `extra_env`, see `orchestrator::compute_agent_env`) and mirrors every
+/// `extra_env` pair into the process environment. `argv` is the user's
+/// pass-through agent arguments.
+pub trait Agent {
+    /// A short, stable identifier for diagnostics (e.g. `"claude"`).
+    fn name(&self) -> &str;
+
+    /// Build the child command for this agent, pointed at `base_url` with
+    /// `extra_env` applied. Does not spawn — the caller runs it.
+    fn build_command(
+        &self,
+        argv: &[String],
+        base_url: &Url,
+        extra_env: &[(String, String)],
+    ) -> tokio::process::Command;
+}
