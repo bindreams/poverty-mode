@@ -502,7 +502,6 @@ fn block_has_ephemeral(block: &Value) -> bool {
 
 /// True if any element of `arr` carries an ephemeral breakpoint.
 /// Mirrors hasBreakpoint in reference/pino/src/cache.js (lines 77-81).
-#[allow(dead_code)] // exercised via the injector in M4.7.
 fn has_breakpoint(arr: &Value) -> bool {
     match arr.as_array() {
         Some(items) => items.iter().any(block_has_ephemeral),
@@ -576,6 +575,138 @@ pub fn strip_intermediate_message_breakpoints(body: &mut Value) -> usize {
         }
     }
     stripped
+}
+
+fn one_hour_cc() -> Value {
+    json!({ "type": "ephemeral", "ttl": "1h" })
+}
+
+/// Normalizes `messages[idx].content` to an array if it is a non-empty string,
+/// then returns the index of the last cacheable block (`text`/`tool_result`/`image`),
+/// or None. Mirrors findLastCacheableBlockInMessage (reference/pino/src/cache.js 98-113).
+fn find_last_cacheable_index_in_message(message: &mut Value) -> Option<usize> {
+    let content = message.get_mut("content")?;
+    match content {
+        Value::Array(blocks) => {
+            for j in (0..blocks.len()).rev() {
+                let ty = blocks[j].get("type").and_then(|t| t.as_str());
+                if matches!(ty, Some("text") | Some("tool_result") | Some("image")) {
+                    return Some(j);
+                }
+            }
+            None
+        }
+        Value::String(s) if !s.is_empty() => {
+            let text = std::mem::take(s);
+            *content = json!([ { "type": "text", "text": text } ]);
+            Some(0)
+        }
+        _ => None,
+    }
+}
+
+/// Injects cache breakpoints within the 4-cap. Returns the JSON-Pointer paths of
+/// the tail blocks placed (so the 1h-rewrite can skip them). Mirrors
+/// injectBreakpointIfAbsent (reference/pino/src/cache.js 124-181).
+pub fn inject_breakpoint_if_absent(body: &mut Value, tail_ttl: TailTtl) -> Vec<String> {
+    let mut tail_paths: Vec<String> = Vec::new();
+
+    // 1. Reclaim wasted small-system slots.
+    strip_small_system_breakpoints(body);
+
+    // 2. tools: last entry -> 1h, only if the array is non-empty and has no breakpoint.
+    let inject_tools = body
+        .get("tools")
+        .map(|t| t.as_array().map(|a| !a.is_empty()).unwrap_or(false) && !has_breakpoint(t))
+        .unwrap_or(false);
+    if inject_tools {
+        if let Some(tools) = body.get_mut("tools").and_then(|t| t.as_array_mut()) {
+            if let Some(last) = tools.last_mut() {
+                if let Some(obj) = last.as_object_mut() {
+                    obj.insert("cache_control".to_string(), one_hour_cc());
+                }
+            }
+        }
+    }
+
+    // 3. system: array -> last block 1h (no existing breakpoint); string -> cached array.
+    //    Finding 6: compute the array-arm condition as a bool first to avoid a dead
+    //    binding and a double-fetch of body["system"], mirroring the tools pattern.
+    let inject_system_array = matches!(body.get("system"), Some(Value::Array(a)) if !a.is_empty())
+        && body
+            .get("system")
+            .map(|s| !has_breakpoint(s))
+            .unwrap_or(false);
+    if inject_system_array {
+        if let Some(sys) = body.get_mut("system").and_then(|s| s.as_array_mut()) {
+            if let Some(last) = sys.last_mut() {
+                if let Some(obj) = last.as_object_mut() {
+                    obj.insert("cache_control".to_string(), one_hour_cc());
+                }
+            }
+        }
+    } else if let Some(Value::String(s)) = body.get("system") {
+        if !s.is_empty() {
+            let text = s.clone();
+            body["system"] = json!([
+                { "type": "text", "text": text, "cache_control": { "type": "ephemeral", "ttl": "1h" } }
+            ]);
+        }
+    }
+
+    // 4. msg[0] dedicated breakpoint, only with a distinct tail message and under the cap.
+    let has_multiple_messages = body
+        .get("messages")
+        .and_then(|m| m.as_array())
+        .map(|a| a.len() > 1)
+        .unwrap_or(false);
+    if has_multiple_messages && count_cache_breakpoints(body) < BREAKPOINT_CEILING {
+        if let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) {
+            if let Some(first) = messages.first_mut() {
+                if let Some(idx) = find_last_cacheable_index_in_message(first) {
+                    let block = &mut first["content"][idx];
+                    if block.get("cache_control").is_none() {
+                        if let Some(obj) = block.as_object_mut() {
+                            obj.insert("cache_control".to_string(), one_hour_cc());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 5. Rolling tail: last cacheable block across ALL messages -> TAIL_TTL.
+    if count_cache_breakpoints(body) < BREAKPOINT_CEILING {
+        let msg_count = body
+            .get("messages")
+            .and_then(|m| m.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        let mut placed: Option<(usize, usize)> = None;
+        if let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) {
+            // findLastCacheableMessageBlock: scan messages from the end.
+            for i in (0..msg_count).rev() {
+                if let Some(idx) = find_last_cacheable_index_in_message(&mut messages[i]) {
+                    placed = Some((i, idx));
+                    break;
+                }
+            }
+        }
+        if let Some((i, idx)) = placed {
+            let block = &mut body["messages"][i]["content"][idx];
+            if block.get("cache_control").is_none() {
+                if let Some(obj) = block.as_object_mut() {
+                    obj.insert(
+                        "cache_control".to_string(),
+                        json!({ "type": "ephemeral", "ttl": tail_ttl.as_str() }),
+                    );
+                }
+                tail_paths.push(format!("/messages/{}/content/{}", i, idx));
+            }
+        }
+    }
+
+    tail_paths
 }
 
 fn apply_auto_cache(_body: &mut Value, _tail_ttl: TailTtl) {

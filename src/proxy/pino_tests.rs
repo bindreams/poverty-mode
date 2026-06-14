@@ -1006,3 +1006,171 @@ fn strip_small_system_uses_utf16_length_at_boundary() {
     );
     assert!(body["system"][1].get("cache_control").is_none());
 }
+
+// M4.7 ===== breakpoint injection within the 4-cap (tools, system, msg[0], tail).
+// Ported from reference/pino/src/cache.js lines 98-181.
+
+use super::inject_breakpoint_if_absent;
+
+fn cc(block: &serde_json::Value) -> Option<&serde_json::Value> {
+    block.get("cache_control")
+}
+
+#[test]
+fn inject_places_tools_system_msg0_tail_within_cap() {
+    let mut body = json!({
+        "tools": [ { "name": "Bash" }, { "name": "Read" } ],
+        "system": [
+            { "type": "text", "text": "x".repeat(600) },
+            { "type": "text", "text": "y".repeat(600) }
+        ],
+        "messages": [
+            { "role": "user", "content": [
+                { "type": "text", "text": "z".repeat(50) },
+                { "type": "text", "text": "reminders ".repeat(60) }
+            ] },
+            { "role": "assistant", "content": [ { "type": "text", "text": "ok" } ] },
+            { "role": "user", "content": [ { "type": "text", "text": "latest" } ] }
+        ]
+    });
+    let tail_paths = inject_breakpoint_if_absent(&mut body, TailTtl::FiveMin);
+
+    let tools = body["tools"].as_array().unwrap();
+    assert_eq!(
+        cc(&tools[1]).unwrap(),
+        &json!({ "type": "ephemeral", "ttl": "1h" })
+    );
+    assert!(cc(&tools[0]).is_none());
+
+    let system = body["system"].as_array().unwrap();
+    assert_eq!(
+        cc(&system[1]).unwrap(),
+        &json!({ "type": "ephemeral", "ttl": "1h" })
+    );
+    assert!(cc(&system[0]).is_none());
+
+    let msg0 = body["messages"][0]["content"].as_array().unwrap();
+    assert_eq!(
+        cc(&msg0[1]).unwrap(),
+        &json!({ "type": "ephemeral", "ttl": "1h" })
+    );
+
+    let last_block = &body["messages"][2]["content"][0];
+    assert_eq!(
+        cc(last_block).unwrap(),
+        &json!({ "type": "ephemeral", "ttl": "5m" })
+    );
+    assert_eq!(tail_paths, vec!["/messages/2/content/0".to_string()]);
+
+    assert_eq!(count_cache_breakpoints(&body), 4);
+}
+
+#[test]
+fn inject_skips_tools_when_already_has_breakpoint() {
+    let mut body = json!({
+        "tools": [ { "name": "Bash", "cache_control": { "type": "ephemeral", "ttl": "5m" } }, { "name": "Read" } ],
+        "messages": [ { "role": "user", "content": [ { "type": "text", "text": "hi" } ] } ]
+    });
+    inject_breakpoint_if_absent(&mut body, TailTtl::FiveMin);
+    assert!(cc(&body["tools"][1]).is_none());
+}
+
+#[test]
+fn inject_converts_string_system_to_cached_array() {
+    let mut body = json!({
+        "system": "you are a helpful assistant",
+        "messages": [ { "role": "user", "content": [ { "type": "text", "text": "hi" } ] } ]
+    });
+    inject_breakpoint_if_absent(&mut body, TailTtl::FiveMin);
+    assert_eq!(
+        body["system"],
+        json!([ { "type": "text", "text": "you are a helpful assistant",
+                  "cache_control": { "type": "ephemeral", "ttl": "1h" } } ])
+    );
+}
+
+#[test]
+fn inject_skips_msg0_breakpoint_when_single_message() {
+    // Only one message => msg0 dedicated breakpoint NOT placed; tail covers it.
+    let mut body = json!({
+        "messages": [ { "role": "user", "content": [ { "type": "text", "text": "only" } ] } ]
+    });
+    let tail_paths = inject_breakpoint_if_absent(&mut body, TailTtl::OneHour);
+    let blocks = body["messages"][0]["content"].as_array().unwrap();
+    assert_eq!(count_cache_breakpoints(&body), 1);
+    assert_eq!(
+        cc(&blocks[0]).unwrap(),
+        &json!({ "type": "ephemeral", "ttl": "1h" })
+    );
+    assert_eq!(tail_paths, vec!["/messages/0/content/0".to_string()]);
+}
+
+#[test]
+fn inject_normalizes_string_message_tail_into_array() {
+    let mut body = json!({
+        "messages": [ { "role": "user", "content": "plain string turn" } ]
+    });
+    inject_breakpoint_if_absent(&mut body, TailTtl::FiveMin);
+    assert_eq!(
+        body["messages"][0]["content"],
+        json!([ { "type": "text", "text": "plain string turn",
+                  "cache_control": { "type": "ephemeral", "ttl": "5m" } } ])
+    );
+}
+
+#[test]
+fn inject_strips_small_system_breakpoint_then_reuses_slot() {
+    let mut body = json!({
+        "system": [ { "type": "text", "text": "tiny", "cache_control": { "type": "ephemeral" } } ],
+        "messages": [ { "role": "user", "content": [ { "type": "text", "text": "hi" } ] } ]
+    });
+    inject_breakpoint_if_absent(&mut body, TailTtl::FiveMin);
+    assert_eq!(
+        cc(&body["system"][0]).unwrap(),
+        &json!({ "type": "ephemeral", "ttl": "1h" })
+    );
+}
+
+#[test]
+fn inject_respects_cap_when_four_breakpoints_already_present() {
+    let mut body = json!({
+        "tools": [ { "name": "A", "cache_control": { "type": "ephemeral" } } ],
+        "system": [ { "type": "text", "text": "s".repeat(600), "cache_control": { "type": "ephemeral" } } ],
+        "messages": [
+            { "role": "user", "content": [ { "type": "text", "text": "m0", "cache_control": { "type": "ephemeral" } } ] },
+            { "role": "user", "content": [ { "type": "text", "text": "m1", "cache_control": { "type": "ephemeral" } } ] }
+        ]
+    });
+    let tail_paths = inject_breakpoint_if_absent(&mut body, TailTtl::FiveMin);
+    assert_eq!(count_cache_breakpoints(&body), 4, "cap not exceeded");
+    assert!(tail_paths.is_empty(), "no new tail injected at the cap");
+}
+
+// Review Finding 6: len>1 but ONLY msg0 is cacheable. msg0 gets its 1h breakpoint;
+// the tail pass selects the SAME block but its `!cache_control` guard short-circuits,
+// so NO 5m tail is added and tail_paths is empty (matching Node's `!tail.cache_control`).
+#[test]
+fn inject_len_gt_one_only_msg0_cacheable_no_duplicate_tail() {
+    let mut body = json!({
+        "messages": [
+            { "role": "user", "content": [ { "type": "text", "text": "the only cacheable block" } ] },
+            // Second message has NO text/tool_result/image block => not cacheable.
+            { "role": "assistant", "content": [ { "type": "tool_use", "id": "t", "name": "X", "input": {} } ] }
+        ]
+    });
+    let tail_paths = inject_breakpoint_if_absent(&mut body, TailTtl::FiveMin);
+    // msg0 block keeps its 1h (msg0 pass), tail pass adds nothing.
+    assert_eq!(
+        cc(&body["messages"][0]["content"][0]).unwrap(),
+        &json!({ "type": "ephemeral", "ttl": "1h" })
+    );
+    assert_eq!(
+        count_cache_breakpoints(&body),
+        1,
+        "exactly one breakpoint (msg0)"
+    );
+    assert!(
+        tail_paths.is_empty(),
+        "no 5m tail added when the only cacheable block is msg0's"
+    );
+}
