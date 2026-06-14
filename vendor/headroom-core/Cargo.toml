@@ -1,0 +1,122 @@
+[package]
+name = "headroom-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "Apache-2.0"
+repository = "https://github.com/hybloid/headroom"
+description = "Core Headroom types and compression transform traits (Rust). Vendored, feature-trimmed for poverty-mode."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+# `preserve_order` makes `serde_json::Value::Object` use IndexMap so JSON
+# parse order is preserved through Value→string→Value round-trips. The
+# smart_crusher port relies on this to match Python's `str(dict)` output.
+# `arbitrary_precision` keeps the literal numeric token from the source JSON
+# intact (byte-faithful passthrough). `raw_value` exposes `RawValue` for
+# byte-exact forwarding of unmodified `messages[*]` entries.
+serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision", "raw_value"] }
+bytes = "1"
+thiserror = "1"
+tracing = "0.1"
+tiktoken-rs = "0.11"
+# `tokenizers` is the HuggingFace pure-Rust tokenizer crate. OFF the
+# live-zone path (Claude models use the arithmetic EstimatingCounter).
+# Gated behind `hf-tokenizers`.
+tokenizers = { version = "0.22", optional = true }
+# `hf-hub` is the HuggingFace Hub client. Only used by the Hf tokenizer
+# adapter and fastembed model download. Gated behind
+# `hf-tokenizers` / `embeddings`.
+hf-hub = { version = "0.4", optional = true, default-features = false, features = ["ureq", "rustls-tls"] }
+# `md5` for the CCR cache_key. Python's compression_store hashes the original
+# diff with MD5 truncated to 24 hex chars; we must match byte-for-byte.
+md-5 = "0.10"
+# `sha2` for `_hash_field_name` in smart_crusher (SHA256 truncated to 16
+# hex chars). Python uses `hashlib.sha256` so we need byte-exact parity.
+sha2 = "0.10"
+# `dashmap` for the CCR storage backend. Concurrent HashMap with sharded
+# locking.
+dashmap = "6"
+# `regex` powers the hunk-header parser and priority-pattern matcher.
+regex = "1"
+# `flate2` for `_validate_with_zlib` in `adaptive_sizer`.
+flate2 = "1"
+# `magika` is Google's ONNX-backed content classifier (Tier 1 of the
+# Stage-3d ContentRouter detection arch). Only used by the multi-tier
+# `detection`/`magika_detector` ContentRouter, which is NOT on the
+# live-zone path (live_zone uses the regex content_detector). Gated
+# behind `magika`.
+magika = { version = "1", optional = true }
+# `unidiff` is the Stage-3d Tier-2 diff detector.
+unidiff = "0.4"
+# `aho-corasick` powers the Tier-3 KeywordDetector in `signals/`.
+aho-corasick = "1"
+# `rayon` powers the pipeline orchestrator's parallel reformat-vs-bloat
+# evaluation.
+rayon = "1"
+# `toml` reads the default pipeline configuration shipped at
+# `config/pipeline.toml`.
+toml = "0.8"
+# `blake3` powers `ccr::compute_key`.
+blake3 = "1"
+# `rusqlite` for the SQLite-backed CCR store (the production default).
+# `bundled` builds SQLite from source so deploys do not need a system
+# libsqlite3.
+rusqlite = { version = "0.32", features = ["bundled"] }
+# `redis` for the optional multi-worker CCR backend. Cfg-gated behind
+# the `redis` feature.
+redis = { version = "0.27", optional = true, default-features = false }
+# `http` powers the auth-mode classifier.
+http = "1"
+
+[target.'cfg(not(windows))'.dependencies]
+fastembed = { version = "5", optional = true, default-features = false, features = [
+    "hf-hub-rustls-tls",
+    "ort-download-binaries-rustls-tls",
+    "image-models",
+] }
+
+[target.'cfg(windows)'.dependencies]
+# `ort-download-binaries-*` emits DirectML link libs on Windows. Users
+# often do not have those SDK libs, so load ORT dynamically instead.
+fastembed = { version = "5", optional = true, default-features = false, features = [
+    "hf-hub-rustls-tls",
+    "ort-load-dynamic",
+    "image-models",
+] }
+
+[features]
+# default-features = false in the consumer selects exactly `transforms-min`.
+# `full` restores parity with upstream so the vendored crate still
+# builds/tests normally.
+default = ["full"]
+
+# Minimal profile: live-zone dispatcher + regex content_detector +
+# per-content-type compressors (SmartCrusher / log / search / diff) +
+# arithmetic tokenizer estimator + tiktoken. NO ONNX/embedding crates.
+transforms-min = []
+
+# HuggingFace tokenizer adapter (tokenizers + hf-hub).
+hf-tokenizers = ["dep:tokenizers", "dep:hf-hub"]
+
+# Magika ONNX content classifier + the multi-tier `detection` chain.
+magika = ["dep:magika"]
+
+# Embedding-based relevance scorer (fastembed -> ONNX runtime). hf-hub rides
+# along because fastembed downloads its model via the Hub.
+embeddings = ["dep:fastembed", "dep:hf-hub"]
+
+# Compile in the Redis CCR backend.
+redis = ["dep:redis"]
+
+# Restores full upstream behavior. This is `default`.
+full = ["hf-tokenizers", "magika", "embeddings"]
+
+# NOTE: the upstream `benches/` and `tests/` directories are NOT vendored
+# (only `src/` + `Cargo.toml` + `config/`), so the `[[bench]]` targets and
+# the heavier dev-dependencies were removed. The crate's inline `#[cfg(test)]`
+# unit tests still build with the dev-dependencies below; poverty-mode consumes
+# this as a path dependency and never compiles its tests.
+[dev-dependencies]
+proptest = "1"
+tempfile = "3"

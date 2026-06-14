@@ -53,6 +53,7 @@ tar = "0.4"
 zip = "8.6"
 sha2 = "0.11"
 tempfile = "3.27"
+headroom-core = { path = "vendor/headroom-core", default-features = false, features = ["transforms-min"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

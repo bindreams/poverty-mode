@@ -1,0 +1,43 @@
+headroom-core (vendored, feature-trimmed)
+=========================================
+
+This directory contains a vendored copy of the `headroom-core` crate.
+
+Source repository: https://github.com/hybloid/headroom
+Source commit:     6d3f39f213f4eb2d1c6c814b34e1bf6fe2a5c959
+Vendored path:     crates/headroom-core (src/ + Cargo.toml + config/)
+Original license:   Apache-2.0 (see LICENSE in this directory)
+Copyright 2025 Headroom Contributors
+
+Modifications
+-------------
+
+This copy has been MODIFIED for use in poverty-mode. The changes are
+limited to feature-trimming and de-workspacing; the compression API
+(`headroom_core::transforms::compress_anthropic_live_zone` and the
+live-zone dispatcher) is unchanged. Specifically:
+
+1. De-workspaced `Cargo.toml`: every `*.workspace = true` key was
+   replaced with a concrete value (license = "Apache-2.0",
+   edition = "2021", rust-version, a version, and concrete dependency
+   specifications), and workspace-only keys were removed, so the crate
+   builds standalone as a local path dependency.
+
+2. Made the ONNX / embedding / HuggingFace dependencies
+   (`magika`, `fastembed`, `hf-hub`, `tokenizers`) OPTIONAL and gated
+   them behind non-default cargo features (`magika`, `embeddings`,
+   `hf-tokenizers`). The new `transforms-min` feature (selected by
+   poverty-mode) excludes all of them, so the ONNX runtime is not
+   pulled into the dependency graph.
+
+3. cfg-gated the modules, re-exports, and call sites that reference
+   those crates (`transforms::detection`, `transforms::magika_detector`,
+   `relevance::embedding`, `relevance::hybrid`, the HuggingFace tokenizer
+   adapter, and the SmartCrusher default-scorer construction), with a
+   pure-Rust BM25 fallback for the relevance scorer so the live-zone
+   compression path still functions when ONNX is absent.
+
+The live-zone path (the dispatcher, the regex `content_detector`, the
+per-content-type compressors, the arithmetic / tiktoken tokenizer
+estimators, and the BM25 relevance scorer) compiles and works under the
+default `transforms-min` feature with no ONNX dependency.
