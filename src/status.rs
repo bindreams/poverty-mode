@@ -347,24 +347,18 @@ fn read_wire_config() -> Option<WireConfig> {
     Some(WireConfig { port })
 }
 
-/// Locate the newest installed central binary under `<cache>/bin/jbcentral/<ver>/`.
-/// Returns the executable path (`jbcentral` / `jbcentral.exe`) if present.
+/// Locate the newest installed central binary, delegating to the canonical
+/// `central::installed_binary_path_in` so BOTH the flat
+/// (`<cache>/bin/jbcentral/<ver>/jbcentral`) and nested (`.../jbcentral-<ver>/jbcentral`)
+/// archive layouts resolve consistently with install/clean. A flat-only lookup here would
+/// miss a nested install that `central_versions` still reports as present, forcing login to
+/// Unknown for a genuinely logged-in user.
 fn newest_central_binary(cache_dir: &Path) -> Result<Option<PathBuf>> {
     let versions = central_versions(cache_dir)?;
     let Some(latest) = versions.last() else {
         return Ok(None);
     };
-    let dir = cache_dir
-        .join("bin")
-        .join(crate::central::INSTALL_TOOL_DIR)
-        .join(latest);
-    let exe = if cfg!(windows) {
-        "jbcentral.exe"
-    } else {
-        "jbcentral"
-    };
-    let path = dir.join(exe);
-    Ok(path.exists().then_some(path))
+    Ok(crate::central::installed_binary_path_in(cache_dir, latest))
 }
 
 /// Gather real inputs and print the status report. Side-effecting async entry point.
