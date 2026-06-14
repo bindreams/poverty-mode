@@ -93,6 +93,11 @@ pub enum Command {
     /// Hidden: a long sleeper used as the grouped child in teardown tests.
     #[command(name = "__sleep", hide = true)]
     Sleep,
+
+    /// Hidden: POST an empty JSON body with a test api-key header to <url>, exit
+    /// 0 on 2xx. Used as a deterministic in-repo "agent" in chain tests.
+    #[command(name = "__post", hide = true)]
+    Post { url: String },
 }
 
 /// Arguments for the `proxy` subcommand (R23b). The positional `which` selects
@@ -362,6 +367,35 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
             crate::orchestrator::teardown::spawn_death_watcher_from_env();
             std::thread::sleep(std::time::Duration::from_secs(3600));
             Ok(())
+        }
+        Command::Post { url } => {
+            // `reqwest::blocking` MUST NOT run on a runtime thread (R5), so the
+            // send happens on a blocking-pool thread via `spawn_blocking`. The
+            // surrounding runtime exists only to drive that join.
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?;
+            rt.block_on(async move {
+                let resp = tokio::task::spawn_blocking(move || {
+                    reqwest::blocking::Client::builder()
+                        .redirect(reqwest::redirect::Policy::none())
+                        .build()
+                        .and_then(|c| {
+                            c.post(&url)
+                                .header("content-type", "application/json")
+                                .header("x-api-key", "sk-test")
+                                .body(r#"{"model":"claude-x","messages":[]}"#)
+                                .send()
+                        })
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!("post task join: {e}"))?;
+                match resp {
+                    Ok(r) if r.status().is_success() => Ok(()),
+                    Ok(r) => anyhow::bail!("__post got HTTP {}", r.status()),
+                    Err(e) => anyhow::bail!("__post failed: {e}"),
+                }
+            })
         }
     }
 }

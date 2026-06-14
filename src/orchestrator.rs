@@ -141,10 +141,87 @@ pub async fn build_and_run(
         return Ok(status);
     }
 
-    // Multi-hop build is implemented in M6.10. Signal the gap explicitly rather
-    // than silently mis-running (this bail is replaced in M6.10).
-    let _ = (&hops, central_tail);
-    anyhow::bail!("multi-hop chain build is implemented in M6.10")
+    let exe = self_spawn_exe()?;
+    let mut manager = manager::EphemeralManager::new(exe)?;
+
+    build_via_manager(
+        &mut manager,
+        &chain,
+        &hops,
+        central_tail,
+        &tail_upstream,
+        agent,
+        argv,
+    )
+    .await
+}
+
+/// Env var naming the `poverty-mode` binary to re-spawn for proxy hops. Honored
+/// by `self_spawn_exe` ahead of `current_exe()`. This is a test seam: integration
+/// tests drive `build_and_run` from the libtest harness binary, whose
+/// `current_exe()` is NOT `poverty-mode` and cannot serve the `proxy` subcommand,
+/// so they set this to the real `CARGO_BIN_EXE_poverty-mode`. In production it is
+/// unset and `current_exe()` (the running `poverty-mode`) is used.
+const SELF_SPAWN_EXE_ENV: &str = "POVERTY_PROXY_EXE";
+
+/// Resolve the binary to self-spawn for proxy hops: `POVERTY_PROXY_EXE` if set and
+/// non-empty (test seam), else `std::env::current_exe()` (the running binary).
+fn self_spawn_exe() -> anyhow::Result<std::path::PathBuf> {
+    if let Some(p) = std::env::var_os(SELF_SPAWN_EXE_ENV) {
+        if !p.is_empty() {
+            return Ok(std::path::PathBuf::from(p));
+        }
+    }
+    std::env::current_exe()
+        .map_err(|e| anyhow::anyhow!("resolving current_exe for self-spawn: {e}"))
+}
+
+/// Build the chain through a `&mut dyn ProxyManager` (R15 seam), run + signal-
+/// forward the agent (signal forwarding added in M6.11), then shut the manager
+/// down. Fail-closed deadline added in M6.12.
+async fn build_via_manager(
+    manager: &mut dyn manager::ProxyManager,
+    chain: &[ResolvedProxy],
+    hops: &[ResolvedProxy],
+    central_tail: bool,
+    tail_upstream: &Upstream,
+    agent: &dyn Agent,
+    argv: &[String],
+) -> anyhow::Result<std::process::ExitStatus> {
+    let run_id = crate::paths::new_run_id();
+    let run_dir = crate::paths::run_dir(&run_id)?;
+    std::fs::create_dir_all(&run_dir)
+        .map_err(|e| anyhow::anyhow!("creating run dir {}: {e}", run_dir.display()))?;
+
+    // Carry STRUCTURED hop fields; the manager renders the exact argv via the
+    // single source of truth `proxy_child_args` once it knows each hop's real
+    // back-to-front --upstream. No placeholder/strip/re-append dance.
+    let hop_specs: Vec<manager::HopSpec> = hops
+        .iter()
+        .enumerate()
+        .map(|(i, hop)| manager::HopSpec {
+            proxy: hop.clone(),
+            run_id: run_id.clone(),
+            log_file: run_dir.join(format!("{}-{}.log", hop.name.as_str(), i)),
+        })
+        .collect();
+
+    let running = manager.start_hops(&hop_specs, tail_upstream).await?;
+    let head = running
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("manager returned no running hops"))?;
+    let head_base_url = head.base_url.clone();
+
+    let agent_env = compute_agent_env(chain, central_tail);
+    let mut agent_cmd = agent.build_command(argv, &head_base_url, &agent_env);
+    let status_result = agent_cmd.status().await;
+
+    // Teardown regardless of agent outcome (await reaping before returning).
+    let _ = manager.shutdown().await;
+
+    let status =
+        status_result.map_err(|e| anyhow::anyhow!("spawning agent '{}': {e}", agent.name()))?;
+    Ok(status)
 }
 
 use std::path::PathBuf;

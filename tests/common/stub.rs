@@ -60,21 +60,34 @@ impl Stub {
     }
 }
 
-/// Start a canonical stub upstream on 127.0.0.1:0 from a SYNC context (R3):
-/// records each request and answers every request with the given canned JSON and
-/// status 200. Returns its bound port + capture handle. The server runs until the
-/// test process exits. Use this from tests with NO tokio runtime (e.g. a plain
-/// `#[test]` driving the binary via `std::process::Command`); from a `#[tokio::test]`
-/// use `start_stub_async` instead. This owns a dedicated multi-thread runtime,
-/// leaked for the process lifetime so the accept loop keeps serving.
+/// Start a canonical stub upstream on 127.0.0.1:0 from any context (R3): records
+/// each request and answers every request with the given canned JSON and status
+/// 200. Returns its bound port + capture handle synchronously. The server runs
+/// until the test process exits.
+///
+/// Setup runs on a dedicated OS thread that owns a leaked multi-thread runtime
+/// (kept alive for the process lifetime so the accept loop keeps serving). Doing
+/// the `block_on` on a separate thread means this is safe to call BOTH from a
+/// plain `#[test]` (no caller runtime) AND from inside a `#[tokio::test]` (where
+/// nesting `block_on` on a runtime thread would otherwise panic). Tests already
+/// inside a runtime may also use `start_stub_async` directly.
 pub fn start_stub(canned_json: &'static str) -> Stub {
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("stub runtime");
-    let stub = rt.block_on(start_stub_async(canned_json));
-    std::mem::forget(rt);
-    stub
+    let (tx, rx) = std::sync::mpsc::channel::<Stub>();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("stub runtime");
+        let stub = rt.block_on(start_stub_async(canned_json));
+        tx.send(stub).expect("send stub handle");
+        // Keep the runtime alive for the process lifetime so the accept loop
+        // (spawned onto it by `start_stub_async`) keeps serving.
+        std::mem::forget(rt);
+        loop {
+            std::thread::park();
+        }
+    });
+    rx.recv().expect("stub setup thread produced a handle")
 }
 
 /// Async constructor used by tests already inside a tokio runtime (the common
