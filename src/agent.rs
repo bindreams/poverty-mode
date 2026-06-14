@@ -30,3 +30,12 @@ pub trait Agent {
         extra_env: &[(String, String)],
     ) -> tokio::process::Command;
 }
+
+// Characterization guard (R12): the `Agent` trait already exists (M6 typed it so
+// `build_and_run` could take `&dyn Agent`). These tests lock its object-safe
+// shape — usable through a trait object, `build_command` reachable via `&dyn` —
+// before `ClaudeAgent` is exercised by M7, so an accidental signature change that
+// would break M6's call sites is caught here.
+#[cfg(test)]
+#[path = "agent_tests.rs"]
+mod agent_tests;
