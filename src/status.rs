@@ -329,22 +329,36 @@ pub async fn probe_health_blocking(port: u16) -> Result<bool> {
     Ok(running)
 }
 
-/// Read `~/.wire/config.json` for the live central probe. Missing/invalid -> port None.
+/// Parse the live-probe port out of `~/.wire/config.json` text. Pure (no I/O).
 ///
 /// Mirrors `central::parse_wire_config`'s port coercion (some jbcentral builds write
 /// `proxy_port` as a string), but unlike that helper this never requires `proxy_secret`:
-/// the status probe only needs the port to decide whether to `/health`-check.
-fn read_wire_config() -> Option<WireConfig> {
-    let home = directories::BaseDirs::new()?.home_dir().to_path_buf();
-    let cfg = home.join(".wire").join("config.json");
-    let text = std::fs::read_to_string(&cfg).ok()?;
-    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let port = match json.get("proxy_port") {
+/// the status probe only needs the port to decide whether to `/health`-check. This is the
+/// single source of truth shared by BOTH `poverty-mode status` and `poverty-mode central
+/// status` so they cannot disagree about liveness for a port-only (secretless) wire config.
+pub(crate) fn parse_wire_config_port(contents: &str) -> Option<u16> {
+    let json: serde_json::Value = serde_json::from_str(contents).ok()?;
+    match json.get("proxy_port") {
         Some(serde_json::Value::Number(n)) => n.as_u64().and_then(|v| u16::try_from(v).ok()),
         Some(serde_json::Value::String(s)) => s.trim().parse::<u16>().ok(),
         _ => None,
-    };
-    Some(WireConfig { port })
+    }
+}
+
+/// Read `~/.wire/config.json` and return its live-probe port. Missing/invalid -> `None`.
+/// Blocking filesystem I/O (R5). Secret-free by design (see [`parse_wire_config_port`]).
+pub(crate) fn wire_config_port() -> Option<u16> {
+    let home = directories::BaseDirs::new()?.home_dir().to_path_buf();
+    let cfg = home.join(".wire").join("config.json");
+    let text = std::fs::read_to_string(&cfg).ok()?;
+    parse_wire_config_port(&text)
+}
+
+/// Read `~/.wire/config.json` for the live central probe. Missing/invalid -> port None.
+fn read_wire_config() -> Option<WireConfig> {
+    Some(WireConfig {
+        port: wire_config_port(),
+    })
 }
 
 /// Locate the newest installed central binary, delegating to the canonical

@@ -318,6 +318,53 @@ fn render_status_handles_not_installed_and_no_runs() {
     assert!(out.contains("no live runs"), "got: {out}");
 }
 
+// --- shared secret-free wire-config port parser (pure) -----
+
+#[test]
+fn parse_wire_config_port_reads_numeric_port() {
+    assert_eq!(
+        parse_wire_config_port(r#"{"proxy_port": 53117, "proxy_secret": "s"}"#),
+        Some(53117)
+    );
+}
+
+#[test]
+fn parse_wire_config_port_coerces_string_port() {
+    assert_eq!(
+        parse_wire_config_port(r#"{"proxy_port": "53117"}"#),
+        Some(53117)
+    );
+}
+
+#[test]
+fn parse_wire_config_port_none_when_port_absent_or_invalid() {
+    assert_eq!(parse_wire_config_port(r#"{"proxy_secret": "s"}"#), None);
+    assert_eq!(parse_wire_config_port("not json"), None);
+    assert_eq!(parse_wire_config_port(r#"{"proxy_port": "nope"}"#), None);
+}
+
+/// Pins the agreement between `poverty-mode status` and `poverty-mode central status`:
+/// both decide central liveness through this single secret-free port parser. For a wire
+/// config that carries a valid `proxy_port` but a missing/empty `proxy_secret`, the shared
+/// parser still yields the port (so both commands probe `/health` and report identically),
+/// whereas the secret-requiring `central::parse_wire_config` bails. If `central status` ever
+/// reverted to the secret-requiring reader, the two commands would disagree for this exact
+/// on-disk state; this test fails loudly in that case.
+#[test]
+fn status_commands_agree_on_liveness_for_secretless_wire_config() {
+    let missing_secret = r#"{"proxy_port": 53117}"#;
+    let empty_secret = r#"{"proxy_port": 53117, "proxy_secret": ""}"#;
+
+    // The shared reader both status commands use: secret-free, returns the port.
+    assert_eq!(parse_wire_config_port(missing_secret), Some(53117));
+    assert_eq!(parse_wire_config_port(empty_secret), Some(53117));
+
+    // The secret-requiring reader (NOT used by either status command) rejects the same
+    // input -- demonstrating the divergence that sharing the parser eliminates.
+    assert!(crate::central::parse_wire_config(missing_secret).is_err());
+    assert!(crate::central::parse_wire_config(empty_secret).is_err());
+}
+
 // --- probe assembly permutations (pure) -----
 
 #[test]

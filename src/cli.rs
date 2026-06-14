@@ -623,11 +623,16 @@ fn dispatch_central(action: CentralAction) -> anyhow::Result<()> {
 
 /// The live daemon port for `central status`: the `~/.wire/config.json` port iff an
 /// install exists AND that port answers `/health`. `None` (stopped) otherwise.
+///
+/// Liveness is read through the SAME secret-free port reader as the global `poverty-mode
+/// status` (`status::wire_config_port`), not `central::read_wire_config` (which bails when
+/// `proxy_secret` is missing/empty). Sharing one reader guarantees the two status commands
+/// can never disagree about whether central is running for the same on-disk state.
 fn central_running_port(versions: &[String]) -> Option<u16> {
     if versions.is_empty() {
         return None;
     }
-    let port = crate::central::read_wire_config().ok()?.port;
+    let port = crate::status::wire_config_port()?;
     crate::central::health(port).then_some(port)
 }
 
