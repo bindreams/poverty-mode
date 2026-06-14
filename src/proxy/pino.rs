@@ -258,10 +258,91 @@ fn strip_ansi_from_messages(body: &mut Value) {
     }
 }
 
+// --- drop_tools (default.js lines 72-113) -----
+
+// Matches a <system-reminder>...</system-reminder> block (non-greedy). Port of
+// the Node REMINDER_RE /<system-reminder>([\s\S]*?)<\/system-reminder>/g; JS
+// `[\s\S]*?` (dot matches newline, non-greedy) == Rust `(?s).*?`.
+fn reminder_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?s)<system-reminder>(.*?)</system-reminder>").unwrap())
+}
+
+// Node: /deferred tools|ToolSearch/i.test(inner). Case-insensitive on both literals.
+fn advertises_deferred_tools(inner: &str) -> bool {
+    let lower = inner.to_ascii_lowercase();
+    lower.contains("deferred tools") || lower.contains("toolsearch")
+}
+
+fn drop_tools_from_tools(body: &mut Value, drop: &[String]) {
+    if drop.is_empty() {
+        return;
+    }
+    if let Some(tools) = body.get_mut("tools").and_then(|t| t.as_array_mut()) {
+        // Node: body.tools.filter((t) => !DROP_TOOLS.has(t?.name)). A tool with no
+        // string name has name === undefined, never in the Set => kept.
+        tools.retain(|t| match t.get("name").and_then(|n| n.as_str()) {
+            Some(name) => !drop.iter().any(|d| d == name),
+            None => true,
+        });
+    }
+}
+
+fn scrub_reminder_text(text: &str, drop: &[String]) -> String {
+    if drop.is_empty() {
+        return text.to_string();
+    }
+    reminder_re()
+        .replace_all(text, |caps: &regex::Captures| {
+            let full = caps[0].to_string();
+            let inner = &caps[1];
+            if !advertises_deferred_tools(inner) {
+                return full;
+            }
+            // Node: inner.split("\n").filter(line => !DROP_TOOLS.has(line.trim())).join("\n").
+            let cleaned: Vec<&str> = inner
+                .split('\n')
+                .filter(|line| !drop.iter().any(|d| d == line.trim()))
+                .collect();
+            format!("<system-reminder>{}</system-reminder>", cleaned.join("\n"))
+        })
+        .into_owned()
+}
+
+fn scrub_reminders_from_messages(body: &mut Value, drop: &[String]) {
+    if drop.is_empty() {
+        return;
+    }
+    let messages = match body.get_mut("messages").and_then(|m| m.as_array_mut()) {
+        Some(m) => m,
+        None => return,
+    };
+    for msg in messages.iter_mut() {
+        match msg.get_mut("content") {
+            Some(Value::String(s)) => {
+                *s = scrub_reminder_text(s, drop);
+            }
+            Some(Value::Array(blocks)) => {
+                for blk in blocks.iter_mut() {
+                    if blk.is_object() {
+                        if let Some(Value::String(text)) = blk.get_mut("text") {
+                            *text = scrub_reminder_text(text, drop);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn apply_default_transform(body: &mut Value, settings: &PinoSettings) {
-    // Node transforms/default.js transform() order:
+    // Node transforms/default.js transform() order verbatim:
     //   trimTools -> trimReminders -> trimSystem(inert) -> restructureV123 -> stripAnsiFromMessages.
-    // drop_tools + reminder scrub are wired in M4.5; restructureV123 in M4.5b.
+    drop_tools_from_tools(body, &settings.drop_tools);
+    scrub_reminders_from_messages(body, &settings.drop_tools);
+    // trimSystem is an inert commented-out example in the Node source — not ported.
+    // restructureV123 is wired here in M4.5b (between reminder scrub and strip_ansi).
     if settings.strip_ansi {
         strip_ansi_from_messages(body);
     }

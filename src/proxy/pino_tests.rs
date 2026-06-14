@@ -431,3 +431,192 @@ fn strip_ansi_only_matches_csi_sgr_form_not_arbitrary_text() {
     t.transform(&mut body).unwrap();
     assert_eq!(body["messages"][0]["content"], json!("literal [31m stays"));
 }
+
+// M4.5 ===== drop_tools: filter body.tools by name AND scrub dropped names from
+// <system-reminder> blocks that advertise deferred tools / ToolSearch (port of
+// trimTools + stripDroppedToolsFromReminder + trimReminders, default.js 72-113).
+
+fn drop_settings(names: &[&str]) -> PinoSettings {
+    PinoSettings {
+        auto_cache: false,
+        tail_ttl: TailTtl::FiveMin,
+        drop_tools: names.iter().map(|s| s.to_string()).collect(),
+        strip_ansi: false,
+        model_override: None,
+    }
+}
+
+#[test]
+fn drop_tools_removes_named_tools_from_tools_array() {
+    let t = PinoTransform {
+        settings: drop_settings(&["NotebookEdit", "CronList"]),
+    };
+    let mut body = json!({
+        "tools": [
+            { "name": "Bash" },
+            { "name": "NotebookEdit" },
+            { "name": "Read" },
+            { "name": "CronList" }
+        ],
+        "messages": []
+    });
+    t.transform(&mut body).unwrap();
+    let names: Vec<&str> = body["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["Bash", "Read"]);
+}
+
+#[test]
+fn drop_tools_empty_leaves_tools_untouched() {
+    let t = PinoTransform {
+        settings: drop_settings(&[]),
+    };
+    let original = json!({ "tools": [ { "name": "Bash" }, { "name": "Read" } ], "messages": [] });
+    let mut body = original.clone();
+    t.transform(&mut body).unwrap();
+    assert_eq!(body, original);
+}
+
+#[test]
+fn drop_tools_scrubs_names_from_deferred_tools_reminder_in_string_content() {
+    let t = PinoTransform {
+        settings: drop_settings(&["NotebookEdit", "CronList"]),
+    };
+    let reminder = "<system-reminder>\nThe following are deferred tools:\nNotebookEdit\nBash\nCronList\nRead\n</system-reminder>";
+    let mut body = json!({
+        "tools": [],
+        "messages": [ { "role": "user", "content": reminder } ]
+    });
+    t.transform(&mut body).unwrap();
+    let out = body["messages"][0]["content"].as_str().unwrap();
+    assert!(
+        !out.contains("NotebookEdit"),
+        "dropped name must be scrubbed"
+    );
+    assert!(!out.contains("CronList"), "dropped name must be scrubbed");
+    assert!(out.contains("Bash"), "kept tool name stays");
+    assert!(out.contains("Read"), "kept tool name stays");
+    assert!(out.contains("<system-reminder>"), "wrapper tags preserved");
+}
+
+#[test]
+fn drop_tools_scrubs_names_from_toolsearch_reminder_in_block_text() {
+    let t = PinoTransform {
+        settings: drop_settings(&["Monitor"]),
+    };
+    let reminder = "<system-reminder>\nUse ToolSearch to load:\nMonitor\nGlob\n</system-reminder>";
+    let mut body = json!({
+        "tools": [],
+        "messages": [ { "role": "user", "content": [ { "type": "text", "text": reminder } ] } ]
+    });
+    t.transform(&mut body).unwrap();
+    let out = body["messages"][0]["content"][0]["text"].as_str().unwrap();
+    assert!(!out.contains("Monitor"));
+    assert!(out.contains("Glob"));
+}
+
+#[test]
+fn drop_tools_does_not_touch_reminders_without_deferred_or_toolsearch() {
+    let t = PinoTransform {
+        settings: drop_settings(&["NotebookEdit"]),
+    };
+    let reminder = "<system-reminder>\nUnrelated note.\nNotebookEdit\n</system-reminder>";
+    let mut body = json!({
+        "tools": [],
+        "messages": [ { "role": "user", "content": reminder } ]
+    });
+    t.transform(&mut body).unwrap();
+    // No "deferred tools"/"ToolSearch" marker => block left verbatim, name stays.
+    assert_eq!(body["messages"][0]["content"], json!(reminder));
+}
+
+#[test]
+fn drop_tools_scrubs_only_inside_reminder_not_surrounding_prose() {
+    let t = PinoTransform {
+        settings: drop_settings(&["NotebookEdit"]),
+    };
+    let text = "Keep NotebookEdit here.\n<system-reminder>\ndeferred tools:\nNotebookEdit\n</system-reminder>\nNotebookEdit after.";
+    let mut body = json!({
+        "tools": [],
+        "messages": [ { "role": "user", "content": text } ]
+    });
+    t.transform(&mut body).unwrap();
+    let out = body["messages"][0]["content"].as_str().unwrap();
+    assert!(out.starts_with("Keep NotebookEdit here."));
+    assert!(out.trim_end().ends_with("NotebookEdit after."));
+    let reminder_inner = out
+        .split("<system-reminder>")
+        .nth(1)
+        .unwrap()
+        .split("</system-reminder>")
+        .next()
+        .unwrap();
+    assert!(!reminder_inner.contains("NotebookEdit"));
+}
+
+// --- Finding 4: byte-faithfulness of the capture-rebuild on edge inner content.
+// Each asserts the EXACT output a faithful port of the Node replace must produce.
+
+#[test]
+fn drop_tools_reminder_rebuild_preserves_crlf_line_endings() {
+    // Node splits on "\n"; a CRLF body keeps the trailing '\r' on each kept line.
+    let t = PinoTransform {
+        settings: drop_settings(&["Drop"]),
+    };
+    let reminder = "<system-reminder>\r\ndeferred tools:\r\nDrop\r\nKeep\r\n</system-reminder>";
+    let mut body = json!({ "tools": [], "messages": [ { "role": "user", "content": reminder } ] });
+    t.transform(&mut body).unwrap();
+    // "Drop\r".trim() == "Drop" -> dropped; every other "\r"-suffixed line kept verbatim.
+    let expected = "<system-reminder>\r\ndeferred tools:\r\nKeep\r\n</system-reminder>";
+    assert_eq!(body["messages"][0]["content"], json!(expected));
+}
+
+#[test]
+fn drop_tools_reminder_rebuild_preserves_embedded_angle_brackets() {
+    // Inner text containing '<' / '>' that is NOT the closing tag must survive.
+    let t = PinoTransform {
+        settings: drop_settings(&["Drop"]),
+    };
+    let reminder = "<system-reminder>\ndeferred tools:\nuse <T> generics\nDrop\n</system-reminder>";
+    let mut body = json!({ "tools": [], "messages": [ { "role": "user", "content": reminder } ] });
+    t.transform(&mut body).unwrap();
+    let expected = "<system-reminder>\ndeferred tools:\nuse <T> generics\n</system-reminder>";
+    assert_eq!(body["messages"][0]["content"], json!(expected));
+}
+
+#[test]
+fn drop_tools_reminder_rebuild_preserves_blank_and_whitespace_lines() {
+    // Blank lines and a whitespace-only line: "  ".trim() == "" != any drop name => kept.
+    let t = PinoTransform {
+        settings: drop_settings(&["Drop"]),
+    };
+    let reminder = "<system-reminder>\ndeferred tools:\n\nDrop\n  \nKeep\n</system-reminder>";
+    let mut body = json!({ "tools": [], "messages": [ { "role": "user", "content": reminder } ] });
+    t.transform(&mut body).unwrap();
+    let expected = "<system-reminder>\ndeferred tools:\n\n  \nKeep\n</system-reminder>";
+    assert_eq!(body["messages"][0]["content"], json!(expected));
+}
+
+#[test]
+fn drop_tools_reminder_line_match_is_exact_trim_not_substring() {
+    // "NotebookEdit" must drop only a line equal to it after trim; a line that
+    // merely CONTAINS it survives (Node DROP_TOOLS.has(line.trim()) == Set membership).
+    let t = PinoTransform {
+        settings: drop_settings(&["NotebookEdit"]),
+    };
+    let reminder = "<system-reminder>\ndeferred tools:\nNotebookEdit\nNotebookEditExtra\n  NotebookEdit  \n</system-reminder>";
+    let mut body = json!({ "tools": [], "messages": [ { "role": "user", "content": reminder } ] });
+    t.transform(&mut body).unwrap();
+    let out = body["messages"][0]["content"].as_str().unwrap();
+    // The bare line and the whitespace-padded line drop; "NotebookEditExtra" stays.
+    assert!(
+        out.contains("NotebookEditExtra"),
+        "substring-different line must survive"
+    );
+    let expected = "<system-reminder>\ndeferred tools:\nNotebookEditExtra\n</system-reminder>";
+    assert_eq!(body["messages"][0]["content"], json!(expected));
+}
