@@ -443,3 +443,106 @@ fn proxy_child_args_round_trips_through_clap() {
         );
     }
 }
+
+// read_ready_line =====
+
+use tokio::io::BufReader;
+
+#[tokio::test]
+async fn read_ready_line_parses_valid_line() {
+    let line = r#"{"ready":true,"port":54321,"proxy":"pino","run_id":"rid-1"}"#.to_string() + "\n";
+    let mut reader = BufReader::new(line.as_bytes());
+    let rl = read_ready_line(&mut reader, ProxyName::Pino, "rid-1")
+        .await
+        .unwrap();
+    assert_eq!(rl.port, 54321);
+    assert_eq!(rl.proxy, "pino");
+    assert_eq!(rl.run_id, "rid-1");
+    assert!(rl.ready);
+}
+
+#[tokio::test]
+async fn read_ready_line_ignores_non_json_noise_until_json() {
+    // A child might print a stray plain-text log line before the READY line; we
+    // skip non-JSON-object lines and take the first parseable ReadyLine.
+    let s = "starting up\nwarming\n".to_string()
+        + r#"{"ready":true,"port":7000,"proxy":"headroom","run_id":"x"}"#
+        + "\n";
+    let mut reader = BufReader::new(s.as_bytes());
+    let rl = read_ready_line(&mut reader, ProxyName::Headroom, "x")
+        .await
+        .unwrap();
+    assert_eq!(rl.port, 7000);
+}
+
+#[tokio::test]
+async fn read_ready_line_errors_on_eof_without_ready() {
+    let s = "some log\nmore log\n";
+    let mut reader = BufReader::new(s.as_bytes());
+    let err = read_ready_line(&mut reader, ProxyName::Pino, "rid")
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("ready"),
+        "EOF before READY must error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn read_ready_line_surfaces_malformed_ready_object_not_silent_skip() {
+    // A JSON object that HAS a "ready" key but the wrong shape (missing port)
+    // must surface a parse error, NOT be skipped and re-reported later as EOF.
+    let line = r#"{"ready":true,"proxy":"pino"}"#.to_string() + "\n";
+    let mut reader = BufReader::new(line.as_bytes());
+    let err = read_ready_line(&mut reader, ProxyName::Pino, "rid")
+        .await
+        .unwrap_err();
+    let m = err.to_string().to_lowercase();
+    assert!(
+        m.contains("malformed") || m.contains("parse") || m.contains("ready line"),
+        "malformed READY object must be diagnosed, not swallowed: {m}"
+    );
+    // And it must NOT degrade into the generic EOF message.
+    assert!(
+        !m.contains("closed its stdout"),
+        "must not masquerade as EOF: {m}"
+    );
+}
+
+#[tokio::test]
+async fn read_ready_line_errors_on_proxy_name_mismatch() {
+    let line = r#"{"ready":true,"port":1,"proxy":"headroom","run_id":"rid"}"#.to_string() + "\n";
+    let mut reader = BufReader::new(line.as_bytes());
+    let err = read_ready_line(&mut reader, ProxyName::Pino, "rid")
+        .await
+        .unwrap_err();
+    let m = err.to_string().to_lowercase();
+    assert!(
+        m.contains("proxy") && (m.contains("pino") || m.contains("headroom")),
+        "{m}"
+    );
+}
+
+#[tokio::test]
+async fn read_ready_line_errors_on_run_id_mismatch() {
+    let line = r#"{"ready":true,"port":1,"proxy":"pino","run_id":"other"}"#.to_string() + "\n";
+    let mut reader = BufReader::new(line.as_bytes());
+    let err = read_ready_line(&mut reader, ProxyName::Pino, "expected")
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("run id")
+            || err.to_string().to_lowercase().contains("run_id"),
+        "{err}"
+    );
+}
+
+#[tokio::test]
+async fn read_ready_line_errors_when_ready_false() {
+    let line = r#"{"ready":false,"port":1,"proxy":"pino","run_id":"rid"}"#.to_string() + "\n";
+    let mut reader = BufReader::new(line.as_bytes());
+    let err = read_ready_line(&mut reader, ProxyName::Pino, "rid")
+        .await
+        .unwrap_err();
+    assert!(err.to_string().to_lowercase().contains("ready"), "{err}");
+}

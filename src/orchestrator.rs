@@ -175,6 +175,86 @@ pub fn proxy_child_args(spec: &ProxyHopSpec) -> Vec<String> {
     args
 }
 
+use tokio::io::{AsyncBufRead, AsyncBufReadExt};
+
+use crate::proxy::{ProxyName, ReadyLine};
+
+/// Read the child's READY line from `reader` (a blocking pipe read = the real
+/// synchronization primitive — no sleep/poll). Skips lines that are not JSON
+/// objects (stray startup logs, emitted to `trace`). A JSON object that carries
+/// a `"ready"` key but fails `ReadyLine` deserialization is surfaced as a parse
+/// error (diagnosable), NOT silently skipped. Validates `ready == true`, the
+/// proxy name, and the per-run `run_id` (R10). EOF before a valid READY, or any
+/// mismatch, is an error (fail-closed).
+pub async fn read_ready_line<R>(
+    reader: &mut R,
+    expected_name: ProxyName,
+    expected_run_id: &str,
+) -> anyhow::Result<ReadyLine>
+where
+    R: AsyncBufRead + Unpin,
+{
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line).await?;
+        if n == 0 {
+            anyhow::bail!(
+                "proxy '{}' closed its stdout before emitting a READY line",
+                expected_name.as_str()
+            );
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // Is this a JSON object at all? Non-objects are stray logs -> skip.
+        let as_value: serde_json::Value = match serde_json::from_str(trimmed) {
+            Ok(serde_json::Value::Object(map)) => serde_json::Value::Object(map),
+            _ => {
+                tracing::trace!(line = %trimmed, "skipping non-JSON-object stdout line before READY");
+                continue;
+            }
+        };
+
+        // A JSON object WITHOUT a "ready" key is some other structured log -> skip.
+        let looks_like_ready = as_value.get("ready").is_some();
+        if !looks_like_ready {
+            tracing::trace!(line = %trimmed, "skipping JSON object without a 'ready' key");
+            continue;
+        }
+
+        // It claims to be a READY line: it MUST deserialize, else diagnose.
+        let parsed: ReadyLine = serde_json::from_value(as_value).map_err(|e| {
+            anyhow::anyhow!(
+                "malformed READY line from proxy '{}' (object had a 'ready' key but did not match the READY shape): {e}; line was: {trimmed}",
+                expected_name.as_str()
+            )
+        })?;
+
+        if !parsed.ready {
+            anyhow::bail!("proxy '{}' reported ready=false", expected_name.as_str());
+        }
+        if parsed.proxy != expected_name.as_str() {
+            anyhow::bail!(
+                "proxy identity mismatch: expected '{}', READY line says '{}'",
+                expected_name.as_str(),
+                parsed.proxy
+            );
+        }
+        if parsed.run_id != expected_run_id {
+            anyhow::bail!(
+                "run id mismatch for proxy '{}': expected '{}', READY line says '{}'",
+                expected_name.as_str(),
+                expected_run_id,
+                parsed.run_id
+            );
+        }
+        return Ok(parsed);
+    }
+}
+
 #[cfg(test)]
 #[path = "orchestrator_tests.rs"]
 mod orchestrator_tests;
