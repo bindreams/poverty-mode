@@ -800,6 +800,55 @@ async fn tee_log_file_is_owner_only_0600_on_unix() {
     );
 }
 
+// FIX-C (review): the previous test only checks the FINAL mode, which the old
+// code also reached via a post-create chmod (`harden_file_perms`) — so it cannot
+// catch the TOCTOU window where a freshly-created file briefly exists at the umask
+// default (e.g. 0644, world-readable). This test pins the no-window property: it
+// replicates the engine's open pattern — `.mode(0o600)` applied AT creation, with
+// NO subsequent chmod — under a deliberately permissive umask (0o000). The old
+// `OpenOptions::new().create(true).append(true)` would be born at 0666 here; the
+// fix's `.mode(0o600)` makes it 0600 from the first instant on disk.
+#[cfg(unix)]
+#[tokio::test]
+async fn tee_log_file_is_born_owner_only_no_world_readable_window() {
+    // `tokio::fs::OpenOptions::mode` is an inherent (cfg(unix)) method, so no
+    // `OpenOptionsExt` import is needed; we only need `PermissionsExt` for `.mode()`
+    // on the read-back metadata.
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let log_path = dir.path().join("pino-born-0600.log");
+
+    // Make the umask as permissive as possible so a missing `.mode()` would yield
+    // 0666: this is what surfaces the world-readable window the fix closes.
+    let prev_umask = unsafe { libc::umask(0o000) };
+
+    let file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(&log_path)
+        .await
+        .expect("open tee file");
+    // Read the on-disk mode BEFORE any harden_file_perms-style chmod could run.
+    let born_mode = file
+        .metadata()
+        .await
+        .expect("stat tee file")
+        .permissions()
+        .mode()
+        & 0o777;
+
+    // Restore the inherited umask for the rest of the test process.
+    unsafe { libc::umask(prev_umask) };
+
+    assert_eq!(
+        born_mode, 0o600,
+        "body-tee log must be created owner-only (0600) with no world-readable \
+         window; was born at {born_mode:o} under a permissive umask"
+    );
+}
+
 #[tokio::test]
 async fn tee_log_file_port_placeholder_resolves_to_bound_port() {
     // The orchestrator builds each hop's body-log path BEFORE the OS assigns the

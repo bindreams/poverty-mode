@@ -753,17 +753,20 @@ async fn build_downstream_response(
                     tracing::warn!("tee: cannot create log dir {}: {e}", parent.display());
                 }
             }
-            match tokio::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-                .await
-            {
+            // This file holds full request/response bodies (the most sensitive
+            // on-disk artifact), so on POSIX it must be owner-only (0600) like
+            // every other file we write (paths::atomic_write / ensure_run_dir).
+            // `.mode(0o600)` is applied AT creation so a freshly-created file is
+            // born owner-only — no world-readable TOCTOU window between create
+            // and chmod. It is ignored when the file already exists; the
+            // `harden_file_perms` call below tightens that pre-existing/append
+            // case. No-op on Windows (no POSIX mode bits).
+            let mut opts = tokio::fs::OpenOptions::new();
+            opts.create(true).append(true);
+            #[cfg(unix)]
+            opts.mode(0o600);
+            match opts.open(path).await {
                 Ok(file) => {
-                    // Harden to owner-only (0600) on POSIX: this file holds full
-                    // request/response bodies (the most sensitive on-disk
-                    // artifact), so it must match every other file we write
-                    // (paths::atomic_write / ensure_run_dir). No-op on Windows.
                     // Warn (never fail the response) if hardening fails.
                     if let Err(e) = crate::paths::harden_file_perms(path) {
                         tracing::warn!("tee: cannot harden log file {}: {e}", path.display());
