@@ -133,11 +133,8 @@ pub async fn build_and_run(
         // upstream (for central-only, that is the wire URL). agent_env still
         // reflects central_tail for the auth override.
         let env = compute_agent_env(&chain, central_tail);
-        let mut cmd = agent.build_command(argv, &tail_upstream.url, &env);
-        let status = cmd
-            .status()
-            .await
-            .map_err(|e| anyhow::anyhow!("spawning agent '{}': {e}", agent.name()))?;
+        let cmd = agent.build_command(argv, &tail_upstream.url, &env);
+        let status = run_agent_forwarding_signals(cmd, agent.name()).await?;
         return Ok(status);
     }
 
@@ -213,15 +210,96 @@ async fn build_via_manager(
     let head_base_url = head.base_url.clone();
 
     let agent_env = compute_agent_env(chain, central_tail);
-    let mut agent_cmd = agent.build_command(argv, &head_base_url, &agent_env);
-    let status_result = agent_cmd.status().await;
+    let agent_cmd = agent.build_command(argv, &head_base_url, &agent_env);
+    let status_result = run_agent_forwarding_signals(agent_cmd, agent.name()).await;
 
-    // Teardown regardless of agent outcome (await reaping before returning).
+    // Drain on agent exit (R17): tear down the proxy hops, await reaping.
     let _ = manager.shutdown().await;
 
-    let status =
-        status_result.map_err(|e| anyhow::anyhow!("spawning agent '{}': {e}", agent.name()))?;
-    Ok(status)
+    status_result
+}
+
+/// Spawn the agent child and wait for it, forwarding SIGINT/SIGTERM/Ctrl-C to it
+/// (R17). Returns the agent's exit status. Does NOT tear down proxies — the
+/// caller does that after this returns (drain on agent exit).
+async fn run_agent_forwarding_signals(
+    mut cmd: tokio::process::Command,
+    agent_name: &str,
+) -> anyhow::Result<std::process::ExitStatus> {
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("spawning agent '{agent_name}': {e}"))?;
+
+    #[cfg(unix)]
+    {
+        let child_pid = child.id();
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigint = signal(SignalKind::interrupt())
+            .map_err(|e| anyhow::anyhow!("installing SIGINT handler: {e}"))?;
+        let mut sigterm = signal(SignalKind::terminate())
+            .map_err(|e| anyhow::anyhow!("installing SIGTERM handler: {e}"))?;
+        loop {
+            tokio::select! {
+                status = child.wait() => {
+                    return status.map_err(|e| anyhow::anyhow!("waiting on agent '{agent_name}': {e}"));
+                }
+                _ = sigint.recv() => {
+                    forward_signal_unix(child_pid, libc::SIGINT);
+                }
+                _ = sigterm.recv() => {
+                    forward_signal_unix(child_pid, libc::SIGTERM);
+                }
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        loop {
+            tokio::select! {
+                status = child.wait() => {
+                    return status.map_err(|e| anyhow::anyhow!("waiting on agent '{agent_name}': {e}"));
+                }
+                _ = tokio::signal::ctrl_c() => {
+                    // Windows delivers a console CTRL_C_EVENT to every process
+                    // attached to the same console. The agent is spawned via
+                    // `tokio::process::Command` with default flags, so it shares our
+                    // console and the OS already delivered Ctrl-C to it directly —
+                    // our handler is the backstop. We additionally run the
+                    // TerminateProcess backstop so a child that ignores Ctrl-C is
+                    // still reaped, then keep waiting for its real exit. (A non-Ctrl-C
+                    // termination of the orchestrator itself — e.g. `taskkill /F`
+                    // without `/T` — is not a signal we can intercept; the proxy HOPS
+                    // are still reaped by the kill-on-job-close Job Object regardless,
+                    // per R16, so no proxy is orphaned. Only the agent child is then
+                    // left to the OS, the documented limit of cooperative shutdown on
+                    // Windows.)
+                    windows_ctrlc_backstop(&mut child);
+                }
+            }
+        }
+    }
+}
+
+/// Windows Ctrl-C backstop: TerminateProcess the agent child if it ignored the
+/// console Ctrl-C the OS already delivered. Factored out so it is testable from an
+/// integration test (the select arm above is not directly drivable in a hermetic
+/// test, but its OS effect — reaping the agent — is). `pub` so
+/// `tests/chain_signals_windows.rs` can call it as an external crate.
+#[doc(hidden)]
+#[cfg(windows)]
+pub fn windows_ctrlc_backstop(child: &mut tokio::process::Child) {
+    let _ = child.start_kill();
+}
+
+#[cfg(unix)]
+fn forward_signal_unix(child_pid: Option<u32>, sig: libc::c_int) {
+    if let Some(pid) = child_pid {
+        // SAFETY: kill is always safe; ESRCH (already exited) is ignored.
+        unsafe {
+            libc::kill(pid as libc::pid_t, sig);
+        }
+    }
 }
 
 use std::path::PathBuf;

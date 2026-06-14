@@ -98,6 +98,11 @@ pub enum Command {
     /// 0 on 2xx. Used as a deterministic in-repo "agent" in chain tests.
     #[command(name = "__post", hide = true)]
     Post { url: String },
+
+    /// Hidden: write STARTED to <marker>, install a SIGTERM handler that appends
+    /// SIGTERM and exits 42, then sleep. Used by signal-forwarding tests.
+    #[command(name = "__sigwait", hide = true)]
+    SigWait { marker: String },
 }
 
 /// Arguments for the `proxy` subcommand (R23b). The positional `which` selects
@@ -396,6 +401,46 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
                     Err(e) => anyhow::bail!("__post failed: {e}"),
                 }
             })
+        }
+        Command::SigWait { marker } => {
+            use std::io::Write as _;
+            {
+                let mut f = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&marker)?;
+                writeln!(f, "STARTED")?;
+            }
+            #[cfg(unix)]
+            {
+                // Install a SIGTERM handler (sync; std-only via signal-hook is not
+                // a dep, so use a raw sigaction through libc).
+                static MARKER: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+                let _ = MARKER.set(marker.clone());
+                extern "C" fn on_term(_sig: libc::c_int) {
+                    if let Some(m) = MARKER.get() {
+                        if let Ok(mut f) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(m)
+                        {
+                            use std::io::Write as _;
+                            let _ = writeln!(f, "SIGTERM");
+                        }
+                    }
+                    // Exit 42 from the handler (async-signal-unsafe writes above are
+                    // acceptable in this TEST helper only).
+                    unsafe { libc::_exit(42) };
+                }
+                unsafe {
+                    let mut sa: libc::sigaction = std::mem::zeroed();
+                    sa.sa_sigaction = on_term as usize;
+                    libc::sigemptyset(&mut sa.sa_mask);
+                    libc::sigaction(libc::SIGTERM, &sa, std::ptr::null_mut());
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_secs(3600));
+            Ok(())
         }
     }
 }
