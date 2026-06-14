@@ -4,6 +4,7 @@
 use std::sync::OnceLock;
 
 use anyhow::Result;
+use http::header::{HeaderMap, HeaderName, HeaderValue};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -93,6 +94,57 @@ pub const MIN_SYSTEM_CACHE_CHARS: usize = 500;
 /// never `transform`. Mirrors BETA_FLAG in reference/pino/src/config.js.
 pub const BETA_FLAG: &str = "extended-cache-ttl-2025-04-11";
 
+/// Outcome of [`ensure_beta_header`]: whether the 1h-cache flag was newly added,
+/// already present, or appended to existing flags. Mirrors the string returns of
+/// `ensureBetaHeader` (reference/pino/src/cache.js 183-196).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BetaHeaderStatus {
+    Added,
+    Present,
+    Appended,
+}
+
+/// Ensures `anthropic-beta` carries the 1h-cache beta flag. HEADER mutation —
+/// called by the engine after the body transform (via PinoTransform::apply_headers),
+/// NOT inside `transform`. Mirrors ensureBetaHeader (reference/pino/src/cache.js 183-196).
+///
+/// Finding 9: http::HeaderMap can hold multiple anthropic-beta values; this merges
+/// across ALL of them (so a flag in any value is detected and none is dropped) and
+/// re-inserts a single canonical comma-joined value.
+pub fn ensure_beta_header(headers: &mut HeaderMap) -> BetaHeaderStatus {
+    let name = HeaderName::from_static("anthropic-beta");
+
+    // Collect every existing value (the map may hold several lines for this key).
+    let existing: Vec<String> = headers
+        .get_all(&name)
+        .iter()
+        .filter_map(|v| v.to_str().ok().map(|s| s.to_string()))
+        .collect();
+
+    if existing.is_empty() {
+        headers.insert(&name, HeaderValue::from_static(BETA_FLAG));
+        return BetaHeaderStatus::Added;
+    }
+
+    // Merge the union of all comma-separated tokens across every value line.
+    let joined = existing.join(",");
+    let already = joined.split(',').map(|s| s.trim()).any(|s| s == BETA_FLAG);
+
+    if already {
+        // Collapse multi-value into a single canonical line (idempotent for one value).
+        let canonical = HeaderValue::from_str(&joined).expect("beta header value is ascii");
+        headers.insert(&name, canonical);
+        BetaHeaderStatus::Present
+    } else {
+        let combined = format!("{},{}", joined, BETA_FLAG);
+        headers.insert(
+            &name,
+            HeaderValue::from_str(&combined).expect("beta header value is ascii"),
+        );
+        BetaHeaderStatus::Appended
+    }
+}
+
 impl BodyTransform for PinoTransform {
     fn transform(&self, body: &mut Value) -> Result<()> {
         // Only object bodies are mutable in any meaningful way; non-objects pass through.
@@ -114,11 +166,13 @@ impl BodyTransform for PinoTransform {
         Ok(())
     }
 
-    // R6: the engine calls this AFTER transform() and AFTER Host/Content-Length
-    // rewrite, only on a transformed POST /v1/messages. pino applies the 1h-cache
-    // beta header here (NOT in the body) when auto_cache is on. Wired in M4.10.
-    fn apply_headers(&self, _headers: &mut http::HeaderMap) {
-        // Implemented in Task M4.10.
+    // R6: apply the 1h-cache beta header only when auto_cache is on (matches
+    // server.js `AUTO_CACHE && parsed` guard). The engine calls this after
+    // transform() and after Host/Content-Length rewrite, on transformed POSTs.
+    fn apply_headers(&self, headers: &mut http::HeaderMap) {
+        if self.settings.auto_cache {
+            ensure_beta_header(headers);
+        }
     }
 }
 

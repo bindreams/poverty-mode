@@ -53,22 +53,6 @@ fn pino_settings_rejects_unknown_fields() {
     );
 }
 
-#[test]
-fn pino_transform_apply_headers_is_noop_until_m4() {
-    let t = PinoTransform {
-        settings: PinoSettings {
-            auto_cache: true,
-            tail_ttl: TailTtl::FiveMin,
-            drop_tools: vec![],
-            strip_ansi: true,
-            model_override: None,
-        },
-    };
-    let mut headers = http::HeaderMap::new();
-    crate::proxy::BodyTransform::apply_headers(&t, &mut headers);
-    assert!(headers.is_empty());
-}
-
 // M4.1 ===== lock the PinoSettings / TailTtl serde wire shape + lenient
 // tail_ttl fallback (Node parseTailTtl parity). `PinoSettings`/`TailTtl` are
 // already in scope via `use super::*;` at the top of this file.
@@ -1402,4 +1386,117 @@ fn auto_cache_targets_restructured_layout_not_pre_restructure() {
         json!("5m")
     );
     assert_eq!(count_cache_breakpoints(&body), 2);
+}
+
+// M4.10 ===== ensure_beta_header (multi-value safe) + apply_headers R6 hook.
+
+use super::{ensure_beta_header, BetaHeaderStatus, BETA_FLAG};
+use http::header::HeaderValue;
+use http::HeaderMap;
+
+#[test]
+fn beta_header_added_when_absent() {
+    let mut headers = HeaderMap::new();
+    let status = ensure_beta_header(&mut headers);
+    assert_eq!(status, BetaHeaderStatus::Added);
+    assert_eq!(
+        headers.get("anthropic-beta").unwrap().to_str().unwrap(),
+        BETA_FLAG
+    );
+}
+
+#[test]
+fn beta_header_present_when_flag_already_listed() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "anthropic-beta",
+        HeaderValue::from_str(&format!("token-efficient-tools-2024-11-01, {}", BETA_FLAG)).unwrap(),
+    );
+    let status = ensure_beta_header(&mut headers);
+    assert_eq!(status, BetaHeaderStatus::Present);
+    let v = headers.get("anthropic-beta").unwrap().to_str().unwrap();
+    assert!(v.contains(BETA_FLAG));
+    assert_eq!(v.matches(BETA_FLAG).count(), 1);
+}
+
+#[test]
+fn beta_header_appended_when_other_flags_present() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "anthropic-beta",
+        HeaderValue::from_static("token-efficient-tools-2024-11-01"),
+    );
+    let status = ensure_beta_header(&mut headers);
+    assert_eq!(status, BetaHeaderStatus::Appended);
+    assert_eq!(
+        headers.get("anthropic-beta").unwrap().to_str().unwrap(),
+        format!("token-efficient-tools-2024-11-01,{}", BETA_FLAG)
+    );
+}
+
+// Finding 9: a HeaderMap can carry MULTIPLE anthropic-beta lines. The flag may live
+// in the SECOND value; merging across all values must detect it (status Present) and
+// collapse to a single canonical value that still carries the flag exactly once.
+#[test]
+fn beta_header_present_when_flag_in_a_second_value() {
+    let mut headers = HeaderMap::new();
+    headers.append(
+        "anthropic-beta",
+        HeaderValue::from_static("token-efficient-tools-2024-11-01"),
+    );
+    headers.append("anthropic-beta", HeaderValue::from_static(BETA_FLAG));
+    let status = ensure_beta_header(&mut headers);
+    assert_eq!(status, BetaHeaderStatus::Present);
+    // Collapsed to a single value; flag preserved exactly once; the other flag retained.
+    assert_eq!(headers.get_all("anthropic-beta").iter().count(), 1);
+    let v = headers.get("anthropic-beta").unwrap().to_str().unwrap();
+    assert_eq!(v.matches(BETA_FLAG).count(), 1);
+    assert!(v.contains("token-efficient-tools-2024-11-01"));
+}
+
+#[test]
+fn beta_header_appended_across_multiple_values_without_dropping_any() {
+    let mut headers = HeaderMap::new();
+    headers.append("anthropic-beta", HeaderValue::from_static("flag-a"));
+    headers.append("anthropic-beta", HeaderValue::from_static("flag-b"));
+    let status = ensure_beta_header(&mut headers);
+    assert_eq!(status, BetaHeaderStatus::Appended);
+    assert_eq!(headers.get_all("anthropic-beta").iter().count(), 1);
+    let v = headers.get("anthropic-beta").unwrap().to_str().unwrap();
+    assert!(v.contains("flag-a"));
+    assert!(v.contains("flag-b"));
+    assert!(v.contains(BETA_FLAG));
+}
+
+// apply_headers wiring: pino applies the beta header only when auto_cache is on.
+#[test]
+fn apply_headers_sets_beta_when_auto_cache_on() {
+    let t = PinoTransform {
+        settings: PinoSettings {
+            auto_cache: true,
+            tail_ttl: TailTtl::FiveMin,
+            drop_tools: vec![],
+            strip_ansi: false,
+            model_override: None,
+        },
+    };
+    let mut headers = HeaderMap::new();
+    t.apply_headers(&mut headers);
+    assert_eq!(
+        headers.get("anthropic-beta").unwrap().to_str().unwrap(),
+        BETA_FLAG
+    );
+}
+
+#[test]
+fn apply_headers_noop_when_auto_cache_off() {
+    let t = PinoTransform {
+        settings: no_op_settings(),
+    };
+    let mut headers = HeaderMap::new();
+    t.apply_headers(&mut headers);
+    assert!(
+        headers.get("anthropic-beta").is_none(),
+        "no beta flag advertised when auto_cache is off"
+    );
 }
