@@ -6,6 +6,7 @@
 
 pub mod agent;
 pub mod central;
+pub mod clean;
 pub mod cli;
 pub mod config;
 pub mod doctor;
