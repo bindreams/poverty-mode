@@ -292,3 +292,41 @@ fn installed_binary_path_in_none_when_dir_missing() {
     let tmp = tempfile::tempdir().unwrap();
     assert!(installed_binary_path_in(tmp.path(), "0.2.9").is_none());
 }
+
+// login state classification =====
+
+#[test]
+fn login_state_logged_in_on_success_exit() {
+    let st = classify_login_status(Some(0), "Logged in as user@example.com", "");
+    assert_eq!(st, CentralLoginState::LoggedIn);
+}
+
+#[test]
+fn login_state_logged_out_on_nonzero_with_login_hint() {
+    let st = classify_login_status(Some(1), "", "not logged in; run `jbcentral login`");
+    assert_eq!(st, CentralLoginState::LoggedOut);
+}
+
+#[test]
+fn login_state_logged_out_when_stdout_says_not_authenticated() {
+    let st = classify_login_status(Some(0), "Status: not authenticated", "");
+    assert_eq!(st, CentralLoginState::LoggedOut);
+}
+
+#[test]
+fn login_state_unknown_on_killed_process() {
+    let st = classify_login_status(None, "", "");
+    assert_eq!(st, CentralLoginState::Unknown);
+}
+
+#[test]
+fn run_status_text_errors_when_binary_is_missing() {
+    // R23c name/signature: run_status_text(&Path) -> anyhow::Result<String>, runs `<bin> status`.
+    // A non-existent binary path must surface a spawn error (never panic, never silent empty string).
+    let missing = std::path::Path::new("/nonexistent/pm-jbcentral-does-not-exist");
+    let err = run_status_text(missing).unwrap_err();
+    assert!(
+        err.to_string().contains("status"),
+        "error should name the failed `status` invocation: {err}"
+    );
+}

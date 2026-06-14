@@ -307,6 +307,96 @@ pub fn ensure_installed(version: &str) -> anyhow::Result<PathBuf> {
     Ok(bin)
 }
 
+// login state =====
+
+/// Result of inspecting `jbcentral status` (R20: login truth from status parsing, not "secret present").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CentralLoginState {
+    LoggedIn,
+    LoggedOut,
+    Unknown,
+}
+
+/// Classify a `jbcentral status` run. `code` is the process exit code (`None` if the process was
+/// killed by a signal). Logged-out is detected by a non-zero exit OR by an authentication-negative
+/// phrase in the output, so we never silently route to Anthropic when login is actually required.
+pub fn classify_login_status(code: Option<i32>, stdout: &str, stderr: &str) -> CentralLoginState {
+    let combined = format!("{stdout}\n{stderr}").to_ascii_lowercase();
+    let says_logged_out = combined.contains("not logged in")
+        || combined.contains("not authenticated")
+        || combined.contains("logged out")
+        || combined.contains("please log in")
+        || combined.contains("jbcentral login");
+    match code {
+        Some(0) if says_logged_out => CentralLoginState::LoggedOut,
+        Some(0) => CentralLoginState::LoggedIn,
+        Some(_) => CentralLoginState::LoggedOut,
+        None => CentralLoginState::Unknown,
+    }
+}
+
+/// Run `<bin> status` and return its captured stdout (R23c). Used by M10's `status`/`doctor` to render
+/// the human-readable login line and by `ensure_logged_in` for classification. Errors if the process
+/// cannot be spawned; a non-zero exit is NOT an error here (the stdout is still returned so the caller
+/// can classify it via `classify_login_status`).
+///
+/// **R5 contract:** synchronous (spawns a child process). Call via `spawn_blocking` from async code.
+pub fn run_status_text(bin: &Path) -> anyhow::Result<String> {
+    let output = std::process::Command::new(bin)
+        .arg("status")
+        .output()
+        .with_context(|| format!("running {} status", bin.display()))?;
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Detect login state by running `<bin> status`; if logged out, surface and run the interactive
+/// `<bin> login` (inheriting stdio so the browser-OAuth flow reaches the user). Never bypasses.
+///
+/// **R5 contract:** synchronous (spawns child processes). Call via `spawn_blocking` from async code.
+pub fn ensure_logged_in(bin: &Path) -> anyhow::Result<()> {
+    let output = std::process::Command::new(bin)
+        .arg("status")
+        .output()
+        .with_context(|| format!("running {} status", bin.display()))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    match classify_login_status(output.status.code(), &stdout, &stderr) {
+        CentralLoginState::LoggedIn => Ok(()),
+        CentralLoginState::Unknown => {
+            bail!("`jbcentral status` was terminated abnormally; cannot determine login state")
+        }
+        CentralLoginState::LoggedOut => {
+            eprintln!(
+                "JB Central is not logged in. Launching `jbcentral login` (browser OAuth; requires a JetBrains AI Pro subscription)."
+            );
+            let status = std::process::Command::new(bin)
+                .arg("login")
+                .stdin(std::process::Stdio::inherit())
+                .stdout(std::process::Stdio::inherit())
+                .stderr(std::process::Stdio::inherit())
+                .status()
+                .with_context(|| format!("running {} login", bin.display()))?;
+            if !status.success() {
+                bail!(
+                    "`jbcentral login` failed (exit {:?}); cannot use JB Central",
+                    status.code()
+                );
+            }
+            // Re-check: login must have actually taken effect.
+            let recheck = std::process::Command::new(bin)
+                .arg("status")
+                .output()
+                .with_context(|| format!("re-running {} status after login", bin.display()))?;
+            let so = String::from_utf8_lossy(&recheck.stdout);
+            let se = String::from_utf8_lossy(&recheck.stderr);
+            match classify_login_status(recheck.status.code(), &so, &se) {
+                CentralLoginState::LoggedIn => Ok(()),
+                _ => bail!("still not logged in to JB Central after `jbcentral login`"),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "central_tests.rs"]
 mod central_tests;
