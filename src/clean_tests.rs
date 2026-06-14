@@ -230,6 +230,81 @@ fn newest_central_binary_none_when_not_installed() {
 }
 
 #[test]
+fn confirmed_clean_stops_central_even_when_clearing_the_cache() {
+    // R20 regression: `--clear-cache --stop-central` must stop the running daemon.
+    // The central binary lives under the cache; execute_clean_plan wipes the cache.
+    // If the stop step ran AFTER the wipe it would resolve nothing and silently leave
+    // the daemon up. Assert the binary is resolved + stop is invoked BEFORE the wipe,
+    // even though both --clear-cache and --stop-central are set.
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path().join("cache");
+    // Seed the central binary inside the cache that --clear-cache will delete.
+    let bindir = cache.join("bin").join("jbcentral").join("0.2.9");
+    fs::create_dir_all(&bindir).unwrap();
+    let binpath = bindir.join(crate::central::jbcentral_binary_name());
+    fs::write(&binpath, b"fake").unwrap();
+
+    let plan = CleanPlan {
+        run_dirs_to_delete: vec![],
+        cache_dir_to_clear: Some(cache.clone()),
+        stop_central: true,
+    };
+
+    let stopped: std::cell::RefCell<Option<PathBuf>> = std::cell::RefCell::new(None);
+    execute_confirmed_clean(
+        &plan,
+        &cache,
+        // Real resolver: must find the binary because the cache is still intact here.
+        newest_central_binary,
+        |bin| {
+            *stopped.borrow_mut() = Some(bin.to_path_buf());
+            Ok(())
+        },
+    )
+    .unwrap();
+
+    // stop() was called with the resolved binary path...
+    assert_eq!(
+        stopped.into_inner().as_deref(),
+        Some(binpath.as_path()),
+        "central::stop must be invoked even when --clear-cache also clears the cache"
+    );
+    // ...and only AFTER stop did execute_clean_plan wipe the cache contents.
+    assert!(cache.is_dir(), "cache dir recreated empty");
+    assert!(
+        !binpath.exists(),
+        "cache contents (incl. the binary) cleared"
+    );
+}
+
+#[test]
+fn confirmed_clean_without_stop_central_never_resolves_or_stops() {
+    // Without --stop-central, neither the resolver nor stop runs (the resolver would
+    // panic if called), and the filesystem side still executes.
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path().join("cache");
+    fs::create_dir_all(cache.join("bin")).unwrap();
+    fs::write(cache.join("bin").join("f"), "x").unwrap();
+
+    let plan = CleanPlan {
+        run_dirs_to_delete: vec![],
+        cache_dir_to_clear: Some(cache.clone()),
+        stop_central: false,
+    };
+
+    execute_confirmed_clean(
+        &plan,
+        &cache,
+        |_| panic!("resolver must not run when stop_central is false"),
+        |_| panic!("stop must not run when stop_central is false"),
+    )
+    .unwrap();
+
+    assert!(cache.is_dir());
+    assert!(!cache.join("bin").exists(), "cache cleared");
+}
+
+#[test]
 fn render_clean_plan_previews_actions() {
     let plan = CleanPlan {
         run_dirs_to_delete: vec![

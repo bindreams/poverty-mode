@@ -10,6 +10,9 @@ fn pm(home: &TempDir) -> Command {
     cmd.env("POVERTY_STATE_DIR", p.join("state"))
         .env("POVERTY_CACHE_DIR", p.join("cache"))
         .env("XDG_CONFIG_HOME", p.join("config"))
+        // Point managed-settings detection at a hermetic (absent) path so a real
+        // system managed-settings.json never bleeds into doctor.
+        .env("POVERTY_MANAGED_SETTINGS", p.join("managed-settings.json"))
         // Neutralize a real ~/.claude and ~/.wire bleeding into doctor/status.
         .env("HOME", p)
         .env("USERPROFILE", p);
@@ -64,6 +67,40 @@ fn doctor_runs_and_exits_zero_when_no_settings_conflicts() {
     pm(&home).arg("doctor").assert().success().stdout(
         predicate::str::contains("no problems detected").or(predicate::str::contains("WARN")),
     );
+}
+
+#[test]
+fn doctor_reports_managed_policy_conflict_as_error_and_exits_nonzero() {
+    // End-to-end proof that managed-policy detection is wired into production: a
+    // managed-settings.json that pins ANTHROPIC_BASE_URL is the ONLY Severity::Error
+    // settings path. doctor must surface it as an ERROR and exit non-zero so a CI/admin
+    // gate fails when the chain would be bypassed by managed policy.
+    let home = TempDir::new().unwrap();
+    let managed = home.path().join("managed-settings.json");
+    std::fs::write(
+        &managed,
+        r#"{"env": {"ANTHROPIC_BASE_URL": "https://locked.corp.example"}}"#,
+    )
+    .unwrap();
+    pm(&home)
+        .env("POVERTY_MANAGED_SETTINGS", &managed)
+        .arg("doctor")
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ERROR"))
+        .stdout(predicate::str::contains("managed policy"));
+}
+
+#[test]
+fn doctor_no_managed_error_when_managed_file_absent() {
+    // The default hermetic managed path does not exist -> no Managed error, exit 0
+    // (proves the managed branch fires ONLY on an actual managed override).
+    let home = TempDir::new().unwrap();
+    pm(&home)
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("managed policy").not());
 }
 
 #[test]

@@ -156,6 +156,38 @@ fn confirm(prompt: &str) -> Result<bool> {
     Ok(answer == "y" || answer == "yes")
 }
 
+/// Execute a confirmed plan: stop central first (if opted in), THEN run the
+/// filesystem side. `resolve_bin` and `stop` are injected so tests can drive the
+/// stop path without a real jbcentral binary or process.
+///
+/// **Ordering is load-bearing.** The central binary lives under the cache
+/// (`<cache>/bin/jbcentral/<ver>/`); `--clear-cache` wipes that directory. The
+/// binary path is therefore resolved AND the daemon stopped BEFORE
+/// `execute_clean_plan` runs — otherwise `--clear-cache --stop-central` would
+/// delete the binary, find nothing to stop, and leave the very daemon the user
+/// asked to stop running while reporting "not installed; nothing to stop".
+/// Stop errors are surfaced (central::stop normalizes "not running" to Ok, so any
+/// Err is a real failure); a stop failure aborts before any filesystem mutation.
+fn execute_confirmed_clean(
+    plan: &CleanPlan,
+    cache: &Path,
+    resolve_bin: impl FnOnce(&Path) -> Result<Option<PathBuf>>,
+    stop: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
+    // Central stop, only if opted in. Resolve + stop BEFORE the cache is cleared so
+    // a `--clear-cache` clean cannot delete the binary out from under the stop step.
+    if plan.stop_central {
+        match resolve_bin(cache)? {
+            Some(bin) => stop(&bin)?,
+            None => println!("central not installed; nothing to stop"),
+        }
+    }
+
+    // Filesystem side last (may wipe the cache that held the central binary).
+    execute_clean_plan(plan)?;
+    Ok(())
+}
+
 /// Gather real inputs, preview, confirm (unless `assume_yes`), then execute. Central
 /// stop happens only when `stop_central` is set AND the user confirms, AFTER the
 /// emptiness check -- never on a no-op or aborted clean (R20). Stop errors propagate.
@@ -179,17 +211,7 @@ pub fn run_clean(
         return Ok(());
     }
 
-    // Filesystem side first.
-    execute_clean_plan(&plan)?;
-
-    // Central stop, only if opted in and confirmed. Errors are surfaced:
-    // central::stop normalizes "not running" to Ok, so any Err is a real failure.
-    if plan.stop_central {
-        match newest_central_binary(&cache)? {
-            Some(bin) => crate::central::stop(&bin)?,
-            None => println!("central not installed; nothing to stop"),
-        }
-    }
+    execute_confirmed_clean(&plan, &cache, newest_central_binary, crate::central::stop)?;
 
     println!("clean complete");
     Ok(())

@@ -133,9 +133,45 @@ pub fn read_settings_layer(layer: SettingsLayer, path: &std::path::Path) -> Sett
     SettingsSource { layer, json }
 }
 
-/// Resolve the on-disk paths of the settings layers `doctor` inspects.
+/// Env override (non-empty wins) for the enterprise managed-settings path, so the
+/// otherwise system-level managed path (e.g. `/etc/claude-code/...`) is reachable in
+/// a hermetic test. Mirrors the `POVERTY_STATE_DIR`/`POVERTY_CACHE_DIR` convention (R23j).
+const MANAGED_SETTINGS_ENV: &str = "POVERTY_MANAGED_SETTINGS";
+
+/// Candidate on-disk locations of Claude Code's enterprise managed-settings file for
+/// the host OS. Managed policy can override `ANTHROPIC_BASE_URL` at a precedence
+/// poverty-mode's `--settings` cannot beat, so `doctor` must inspect it (the only
+/// `Severity::Error` settings finding). When `POVERTY_MANAGED_SETTINGS` is set
+/// (non-empty) it replaces these for hermetic testing.
+///
+/// Current path per platform; the deprecated Windows `ProgramData` location is also
+/// checked so an estate still on a pre-v2.1.75 Claude Code is not missed.
+pub fn managed_settings_paths() -> Vec<PathBuf> {
+    if let Some(p) = std::env::var_os(MANAGED_SETTINGS_ENV).filter(|v| !v.is_empty()) {
+        return vec![PathBuf::from(p)];
+    }
+    if cfg!(target_os = "macos") {
+        vec![PathBuf::from(
+            "/Library/Application Support/ClaudeCode/managed-settings.json",
+        )]
+    } else if cfg!(target_os = "windows") {
+        vec![
+            PathBuf::from(r"C:\Program Files\ClaudeCode\managed-settings.json"),
+            // Deprecated <v2.1.75 location; still read by older installs.
+            PathBuf::from(r"C:\ProgramData\ClaudeCode\managed-settings.json"),
+        ]
+    } else {
+        vec![PathBuf::from("/etc/claude-code/managed-settings.json")]
+    }
+}
+
+/// Resolve the on-disk paths of the settings layers `doctor` inspects. Managed policy
+/// comes first so its `Severity::Error` findings (which override our injection) lead.
 pub fn settings_layer_paths() -> Result<Vec<(SettingsLayer, PathBuf)>> {
     let mut out = Vec::new();
+    for path in managed_settings_paths() {
+        out.push((SettingsLayer::Managed, path));
+    }
     if let Some(base) = directories::BaseDirs::new() {
         out.push((
             SettingsLayer::UserSettings,
