@@ -709,6 +709,109 @@ pub fn inject_breakpoint_if_absent(body: &mut Value, tail_ttl: TailTtl) -> Vec<S
     tail_paths
 }
 
+// --- tail normalization + 1h rewrite with skip-set (cache.js 3-26, 44-59) -----
+
+use std::collections::HashSet;
+
+/// Forces every ephemeral breakpoint inside the LAST message to `tail_ttl` and
+/// returns their JSON-Pointer (block) paths. Mirrors normalizeTailBreakpoints
+/// (reference/pino/src/cache.js 44-59).
+pub fn normalize_tail_breakpoints(body: &mut Value, tail_ttl: TailTtl) -> Vec<String> {
+    let mut out = Vec::new();
+    let msg_count = body
+        .get("messages")
+        .and_then(|m| m.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    if msg_count == 0 {
+        return out;
+    }
+    let last = msg_count - 1;
+    let base = format!("/messages/{}", last);
+    if let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) {
+        normalize_walk(&mut messages[last], &base, tail_ttl, &mut out);
+    }
+    out
+}
+
+fn normalize_walk(node: &mut Value, path: &str, tail_ttl: TailTtl, out: &mut Vec<String>) {
+    match node {
+        Value::Object(map) => {
+            let is_ephemeral = map
+                .get("cache_control")
+                .and_then(|cc| cc.get("type"))
+                .and_then(|t| t.as_str())
+                == Some("ephemeral");
+            if is_ephemeral {
+                if let Some(cc) = map.get_mut("cache_control").and_then(|c| c.as_object_mut()) {
+                    cc.insert(
+                        "ttl".to_string(),
+                        Value::String(tail_ttl.as_str().to_string()),
+                    );
+                }
+                out.push(path.to_string());
+            }
+            // Node recurses into every key EXCEPT cache_control (cache.js line 55).
+            let keys: Vec<String> = map
+                .keys()
+                .filter(|k| *k != "cache_control")
+                .cloned()
+                .collect();
+            for k in keys {
+                let child_path = format!("{}/{}", path, k);
+                if let Some(child) = map.get_mut(&k) {
+                    normalize_walk(child, &child_path, tail_ttl, out);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for (i, item) in items.iter_mut().enumerate() {
+                let child_path = format!("{}/{}", path, i);
+                normalize_walk(item, &child_path, tail_ttl, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Recursively bumps every ephemeral `cache_control.ttl` to "1h" except nodes
+/// whose JSON-Pointer (block) path is in `skip`. Mirrors rewriteCacheControl
+/// (reference/pino/src/cache.js 3-26).
+pub fn rewrite_cache_control(body: &mut Value, skip: &HashSet<String>) {
+    rewrite_walk(body, String::new(), skip);
+}
+
+fn rewrite_walk(node: &mut Value, path: String, skip: &HashSet<String>) {
+    match node {
+        Value::Object(map) => {
+            let is_ephemeral = map
+                .get("cache_control")
+                .and_then(|cc| cc.get("type"))
+                .and_then(|t| t.as_str())
+                == Some("ephemeral");
+            if is_ephemeral && !skip.contains(&path) {
+                if let Some(cc) = map.get_mut("cache_control").and_then(|c| c.as_object_mut()) {
+                    cc.insert("ttl".to_string(), Value::String("1h".to_string()));
+                }
+            }
+            let keys: Vec<String> = map.keys().cloned().collect();
+            for k in keys {
+                let child_path = format!("{}/{}", path, k);
+                if let Some(child) = map.get_mut(&k) {
+                    rewrite_walk(child, child_path, skip);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for (i, item) in items.iter_mut().enumerate() {
+                let child_path = format!("{}/{}", path, i);
+                rewrite_walk(item, child_path, skip);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn apply_auto_cache(_body: &mut Value, _tail_ttl: TailTtl) {
     // Implemented in Tasks M4.6-M4.9.
 }

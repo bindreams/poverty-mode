@@ -1174,3 +1174,91 @@ fn inject_len_gt_one_only_msg0_cacheable_no_duplicate_tail() {
         "no 5m tail added when the only cacheable block is msg0's"
     );
 }
+
+// M4.8 ===== tail normalization (client-placed tail breakpoints) + 1h rewrite
+// with a path skip-set. Ports normalizeTailBreakpoints (cache.js 44-59) and
+// rewriteCacheControl (cache.js 3-26).
+
+use super::{normalize_tail_breakpoints, rewrite_cache_control};
+use std::collections::HashSet;
+
+#[test]
+fn normalize_tail_forces_last_message_breakpoints_to_tail_ttl() {
+    let mut body = json!({
+        "messages": [
+            { "role": "user", "content": [ { "type": "text", "text": "a", "cache_control": { "type": "ephemeral", "ttl": "1h" } } ] },
+            { "role": "user", "content": [
+                { "type": "text", "text": "b", "cache_control": { "type": "ephemeral", "ttl": "1h" } },
+                { "type": "tool_result", "content": "c", "cache_control": { "type": "ephemeral" } }
+            ] }
+        ]
+    });
+    let paths = normalize_tail_breakpoints(&mut body, TailTtl::FiveMin);
+    assert_eq!(
+        body["messages"][1]["content"][0]["cache_control"]["ttl"],
+        json!("5m")
+    );
+    assert_eq!(
+        body["messages"][1]["content"][1]["cache_control"]["ttl"],
+        json!("5m")
+    );
+    assert_eq!(
+        body["messages"][0]["content"][0]["cache_control"]["ttl"],
+        json!("1h")
+    );
+    let set: HashSet<String> = paths.into_iter().collect();
+    assert!(set.contains("/messages/1/content/0"));
+    assert!(set.contains("/messages/1/content/1"));
+    assert_eq!(set.len(), 2);
+}
+
+#[test]
+fn normalize_tail_empty_when_no_messages() {
+    let mut body = json!({ "messages": [] });
+    let paths = normalize_tail_breakpoints(&mut body, TailTtl::OneHour);
+    assert!(paths.is_empty());
+}
+
+#[test]
+fn normalize_tail_records_block_path_not_cache_control_path() {
+    // The recorded path must be the BLOCK's pointer (e.g. /messages/0/content/0),
+    // NOT /messages/0/content/0/cache_control. This is what rewrite skips.
+    let mut body = json!({
+        "messages": [
+            { "role": "user", "content": [ { "type": "text", "text": "only", "cache_control": { "type": "ephemeral", "ttl": "1h" } } ] }
+        ]
+    });
+    let paths = normalize_tail_breakpoints(&mut body, TailTtl::FiveMin);
+    assert_eq!(paths, vec!["/messages/0/content/0".to_string()]);
+}
+
+#[test]
+fn rewrite_bumps_every_ephemeral_to_1h_except_skip() {
+    let mut body = json!({
+        "tools": [ { "name": "x", "cache_control": { "type": "ephemeral", "ttl": "5m" } } ],
+        "system": [ { "type": "text", "text": "s", "cache_control": { "type": "ephemeral" } } ],
+        "messages": [
+            { "role": "user", "content": [
+                { "type": "text", "text": "tail", "cache_control": { "type": "ephemeral", "ttl": "5m" } }
+            ] }
+        ]
+    });
+    let mut skip: HashSet<String> = HashSet::new();
+    skip.insert("/messages/0/content/0".to_string());
+    rewrite_cache_control(&mut body, &skip);
+    assert_eq!(body["tools"][0]["cache_control"]["ttl"], json!("1h"));
+    assert_eq!(body["system"][0]["cache_control"]["ttl"], json!("1h"));
+    assert_eq!(
+        body["messages"][0]["content"][0]["cache_control"]["ttl"],
+        json!("5m")
+    );
+}
+
+#[test]
+fn rewrite_leaves_non_ephemeral_alone() {
+    let mut body = json!({
+        "x": { "cache_control": { "type": "persistent", "ttl": "5m" } }
+    });
+    rewrite_cache_control(&mut body, &HashSet::new());
+    assert_eq!(body["x"]["cache_control"]["ttl"], json!("5m"));
+}
