@@ -138,3 +138,96 @@ async fn process_env_vs_settings_block_precedence() {
          re-examine design §8 precedence assumption and record in EMPIRICAL_GATES.md"
     );
 }
+
+// EMPIRICAL VERIFICATION GATE (b): subagent endpoint inheritance.
+//
+// Method: point claude at a SINGLE canonical stub via both belts (the production
+// wiring, auth token in both belts), then prompt it to spawn a subagent (Task
+// tool). If subagents inherit the resolved endpoint, BOTH the main loop and the
+// subagent reach our one stub: the stub records >1 request. Since there is a
+// single stub on a single loopback port, any reached request shares the same
+// host/port by construction — count() is the discriminator.
+#[tokio::test]
+#[ignore = "requires installed claude; run with --ignored (empirical gate b)"]
+async fn subagent_inherits_chain_endpoint() {
+    let stub = start_stub(CANNED);
+    let base = Url::parse(&format!("http://127.0.0.1:{}", stub.port)).unwrap();
+
+    let prompt = "Use the Task tool to spawn one general-purpose subagent that \
+                  replies with the single word ok. Then stop.";
+
+    let mut cmd = ClaudeAgent.build_command(
+        // Generic model (M6): argv[0] is the PROGRAM. Lead with "claude" so
+        // build_command's split_first() yields program="claude" and inserts
+        // `--settings <json>` between it and the user flags (argv[1..]). Omitting
+        // the program here would resolve program="--print" and spawn a nonexistent
+        // `--print` binary, never reaching the inheritance assertions below.
+        &[
+            "claude".to_string(),
+            "--print".to_string(),
+            prompt.to_string(),
+        ],
+        &base,
+        &[
+            ("ENABLE_TOOL_SEARCH".to_string(), "true".to_string()),
+            (
+                "ANTHROPIC_AUTH_TOKEN".to_string(),
+                "empirical-dummy".to_string(),
+            ),
+        ],
+    );
+    cmd.kill_on_drop(true);
+
+    let mut child = cmd.spawn().expect(
+        "claude must be installed on PATH for the empirical gate \
+         (run with --ignored only when provisioned)",
+    );
+
+    // Human-surfaced failure bound only (R8 sanctioned exception): a subagent
+    // prompt that never terminates would otherwise hang CI forever.
+    let status = match tokio::time::timeout(CLAUDE_EXIT_DEADLINE, child.wait()).await {
+        Ok(res) => res.expect("awaiting claude exit failed"),
+        Err(_elapsed) => {
+            let _ = child.kill().await;
+            panic!(
+                "claude did not exit within {}s — investigate a hang \
+                 (login/credential/network stall or a subagent prompt that never terminates)",
+                CLAUDE_EXIT_DEADLINE.as_secs()
+            );
+        }
+    };
+
+    let count = stub.count();
+    let last_host = stub.last().and_then(|c| c.host);
+    let first_seg = stub.first_segment();
+
+    eprintln!(
+        "EMPIRICAL(b): claude_exit_success={} requests={count} \
+         last_host={last_host:?} first_segment={first_seg:?}",
+        status.success()
+    );
+
+    // Distinguish the confusing case (missing-coverage #3): zero requests + a
+    // non-zero exit means claude never reached the stub (login/network/Managed),
+    // not "subagent diverged". Surface that distinctly.
+    if count == 0 {
+        panic!(
+            "no request reached the stub (claude_exit_success={}) — claude never \
+             reached an upstream; investigate login/credentials/network or a Managed \
+             ANTHROPIC_BASE_URL policy. This is an environment failure, not a subagent result.",
+            status.success()
+        );
+    }
+
+    assert!(count >= 1, "the main loop must reach our stub at minimum");
+
+    // PASS criterion: the subagent reached the SAME (single) stub as the main
+    // loop, so the stub recorded a second request. Record the outcome in
+    // tests/EMPIRICAL_GATES.md regardless of pass/fail (Task M7.8).
+    assert!(
+        count >= 2,
+        "EMPIRICAL FAIL: only {count} request(s) reached the stub — the subagent did \
+         not inherit the chain endpoint; re-examine design §8 subagent assumption \
+         and record in EMPIRICAL_GATES.md"
+    );
+}
