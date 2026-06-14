@@ -347,3 +347,78 @@ fn settings_value_escapes_special_characters() {
     let v = settings_json(&ClaudeAgent.build_command(&[], &base, &extra));
     assert_eq!(v["env"]["WEIRD"], Value::String("a\"b\\c\nd".to_string()));
 }
+
+// M7.5 (ENABLE_TOOL_SEARCH cross-check, pinned flag/key constants, Managed +
+// remote-exec notes) =====
+//
+// These lock the four M7.5 contract gaps: the `--settings` flag and env-key
+// names are pinned so a silent rename can't break precedence; the cross-check
+// debug-assert catches an orchestrator (M6) regression that drops
+// ENABLE_TOOL_SEARCH; and two machine-checked constants document the Managed
+// policy ceiling and the remote-execution chain bypass (spec §8).
+
+use crate::agent::claude::{
+    ENV_BASE_URL, ENV_ENABLE_TOOL_SEARCH, MANAGED_POLICY_NOTE, REMOTE_EXECUTION_NOTE, SETTINGS_FLAG,
+};
+
+#[test]
+fn settings_flag_constant_matches_emitted_arg() {
+    let base = Url::parse("http://127.0.0.1:4100").unwrap();
+    let args = args_of(&ClaudeAgent.build_command(&[], &base, &[]));
+    assert!(args.iter().any(|a| a == SETTINGS_FLAG));
+    assert_eq!(SETTINGS_FLAG, "--settings");
+}
+
+#[test]
+fn env_key_constants_are_the_names_we_emit() {
+    assert_eq!(ENV_BASE_URL, "ANTHROPIC_BASE_URL");
+    assert_eq!(ENV_ENABLE_TOOL_SEARCH, "ENABLE_TOOL_SEARCH");
+    // The base-URL key is actually emitted (guards against a silent rename).
+    let base = Url::parse("http://127.0.0.1:4100").unwrap();
+    let v = settings_json(&ClaudeAgent.build_command(&[], &base, &[]));
+    assert!(v["env"].as_object().unwrap().contains_key(ENV_BASE_URL));
+}
+
+#[test]
+fn managed_policy_note_documents_the_one_layer_we_cannot_beat() {
+    // The note must name Managed and must NOT claim we override it.
+    assert!(MANAGED_POLICY_NOTE.contains("Managed"));
+    assert!(
+        !MANAGED_POLICY_NOTE
+            .to_lowercase()
+            .contains("override managed"),
+        "we must not claim to beat Managed policy"
+    );
+}
+
+#[test]
+fn remote_execution_bypass_is_documented() {
+    // Spec §8: cloud/remote execution (scheduled routines, RemoteTrigger) runs
+    // server-side and inherently bypasses the local chain — documented as such.
+    let lower = REMOTE_EXECUTION_NOTE.to_lowercase();
+    assert!(lower.contains("remote") || lower.contains("cloud"));
+    assert!(lower.contains("bypass"));
+}
+
+#[test]
+fn tool_search_cross_check_passes_when_present() {
+    // Orchestrator-shaped call: ENABLE_TOOL_SEARCH present => no panic.
+    let base = Url::parse("http://127.0.0.1:4100").unwrap();
+    let extra = vec![
+        ("POVERTY_PROXY_CHAIN".to_string(), "pino".to_string()),
+        ("ENABLE_TOOL_SEARCH".to_string(), "true".to_string()),
+    ];
+    // Must not panic.
+    let _ = ClaudeAgent.build_command(&[], &base, &extra);
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "ENABLE_TOOL_SEARCH")]
+fn tool_search_cross_check_fires_when_orchestrator_drops_it() {
+    // Non-empty extra_env without ENABLE_TOOL_SEARCH is an M6 contract breach:
+    // the debug-assert must fire so a regression is caught in CI, not shipped.
+    let base = Url::parse("http://127.0.0.1:4100").unwrap();
+    let extra = vec![("POVERTY_PROXY_CHAIN".to_string(), "pino".to_string())];
+    let _ = ClaudeAgent.build_command(&[], &base, &extra);
+}
