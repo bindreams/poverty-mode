@@ -96,9 +96,28 @@ async fn readiness_failure_via_manager_tears_down_started_hops() {
     manager.shutdown().await.expect("idempotent shutdown");
 }
 
+/// Point the orchestrator's self-spawn at the real `poverty-mode` binary.
+///
+/// `build_and_run_with_fault` re-spawns proxy hops via `self_spawn_exe()`, which
+/// falls back to `std::env::current_exe()` — the libtest harness binary, which has
+/// no `proxy` subcommand. Without this, the spawn fails on argv parsing (the wrong
+/// binary), so the test would pass for the wrong reason and never exercise the
+/// `PM_TEST_FAIL_PROXY` shim. `POVERTY_PROXY_EXE` is honored ahead of
+/// `current_exe()`; set it once (race-free across parallel `#[tokio::test]`s) to
+/// the real `CARGO_BIN_EXE_poverty-mode`.
+fn point_self_spawn_at_real_binary() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        std::env::set_var("POVERTY_PROXY_EXE", env!("CARGO_BIN_EXE_poverty-mode"));
+    });
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn build_and_run_fails_closed_when_a_hop_never_readies() {
-    // End-to-end via build_and_run_with_manager, fault injected per-child.
+    // End-to-end via build_and_run_with_manager, fault injected per-child. Pin the
+    // self-spawn to the real binary so the PM_TEST_FAIL_PROXY shim is exercised.
+    point_self_spawn_at_real_binary();
     let agent = RecordingAgent::default();
     let tail = Upstream {
         url: Url::parse("https://api.anthropic.com").unwrap(),
