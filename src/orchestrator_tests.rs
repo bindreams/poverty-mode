@@ -150,3 +150,48 @@ fn tail_errors_on_unparseable_preexisting_base_url() {
         "error should name the offending env var: {err}"
     );
 }
+
+fn get<'a>(env: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    env.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+}
+
+#[test]
+fn agent_env_always_sets_chain_and_tool_search() {
+    let chain = vec![pino_rp(), headroom_rp()];
+    let env = compute_agent_env(&chain, false);
+    assert_eq!(get(&env, "POVERTY_PROXY_CHAIN"), Some("pino,headroom"));
+    assert_eq!(get(&env, "ENABLE_TOOL_SEARCH"), Some("true"));
+}
+
+#[test]
+fn agent_env_omits_auth_token_for_non_central_tail() {
+    let chain = vec![pino_rp()];
+    let env = compute_agent_env(&chain, false);
+    assert_eq!(get(&env, "ANTHROPIC_AUTH_TOKEN"), None);
+}
+
+#[test]
+fn agent_env_sets_wire_proxy_auth_token_for_central_tail() {
+    let chain = vec![pino_rp(), central_rp()];
+    let env = compute_agent_env(&chain, true);
+    assert_eq!(get(&env, "ANTHROPIC_AUTH_TOKEN"), Some("wire-proxy"));
+    assert_eq!(get(&env, "POVERTY_PROXY_CHAIN"), Some("pino,central"));
+    assert_eq!(get(&env, "ENABLE_TOOL_SEARCH"), Some("true"));
+}
+
+#[test]
+fn agent_env_never_includes_base_url_key() {
+    // ANTHROPIC_BASE_URL is set by the Agent from its base_url arg, not here.
+    let chain = vec![pino_rp(), central_rp()];
+    let env = compute_agent_env(&chain, true);
+    assert_eq!(get(&env, "ANTHROPIC_BASE_URL"), None);
+}
+
+#[test]
+fn agent_env_for_empty_chain_has_empty_chain_value() {
+    let chain: Vec<ResolvedProxy> = vec![];
+    let env = compute_agent_env(&chain, false);
+    assert_eq!(get(&env, "POVERTY_PROXY_CHAIN"), Some(""));
+    assert_eq!(get(&env, "ENABLE_TOOL_SEARCH"), Some("true"));
+    assert_eq!(get(&env, "ANTHROPIC_AUTH_TOKEN"), None);
+}

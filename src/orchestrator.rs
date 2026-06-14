@@ -64,6 +64,23 @@ pub fn resolve_tail_upstream(inputs: &TailInputs) -> anyhow::Result<Upstream> {
     Ok(Upstream { url })
 }
 
+/// Assemble the agent's `extra_env` (what M7's `Agent::build_command` mirrors
+/// into both the process env and the inline `--settings` JSON).
+///
+/// `ANTHROPIC_BASE_URL` is intentionally NOT included: the agent sets it from
+/// its `base_url` argument (the chain head). `central_is_tail` controls the
+/// dummy `ANTHROPIC_AUTH_TOKEN=wire-proxy` (central injects the real JWT).
+pub fn compute_agent_env(chain: &[ResolvedProxy], central_is_tail: bool) -> Vec<(String, String)> {
+    let mut env = vec![
+        ("POVERTY_PROXY_CHAIN".to_string(), serialize_chain(chain)),
+        ("ENABLE_TOOL_SEARCH".to_string(), "true".to_string()),
+    ];
+    if central_is_tail {
+        env.push(("ANTHROPIC_AUTH_TOKEN".to_string(), "wire-proxy".to_string()));
+    }
+    env
+}
+
 #[cfg(test)]
 #[path = "orchestrator_tests.rs"]
 mod orchestrator_tests;
