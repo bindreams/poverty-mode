@@ -30,6 +30,7 @@ fn parses_run_with_proxies_and_trailing_agent() {
             save,
             no_save,
             agent_argv,
+            ..
         } => {
             assert_eq!(
                 proxies,
@@ -48,6 +49,85 @@ fn parses_run_with_proxies_and_trailing_agent() {
         }
         other => panic!("expected Run, got {other:?}"),
     }
+}
+
+#[test]
+fn run_parses_prefixed_setting_flags_into_overrides() {
+    use crate::proxy::pino::TailTtl;
+    let cli = Cli::try_parse_from([
+        "poverty-mode",
+        "run",
+        "--proxies",
+        "pino,headroom",
+        "--pino-tail-ttl",
+        "1h",
+        "--pino-no-auto-cache",
+        "--pino-drop-tools",
+        "Bash,Edit",
+        "--pino-model-override",
+        "claude-opus-4-8",
+        "--headroom-no-compression",
+        "--central-port",
+        "9000",
+        "--central-pinned-version",
+        "1.2.3",
+        "--",
+        "claude",
+    ])
+    .unwrap();
+    let Command::Run { settings, .. } = cli.command else {
+        panic!("expected Run")
+    };
+    let ov = settings.to_overrides();
+    assert_eq!(ov.pino.tail_ttl, Some(TailTtl::OneHour));
+    assert_eq!(ov.pino.auto_cache, Some(false));
+    assert_eq!(ov.pino.drop_tools, Some(vec!["Bash".into(), "Edit".into()]));
+    assert_eq!(ov.pino.model_override.as_deref(), Some("claude-opus-4-8"));
+    assert_eq!(ov.headroom.compression, Some(false));
+    assert_eq!(ov.central.port, Some(9000));
+    assert_eq!(ov.central.pinned_version.as_deref(), Some("1.2.3"));
+    assert_eq!(ov.pino.strip_ansi, None);
+}
+
+#[test]
+fn run_without_setting_flags_yields_empty_overrides() {
+    let cli = Cli::try_parse_from(["poverty-mode", "run", "--", "claude"]).unwrap();
+    let Command::Run { settings, .. } = cli.command else {
+        panic!()
+    };
+    assert_eq!(
+        settings.to_overrides(),
+        crate::config::overrides::Overrides::default()
+    );
+}
+
+#[test]
+fn run_pino_auto_cache_pair_resolves_true() {
+    let cli =
+        Cli::try_parse_from(["poverty-mode", "run", "--pino-auto-cache", "--", "claude"]).unwrap();
+    let Command::Run { settings, .. } = cli.command else {
+        panic!()
+    };
+    assert_eq!(settings.to_overrides().pino.auto_cache, Some(true));
+}
+
+#[test]
+fn run_empty_drop_tools_clears_the_list() {
+    // Decision: passing --pino-drop-tools with an empty value is an explicit clear
+    // (Some(vec![])), which replaces any configured list with empty on apply.
+    let cli = Cli::try_parse_from([
+        "poverty-mode",
+        "run",
+        "--pino-drop-tools",
+        "",
+        "--",
+        "claude",
+    ])
+    .unwrap();
+    let Command::Run { settings, .. } = cli.command else {
+        panic!()
+    };
+    assert_eq!(settings.to_overrides().pino.drop_tools, Some(vec![]));
 }
 
 #[test]
@@ -146,7 +226,7 @@ fn proxy_which_rejects_unknown_proxy_name() {
 #[test]
 fn proxy_pino_reads_pino_group_via_which() {
     // R23b flattens both groups onto ProxyArgs; the dispatcher selects by
-    // `which`. A pino run leaves the headroom-only flag at its default.
+    // `which`. A pino run leaves the headroom-only flag at its default (compression on).
     let cli = Cli::try_parse_from([
         "poverty-mode",
         "proxy",
@@ -164,7 +244,7 @@ fn proxy_pino_reads_pino_group_via_which() {
         Command::Proxy(args) => {
             assert_eq!(args.which, ProxyName::Pino);
             assert!(args.auto_cache());
-            assert!(!args.compression());
+            assert!(args.compression(), "compression defaults on");
         }
         other => panic!("expected Proxy, got {other:?}"),
     }
@@ -315,7 +395,31 @@ fn proxy_bool_flags_are_presence_with_negations() {
     assert!(a.auto_cache(), "--auto-cache is a presence flag");
     assert!(!a.strip_ansi(), "--no-strip-ansi negates the default");
 
-    // compression defaults false; --compression turns it on.
+    // compression defaults true; --no-compression turns it off.
+    let bare = &[
+        "headroom",
+        "--listen",
+        "127.0.0.1:0",
+        "--upstream",
+        "http://127.0.0.1:9/",
+        "--run-id",
+        "r",
+    ];
+    let a = parse_proxy(bare);
+    assert!(a.compression(), "compression defaults true");
+
+    let a = parse_proxy(&[
+        "headroom",
+        "--listen",
+        "127.0.0.1:0",
+        "--upstream",
+        "http://127.0.0.1:9/",
+        "--run-id",
+        "r",
+        "--no-compression",
+    ]);
+    assert!(!a.compression(), "--no-compression negates the default");
+
     let a = parse_proxy(&[
         "headroom",
         "--listen",
@@ -326,7 +430,10 @@ fn proxy_bool_flags_are_presence_with_negations() {
         "r",
         "--compression",
     ]);
-    assert!(a.compression(), "--compression is a presence flag");
+    assert!(
+        a.compression(),
+        "--compression keeps it on (redundant with default)"
+    );
 }
 
 #[test]

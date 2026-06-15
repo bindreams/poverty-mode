@@ -2,6 +2,8 @@ use crate::proxy::headroom::HeadroomSettings;
 use crate::proxy::pino::{PinoSettings, TailTtl};
 use crate::proxy::ProxyName;
 
+pub mod overrides;
+
 /// The whole config file. `proxies` order is the default chain order.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -109,7 +111,7 @@ impl Config {
                 ProxyEntry {
                     name: ProxyName::Headroom,
                     enabled: false,
-                    settings: ProxySettings::Headroom(HeadroomSettings { compression: false }),
+                    settings: ProxySettings::Headroom(HeadroomSettings { compression: true }),
                 },
                 ProxyEntry {
                     name: ProxyName::Central,
@@ -239,62 +241,72 @@ impl Config {
         Ok(resolved)
     }
 
-    /// Persist a resolved chain back to disk: the canonical R22/R23i entry point
-    /// that M6's `--save` calls. Chain members become enabled (in chain order,
-    /// carrying the chain's settings); every other known proxy from the current
-    /// config follows disabled, keeping its existing settings so a later re-enable
-    /// does not lose user customizations. `central` is forced into the LAST slot
-    /// regardless of which bucket it fell in, so the written file always satisfies
-    /// the central-last invariant. The result is validated and atomically written
-    /// via `save`.
-    pub fn save_resolved_chain(&self, chain: &[ResolvedProxy]) -> anyhow::Result<()> {
-        let in_chain: std::collections::HashSet<ProxyName> = chain.iter().map(|r| r.name).collect();
+    /// Clone with each entry's settings merged with the matching override. Enabled
+    /// flags and order are untouched.
+    pub fn with_overrides(&self, ov: &overrides::Overrides) -> Config {
+        let mut next = self.clone();
+        for entry in &mut next.proxies {
+            match &mut entry.settings {
+                ProxySettings::Pino(s) => ov.pino.apply(s),
+                ProxySettings::Headroom(s) => ov.headroom.apply(s),
+                ProxySettings::Central(s) => ov.central.apply(s),
+            }
+        }
+        next
+    }
 
-        // Enabled chain members, in chain order; central deferred to the tail.
+    /// Persist a fully-specified ordered proxy list (the picker's complete state).
+    /// Validates the same invariants as `save` (settings/name agreement, central
+    /// last) and writes atomically.
+    pub fn save_full_state(&self, proxies: Vec<ProxyEntry>) -> anyhow::Result<()> {
+        Config {
+            version: self.version,
+            proxies,
+            defaults: self.defaults.clone(),
+        }
+        .save()
+    }
+
+    /// Full ordered proxy list for a resolved chain: enabled members in chain order
+    /// (carrying chain settings), then remaining known proxies disabled in this
+    /// config's order keeping their settings; central forced last. The single
+    /// ordering authority for the non-interactive `--save` path, producing the same
+    /// `Vec<ProxyEntry>` the picker yields for an equivalent state.
+    pub fn entries_for_chain(&self, chain: &[ResolvedProxy]) -> Vec<ProxyEntry> {
+        let in_chain: std::collections::HashSet<ProxyName> = chain.iter().map(|r| r.name).collect();
         let mut proxies: Vec<ProxyEntry> = Vec::new();
         let mut central: Option<ProxyEntry> = None;
         for r in chain {
-            let entry = ProxyEntry {
+            let e = ProxyEntry {
                 name: r.name,
                 enabled: true,
                 settings: r.settings.clone(),
             };
             if r.name.must_be_last() {
-                central = Some(entry);
+                central = Some(e);
             } else {
-                proxies.push(entry);
+                proxies.push(e);
             }
         }
-
-        // Remaining known proxies (current config's relative order), disabled,
-        // keeping their existing settings; central among them is also deferred.
         for entry in &self.proxies {
             if in_chain.contains(&entry.name) {
                 continue;
             }
-            let disabled = ProxyEntry {
+            let e = ProxyEntry {
                 name: entry.name,
                 enabled: false,
                 settings: entry.settings.clone(),
             };
             if entry.name.must_be_last() {
-                central = Some(disabled);
+                central = Some(e);
             } else {
-                proxies.push(disabled);
+                proxies.push(e);
             }
         }
-
-        // Central is always last (if the config knows about it at all).
         if let Some(c) = central {
             proxies.push(c);
         }
-
-        let next = Config {
-            version: self.version,
-            proxies,
-            defaults: self.defaults.clone(),
-        };
-        next.save()
+        proxies
     }
 
     /// Validate the config invariants: each entry's settings variant matches its
