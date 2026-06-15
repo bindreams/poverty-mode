@@ -255,6 +255,35 @@ impl TransformKind {
     }
 }
 
+/// The header Claude Code stamps on subagent (Task-tool) requests; absent on the
+/// main loop. The only reliable main-vs-subagent discriminator — subagents inherit
+/// the main loop's env, settings, auth, and URL, so nothing else on the wire differs.
+pub const SUBAGENT_HEADER: &str = "x-claude-code-agent-id";
+
+/// Per-request classification handed to body transforms. Carries only what a
+/// transform varies behavior on (currently subagent vs main). `Copy` so the engine
+/// can move it into the `spawn_blocking` transform closure.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RequestContext {
+    /// True when the request carries a non-empty `x-claude-code-agent-id`.
+    pub is_subagent: bool,
+}
+
+impl RequestContext {
+    /// Classify a request from its inbound headers. Subagent ⇔ a present, non-empty
+    /// `x-claude-code-agent-id` (an empty value is not a subagent — matches Claude
+    /// Code's `Boolean(header)` truthiness). Real agent IDs are ASCII; a non-ASCII
+    /// value (`to_str` fails) is treated as main, as is a multi-valued header whose
+    /// first value is empty (`HeaderMap::get` reads only the first).
+    pub fn from_headers(headers: &http::HeaderMap) -> Self {
+        let is_subagent = headers
+            .get(SUBAGENT_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|s| !s.is_empty());
+        RequestContext { is_subagent }
+    }
+}
+
 /// A request-body mutation applied to a transformed `POST /v1/messages`.
 ///
 /// `transform_bytes` is the byte-fidelity seam (FIX-B): it takes the ORIGINAL

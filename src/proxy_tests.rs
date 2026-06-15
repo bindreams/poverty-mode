@@ -456,3 +456,53 @@ fn transform_kind_headroom_yields_a_boxed_transform() {
         "headroom kind yields a transform"
     );
 }
+
+// ---- RequestContext subagent detection ----
+
+#[test]
+fn request_context_detects_subagent_from_nonempty_header() {
+    let mut h = http::HeaderMap::new();
+    h.insert(
+        SUBAGENT_HEADER,
+        http::HeaderValue::from_static("agent_general-purpose_01J"),
+    );
+    assert!(RequestContext::from_headers(&h).is_subagent);
+}
+
+#[test]
+fn request_context_main_when_header_absent() {
+    let h = http::HeaderMap::new();
+    assert!(!RequestContext::from_headers(&h).is_subagent);
+    assert_eq!(RequestContext::from_headers(&h), RequestContext::default());
+}
+
+#[test]
+fn request_context_main_when_header_present_but_empty() {
+    // Matches Claude Code's `Boolean(header)` truthiness: "" is not a subagent.
+    let mut h = http::HeaderMap::new();
+    h.insert(SUBAGENT_HEADER, http::HeaderValue::from_static(""));
+    assert!(!RequestContext::from_headers(&h).is_subagent);
+}
+
+#[test]
+fn request_context_main_when_header_value_not_ascii() {
+    // Real agent IDs are ASCII; a non-ASCII value (`to_str` fails) is treated as main.
+    let mut h = http::HeaderMap::new();
+    h.insert(
+        SUBAGENT_HEADER,
+        http::HeaderValue::from_bytes(b"\xff\xfe").unwrap(),
+    );
+    assert!(!RequestContext::from_headers(&h).is_subagent);
+}
+
+#[test]
+fn request_context_uses_first_value_for_duplicate_header() {
+    // `HeaderMap::get` reads only the first value: an empty first value wins.
+    let mut h = http::HeaderMap::new();
+    h.append(SUBAGENT_HEADER, http::HeaderValue::from_static(""));
+    h.append(
+        SUBAGENT_HEADER,
+        http::HeaderValue::from_static("agent_general-purpose_01J"),
+    );
+    assert!(!RequestContext::from_headers(&h).is_subagent);
+}
