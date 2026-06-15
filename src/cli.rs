@@ -266,7 +266,7 @@ pub struct HeadroomArgs {
 /// `--main-ttl` / `--sub-ttl` value enum mapping to [`CacheTtl`] (`5m` / `1h`).
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CacheTtlArg {
-    /// 5-minute cache TTL (default).
+    /// 5-minute cache TTL.
     #[value(name = "5m")]
     FiveMin,
     /// 1-hour cache TTL.

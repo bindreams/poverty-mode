@@ -18,26 +18,7 @@ fn upstream(s: &str) -> Upstream {
 }
 
 async fn raw_post(port: u16, path: &str, body: &str) -> (StatusCode, String) {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    let stream = TcpStream::connect(addr).await.expect("connect stub");
-    let io = TokioIo::new(stream);
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
-        .await
-        .expect("handshake");
-    tokio::spawn(async move {
-        let _ = conn.await;
-    });
-    let req = Request::builder()
-        .method("POST")
-        .uri(path)
-        .header("host", format!("127.0.0.1:{port}"))
-        .header("content-type", "application/json")
-        .body(Full::<Bytes>::from(body.to_string()))
-        .unwrap();
-    let resp = sender.send_request(req).await.expect("send");
-    let status = resp.status();
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    (status, String::from_utf8_lossy(&bytes).to_string())
+    raw_post_with_header(port, path, body, None).await
 }
 
 async fn raw_post_with_header(

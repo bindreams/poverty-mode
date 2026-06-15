@@ -1011,7 +1011,7 @@ fn strip_small_system_uses_utf16_length_at_boundary() {
 
 use super::inject_breakpoint_if_absent;
 
-fn cc(block: &serde_json::Value) -> Option<&serde_json::Value> {
+fn cc_of(block: &serde_json::Value) -> Option<&serde_json::Value> {
     block.get("cache_control")
 }
 
@@ -1037,27 +1037,27 @@ fn inject_places_tools_system_msg0_tail_within_cap() {
     // Uniform TTL: every injected slot carries the passed ttl (5m).
     let tools = body["tools"].as_array().unwrap();
     assert_eq!(
-        cc(&tools[1]).unwrap(),
+        cc_of(&tools[1]).unwrap(),
         &json!({ "type": "ephemeral", "ttl": "5m" })
     );
-    assert!(cc(&tools[0]).is_none());
+    assert!(cc_of(&tools[0]).is_none());
 
     let system = body["system"].as_array().unwrap();
     assert_eq!(
-        cc(&system[1]).unwrap(),
+        cc_of(&system[1]).unwrap(),
         &json!({ "type": "ephemeral", "ttl": "5m" })
     );
-    assert!(cc(&system[0]).is_none());
+    assert!(cc_of(&system[0]).is_none());
 
     let msg0 = body["messages"][0]["content"].as_array().unwrap();
     assert_eq!(
-        cc(&msg0[1]).unwrap(),
+        cc_of(&msg0[1]).unwrap(),
         &json!({ "type": "ephemeral", "ttl": "5m" })
     );
 
     let last_block = &body["messages"][2]["content"][0];
     assert_eq!(
-        cc(last_block).unwrap(),
+        cc_of(last_block).unwrap(),
         &json!({ "type": "ephemeral", "ttl": "5m" })
     );
     assert_eq!(tail_paths, vec!["/messages/2/content/0".to_string()]);
@@ -1072,7 +1072,7 @@ fn inject_skips_tools_when_already_has_breakpoint() {
         "messages": [ { "role": "user", "content": [ { "type": "text", "text": "hi" } ] } ]
     });
     inject_breakpoint_if_absent(&mut body, CacheTtl::FiveMin);
-    assert!(cc(&body["tools"][1]).is_none());
+    assert!(cc_of(&body["tools"][1]).is_none());
 }
 
 #[test]
@@ -1099,7 +1099,7 @@ fn inject_skips_msg0_breakpoint_when_single_message() {
     let blocks = body["messages"][0]["content"].as_array().unwrap();
     assert_eq!(count_cache_breakpoints(&body), 1);
     assert_eq!(
-        cc(&blocks[0]).unwrap(),
+        cc_of(&blocks[0]).unwrap(),
         &json!({ "type": "ephemeral", "ttl": "1h" })
     );
     assert_eq!(tail_paths, vec!["/messages/0/content/0".to_string()]);
@@ -1126,7 +1126,7 @@ fn inject_strips_small_system_breakpoint_then_reuses_slot() {
     });
     inject_breakpoint_if_absent(&mut body, CacheTtl::FiveMin);
     assert_eq!(
-        cc(&body["system"][0]).unwrap(),
+        cc_of(&body["system"][0]).unwrap(),
         &json!({ "type": "ephemeral", "ttl": "5m" })
     );
 }
@@ -1161,7 +1161,7 @@ fn inject_len_gt_one_only_msg0_cacheable_no_duplicate_tail() {
     let tail_paths = inject_breakpoint_if_absent(&mut body, CacheTtl::FiveMin);
     // msg0 block keeps its 5m (msg0 pass), tail pass adds nothing.
     assert_eq!(
-        cc(&body["messages"][0]["content"][0]).unwrap(),
+        cc_of(&body["messages"][0]["content"][0]).unwrap(),
         &json!({ "type": "ephemeral", "ttl": "5m" })
     );
     assert_eq!(

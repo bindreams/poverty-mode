@@ -797,7 +797,7 @@ pub fn inject_breakpoint_if_absent(body: &mut Value, ttl: CacheTtl) -> Vec<Strin
     tail_paths
 }
 
-// --- tail normalization + 1h rewrite with skip-set (cache.js 3-26, 44-59) -----
+// --- tail normalization + ttl rewrite with skip-set (cache.js 3-26, 44-59) -----
 
 use std::collections::HashSet;
 
