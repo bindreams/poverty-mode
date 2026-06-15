@@ -3,3 +3,6 @@ vendor/**/target/
 .tmp/
 __pycache__/
 .pytest_cache/
+
+.claude/*.local.*
+CLAUDE.local.md
