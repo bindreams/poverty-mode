@@ -17,7 +17,6 @@ use hyper::body::Bytes;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
-use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
 
 /// Build a small `.tar.gz` in memory containing one file `file_rel` with known contents.
@@ -38,18 +37,6 @@ pub fn make_tar_gz_fixture(file_rel: &str, contents: &[u8]) -> Vec<u8> {
     let mut gz = GzEncoder::new(Vec::new(), Compression::default());
     gz.write_all(&tar_bytes).unwrap();
     gz.finish().unwrap()
-}
-
-/// Lowercase hex sha256 of `bytes`.
-pub fn sha256_hex(bytes: &[u8]) -> String {
-    let mut h = Sha256::new();
-    h.update(bytes);
-    let d = h.finalize();
-    let mut s = String::with_capacity(d.len() * 2);
-    for b in d {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
 }
 
 /// Start a hyper server on 127.0.0.1:0 that serves `body` (raw bytes) for EVERY request. Returns the

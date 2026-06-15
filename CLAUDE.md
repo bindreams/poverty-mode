@@ -19,9 +19,10 @@ cargo build && cargo test && cargo clippy --all-targets -- -D warnings && cargo 
 - **One engine, two transforms.** pino and headroom share `src/proxy.rs`; per-proxy behavior belongs in `proxy/pino.rs` / `proxy/headroom.rs`, not the engine.
 - **Byte-fidelity.** Don't re-serialize a body the transform didn't change — forward the original bytes. Re-canonicalizing the cache-hot zone defeats the prompt cache the proxy exists to protect.
 - **`Agent` is generic** (`argv[0]` is the program to spawn); don't hardcode `claude`. Central is always the last hop.
+- **Central is external-by-default.** `central::central_source` is the single External-vs-Download decision point: a non-blank `CentralSettings.executable` (default `jbcentral`) is used as-is; blank/unset downloads the latest `jbcentral` unpinned. poverty-mode never writes `~/.wire` config, never runs `jbcentral config set`, and never drives login — the user is assumed logged in. There is no `central` subcommand and no SHA pin.
 - **No sleeps / time-based sync** — drain-on-signal + the READY-line handshake; the only numeric timeout is the human-surfaced readiness deadline. No data races.
 - **Vendored `headroom-core`** is a feature-trimmed path dep; never re-add its ONNX/embedding dependencies.
-- **Live tests** (`central_live`, `agent_empirical`) are `#[ignore]`; never run `jbcentral login` non-interactively or in CI.
+- **Live tests** (`central_live`, `agent_empirical`) are `#[ignore]`; they assume a pre-existing JetBrains login and never run in CI.
 
 ## Identity
 

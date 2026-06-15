@@ -87,6 +87,25 @@ fn run_parses_prefixed_setting_flags_into_overrides() {
 }
 
 #[test]
+fn central_executable_flag_projects_into_override() {
+    let args = RunSettingsArgs {
+        central_executable: Some("/opt/jb".into()),
+        ..Default::default()
+    };
+    let ov = args.to_overrides();
+    assert_eq!(ov.central.executable.as_deref(), Some("/opt/jb"));
+}
+
+#[test]
+fn run_parses_central_executable_flag_into_override() {
+    let cli = Cli::try_parse_from(["poverty-mode", "run", "--central-executable", "/opt/jb", "--", "claude"]).unwrap();
+    let Command::Run { settings, .. } = cli.command else {
+        panic!("expected Run")
+    };
+    assert_eq!(settings.to_overrides().central.executable.as_deref(), Some("/opt/jb"));
+}
+
+#[test]
 fn run_without_setting_flags_yields_empty_overrides() {
     let cli = Cli::try_parse_from(["poverty-mode", "run", "--", "claude"]).unwrap();
     let Command::Run { settings, .. } = cli.command else {
@@ -236,15 +255,7 @@ fn proxy_pino_reads_pino_group_via_which() {
 }
 
 #[test]
-fn parses_central_and_config_subactions() {
-    let cli = Cli::try_parse_from(["poverty-mode", "central", "login"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Command::Central {
-            action: CentralAction::Login
-        }
-    ));
-
+fn parses_config_path_subaction() {
     let cli = Cli::try_parse_from(["poverty-mode", "config", "path"]).unwrap();
     assert!(matches!(
         cli.command,
@@ -474,13 +485,13 @@ fn proxy_transform_kind_matches_chosen_proxy() {
     }
 }
 
-// FIX-D: `central` / `config` subcommand dispatch =====================================================================
+// FIX-D: `config` subcommand dispatch =================================================================================
 //
 // These exercise the safe, hermetic arms of the new dispatch handlers. The env
 // guards (`crate::test_support`) serialize and isolate the config/cache roots so
-// the tests never touch the real user dirs (R13/R23j). The live `central login`
-// and `central status`-against-a-running-daemon paths spawn `jbcentral` and need a
-// real install + login; those are covered by `#[ignore]` live tests below.
+// the tests never touch the real user dirs (R13/R23j). The live central paths
+// (daemon start/health/stop against a real `jbcentral`) are covered by `#[ignore]`
+// live tests below.
 
 #[test]
 fn dispatch_config_path_succeeds_in_isolated_home() {
@@ -506,42 +517,6 @@ fn dispatch_config_show_creates_default_and_succeeds() {
     let text = std::fs::read_to_string(guard.config_file()).expect("config written on first show");
     let cfg: crate::config::Config = serde_yaml::from_str(&text).unwrap();
     assert_eq!(cfg, crate::config::Config::default_all_disabled());
-}
-
-#[test]
-fn dispatch_central_stop_when_not_installed_is_ok() {
-    // Point the cache at an empty temp dir: no jbcentral install => `central stop`
-    // has nothing to stop and returns Ok WITHOUT spawning any process or hitting
-    // the network. This is the safe, hermetic stop path.
-    let dir = tempfile::TempDir::new().unwrap();
-    let _guard = crate::test_support::EnvVarGuard::set("POVERTY_CACHE_DIR", Some(dir.path()));
-    let cli = Cli::try_parse_from(["poverty-mode", "central", "stop"]).unwrap();
-    dispatch(cli, None).expect("`central stop` with no install should be Ok");
-}
-
-#[test]
-fn dispatch_central_status_when_not_installed_is_ok() {
-    // With an empty cache there is no install, so `central status` reports
-    // not-installed/stopped/unknown and returns Ok without any network probe
-    // (the empty-versions short-circuit skips `/health` entirely).
-    let dir = tempfile::TempDir::new().unwrap();
-    let _guard = crate::test_support::EnvVarGuard::set("POVERTY_CACHE_DIR", Some(dir.path()));
-    let cli = Cli::try_parse_from(["poverty-mode", "central", "status"]).unwrap();
-    dispatch(cli, None).expect("`central status` with no install should be Ok");
-}
-
-#[test]
-#[ignore = "live: spawns `jbcentral` and drives the interactive browser-OAuth login (needs a real install + JetBrains AI Pro)"]
-fn dispatch_central_login_live() {
-    let cli = Cli::try_parse_from(["poverty-mode", "central", "login"]).unwrap();
-    dispatch(cli, None).expect("`central login` should succeed against a real jbcentral");
-}
-
-#[test]
-#[ignore = "live: classifies login via a real `jbcentral status` and probes a running daemon's /health"]
-fn dispatch_central_status_live() {
-    let cli = Cli::try_parse_from(["poverty-mode", "central", "status"]).unwrap();
-    dispatch(cli, None).expect("`central status` should succeed against a real jbcentral");
 }
 
 #[test]

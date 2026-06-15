@@ -1,13 +1,11 @@
-//! On-demand download manager: per-OS/arch URL templating, mandatory sha256 verification against a
-//! per-version pin (R14), archive extraction, and a lock-serialized replace into the bin cache. Used
-//! only for `jbcentral` in v1.
+//! On-demand download manager: per-OS/arch URL templating, archive extraction, and a lock-serialized
+//! replace into the bin cache. Used only for `jbcentral` in v1.
 
 use std::fs;
 use std::io::Cursor;
 use std::path::Path;
 
 use anyhow::{anyhow, bail, Context};
-use sha2::{Digest, Sha256};
 
 use crate::paths;
 
@@ -58,8 +56,7 @@ pub fn host_arch() -> anyhow::Result<&'static str> {
 
 /// Extract an in-memory archive into `dest_dir`, dispatching on `name`'s suffix:
 /// `*.tar.gz` / `*.tgz` -> gzip+tar, `*.zip` -> zip. Any other suffix is an error.
-/// `dest_dir` is created if absent. These are our own pinned, sha256-verified JetBrains assets; both
-/// `tar` and `zip` sanitize path traversal internally.
+/// `dest_dir` is created if absent. Both `tar` and `zip` sanitize path traversal internally.
 pub fn extract_archive(bytes: &[u8], name: &str, dest_dir: &Path) -> anyhow::Result<()> {
     fs::create_dir_all(dest_dir).with_context(|| format!("creating extract dir {}", dest_dir.display()))?;
 
@@ -82,89 +79,16 @@ pub fn extract_archive(bytes: &[u8], name: &str, dest_dir: &Path) -> anyhow::Res
     }
 }
 
-/// Hard-pinned sha256 (lowercase hex) per `(version, os, arch)` jbcentral asset (R14).
-///
-/// Populated for the default version in Task M8.12 via `curl -fsSL <asset-url> | sha256sum`.
-/// `os ∈ {darwin,linux,windows}`, `arch ∈ {x86_64,arm64}`; there is no windows-arm64 row (no asset).
-/// `download_verify_extract` fails closed when a pin is required but absent or mismatched.
-pub const PINNED_SHA256: &[(&str, &str, &str, &str)] = &[
-    (
-        "0.2.9",
-        "darwin",
-        "x86_64",
-        "5609f05baedd8e279c8dfe2cd6b19e225e6a45d1e458a0c9a424842b6e473ce9",
-    ),
-    (
-        "0.2.9",
-        "darwin",
-        "arm64",
-        "b54a0ed341d492389901065720b42d09c73e69f2ed5ddd9bc7f67c1a5aa57d4a",
-    ),
-    (
-        "0.2.9",
-        "linux",
-        "x86_64",
-        "82c4ee0f4e7468fb2f7945a413fbe7b8ad63634b2ca10e3956f37ac0cfdb318d",
-    ),
-    (
-        "0.2.9",
-        "linux",
-        "arm64",
-        "dc5d634809f2650c8d25421222cce2e4f3678871d03d04f5000b6f064120c25a",
-    ),
-    (
-        "0.2.9",
-        "windows",
-        "x86_64",
-        "d7b56d88c2373ba9168209d8243b60208abcd1693e4c5818ba91e42bd4000616",
-    ),
-];
-
-/// Look up the pinned sha256 for an exact `(version, os, arch)`.
-pub fn pinned_sha256(version: &str, os: &str, arch: &str) -> Option<&'static str> {
-    PINNED_SHA256
-        .iter()
-        .find(|(v, o, a, _)| *v == version && *o == os && *a == arch)
-        .map(|(_, _, _, sum)| *sum)
-}
-
-/// Hex-encode a byte slice (lowercase).
-fn to_hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
-}
-
-/// Verify (if `expected_sha256` is `Some`) then replace `dest_dir` with a fresh extraction of `bytes`.
+/// Replace `dest_dir` with a fresh extraction of `bytes`.
 ///
 /// **Replace semantics (R20, accurate wording):** this is a *lock-serialized* replace, NOT atomic at
 /// the filesystem level. Extraction happens in a sibling temp dir; an existing `dest_dir` is first
 /// renamed aside (`<dest>.old-<pid>`), then the staged dir is renamed into place, then the old dir is
 /// removed. The window in which `dest_dir` is momentarily absent is closed against *writers* by the
 /// advisory file lock held in `download_verify_extract`; *readers* (status/clean/orchestrator
-/// `is_installed`) must take the same lock for a consistent view. A checksum mismatch returns an error
-/// and never creates `dest_dir`. This is the network-free seam used by both `download_verify_extract`
-/// and the unit tests.
-pub fn verify_and_extract_bytes(
-    bytes: &[u8],
-    name: &str,
-    expected_sha256: Option<&str>,
-    dest_dir: &Path,
-) -> anyhow::Result<()> {
-    if let Some(expected) = expected_sha256 {
-        let mut hasher = Sha256::new();
-        hasher.update(bytes);
-        let actual = to_hex(&hasher.finalize());
-        if !actual.eq_ignore_ascii_case(expected.trim()) {
-            bail!(
-                "checksum mismatch for \"{name}\": sha256 expected {}, got {actual}",
-                expected.trim()
-            );
-        }
-    }
-
+/// `is_installed`) must take the same lock for a consistent view. This is the network-free seam used
+/// by both `download_verify_extract` and the unit tests.
+pub fn verify_and_extract_bytes(bytes: &[u8], name: &str, dest_dir: &Path) -> anyhow::Result<()> {
     let parent = dest_dir
         .parent()
         .ok_or_else(|| anyhow!("destination {} has no parent dir", dest_dir.display()))?;
@@ -209,8 +133,7 @@ pub fn verify_and_extract_bytes(
     Ok(())
 }
 
-/// Download `url`, verify its sha256 (REQUIRED — `sha256` must be `Some` for a real asset; `None` is
-/// only valid for the test path), and replace `dest_dir` with the extraction.
+/// Download `url` and replace `dest_dir` with the extraction.
 ///
 /// **R5 contract:** this is a synchronous `reqwest::blocking` GET. Callers in an async context MUST
 /// invoke it via `tokio::task::spawn_blocking`.
@@ -219,7 +142,7 @@ pub fn verify_and_extract_bytes(
 /// runs racing the first download cooperate (the loser re-extracts into a fresh staging dir, which is
 /// cheap and correct). The blocking client uses reqwest's native-roots TLS (M1, R2) — no
 /// rustls-platform-verifier.
-pub fn download_verify_extract(url: &str, sha256: Option<&str>, dest_dir: &Path) -> anyhow::Result<()> {
+pub fn download_verify_extract(url: &str, dest_dir: &Path) -> anyhow::Result<()> {
     let parent = dest_dir
         .parent()
         .ok_or_else(|| anyhow!("destination {} has no parent dir", dest_dir.display()))?;
@@ -251,7 +174,7 @@ pub fn download_verify_extract(url: &str, sha256: Option<&str>, dest_dir: &Path)
             .with_context(|| format!("non-success status from {url}"))?;
         let bytes = resp.bytes().with_context(|| format!("reading body of {url}"))?;
 
-        verify_and_extract_bytes(&bytes, &name, sha256, dest_dir)
+        verify_and_extract_bytes(&bytes, &name, dest_dir)
     })
 }
 

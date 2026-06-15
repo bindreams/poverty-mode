@@ -128,20 +128,140 @@ fn central_asset_available_excludes_windows_arm64() {
     assert!(!central_asset_available("windows", "aarch64"));
 }
 
+/// An absolute path guaranteed to exist and be executable on every platform: the
+/// running test binary itself. `which::which` resolves an explicit path verbatim
+/// when it exists and is executable, so this is a fully hermetic stand-in for a
+/// resolvable external central binary (no dependency on ambient `$PATH`).
+fn resolvable_executable() -> std::path::PathBuf {
+    std::env::current_exe().expect("test binary path")
+}
+
+#[test]
+fn external_mode_skips_asset_warning() {
+    // A resolvable external binary means External mode emits no asset warning
+    // regardless of target.
+    let findings = analyze_central(
+        crate::central::CentralSource::External(resolvable_executable()),
+        "windows",
+        "aarch64",
+    );
+    assert!(!findings.iter().any(|f| f.message.contains("no jbcentral asset")));
+    assert!(findings.is_empty(), "resolvable external binary is quiet: {findings:?}");
+}
+
+#[test]
+fn external_mode_warns_when_executable_unresolvable() {
+    // An external binary that resolves on neither PATH nor the filesystem warns,
+    // but never with the download-path "no jbcentral asset" message.
+    // Use an explicit non-existent path so the test never depends on ambient $PATH.
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("nonexistent-central");
+    let findings = analyze_central(crate::central::CentralSource::External(missing), "linux", "x86_64");
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].domain, FindingDomain::Toolchain);
+    assert!(findings[0].layer.is_none());
+    assert_eq!(findings[0].severity, Severity::Warn);
+    assert!(findings[0].message.contains("not found on PATH or filesystem"));
+    assert!(!findings[0].message.contains("no jbcentral asset"));
+}
+
+#[test]
+fn download_mode_warns_on_missing_asset() {
+    let findings = analyze_central(crate::central::CentralSource::Download, "windows", "aarch64");
+    assert!(findings.iter().any(|f| f.message.contains("no jbcentral asset")));
+}
+
+#[test]
+fn download_mode_quiet_when_asset_available() {
+    let findings = analyze_central(crate::central::CentralSource::Download, "linux", "x86_64");
+    assert!(findings.is_empty(), "got: {findings:?}");
+}
+
+#[test]
+fn assemble_findings_merges_toolchain_and_central() {
+    // The pure assembly seam used by `run_doctor`: no settings layers, an
+    // unsupported target, and Download central on a target with no asset ->
+    // both the unsupported-target Error and the no-asset Warn surface.
+    let findings = assemble_findings(&[], "windows", "aarch64", Ok(crate::central::CentralSource::Download));
+    assert!(findings
+        .iter()
+        .any(|f| f.severity == Severity::Error && f.message.to_lowercase().contains("unsupported")));
+    assert!(findings.iter().any(|f| f.message.contains("no jbcentral asset")));
+}
+
+#[test]
+fn assemble_findings_external_central_no_asset_warning() {
+    // External mode on the windows/aarch64 hole: the unsupported-target finding
+    // still surfaces, but the central asset warning does NOT (External skips it).
+    let findings = assemble_findings(
+        &[],
+        "windows",
+        "aarch64",
+        Ok(crate::central::CentralSource::External(resolvable_executable())),
+    );
+    assert!(findings
+        .iter()
+        .any(|f| f.severity == Severity::Error && f.message.to_lowercase().contains("unsupported")));
+    assert!(!findings.iter().any(|f| f.message.contains("no jbcentral asset")));
+}
+
+#[test]
+fn assemble_findings_warns_on_unparseable_config() {
+    // A config that could not be loaded must NOT abort doctor: it surfaces a Warn
+    // finding describing the failure and skips the central readiness check (no
+    // "no jbcentral asset" / executable findings), while toolchain findings still
+    // surface for a supported target (none here).
+    let findings = assemble_findings(
+        &[],
+        "linux",
+        "x86_64",
+        Err("parsing config /x/poverty-mode.yaml: bad".to_string()),
+    );
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].domain, FindingDomain::Toolchain);
+    assert_eq!(findings[0].severity, Severity::Warn);
+    assert!(findings[0].message.contains("could not read config"));
+    assert!(findings[0].message.contains("parsing config"));
+    assert!(!findings[0].message.contains("no jbcentral asset"));
+}
+
+#[test]
+fn run_doctor_uses_on_disk_config_without_creating_one() {
+    // Hermetic: isolate the config home so `run_doctor`'s `load_or_default` reads
+    // only our temp dir. With no config file present, doctor must NOT create one
+    // (read-only contract), and must complete without panicking.
+    let guard = crate::test_support::ConfigHomeGuard::new();
+    let ok = run_doctor().expect("run_doctor must not error");
+    let _ = ok; // exit code depends on host target; we only assert it runs.
+    assert!(!guard.config_file().exists(), "doctor must not create a config file");
+}
+
+#[test]
+fn run_doctor_does_not_abort_on_unparseable_config() {
+    // Regression: doctor reads the config READ-ONLY to resolve the central source.
+    // A malformed/incompatible on-disk config must NOT abort the whole command --
+    // doctor degrades to a Warn finding and still reports everything else.
+    let guard = crate::test_support::ConfigHomeGuard::new();
+    std::fs::write(guard.config_file(), "not: [valid, config\n").unwrap();
+    let ok = run_doctor().expect("run_doctor must not error on a broken config");
+    let _ = ok;
+}
+
 #[test]
 fn toolchain_finding_emitted_for_unsupported_target() {
+    // The central-asset check now lives in `analyze_central` (see
+    // `download_mode_warns_on_missing_asset`), so the unsupported target yields
+    // exactly the one unsupported-build-target finding.
     let findings = analyze_toolchain("windows", "aarch64");
-    assert_eq!(findings.len(), 2);
+    assert_eq!(findings.len(), 1);
     // Every toolchain finding is domain Toolchain with no settings layer.
     assert!(findings
         .iter()
         .all(|f| f.domain == FindingDomain::Toolchain && f.layer.is_none()));
-    // First: unsupported build target (Error).
+    // The sole finding: unsupported build target (Error).
     assert!(findings
         .iter()
         .any(|f| f.severity == Severity::Error && f.message.to_lowercase().contains("unsupported")));
-    // Second: no central asset (mentions central).
-    assert!(findings.iter().any(|f| f.message.to_lowercase().contains("central")));
 }
 
 #[test]
@@ -151,13 +271,15 @@ fn toolchain_finding_empty_for_supported_target_with_asset() {
 }
 
 #[test]
-fn toolchain_finding_central_only_hole_for_windows_arm64_is_warn() {
-    // Supported build target with no central asset -> exactly one Warn, no Error.
-    // (windows/aarch64 is unsupported; use a hypothetical supported-but-no-asset
-    //  guard by checking the asset-only branch via central_asset_available.)
-    // Here we assert the asset-availability semantics directly are consistent with
-    // analyze_toolchain on the unsupported windows/aarch64 case above.
-    assert!(!central_asset_available("windows", "aarch64"));
+fn central_finding_for_windows_arm64_download_is_warn_only() {
+    // The central-asset hole (windows/aarch64, no jbcentral asset) now surfaces via
+    // `analyze_central` in Download mode: exactly one Warn finding, no Error.
+    let findings = analyze_central(crate::central::CentralSource::Download, "windows", "aarch64");
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].severity, Severity::Warn);
+    assert_eq!(findings[0].domain, FindingDomain::Toolchain);
+    assert!(findings[0].layer.is_none());
+    assert!(findings[0].message.contains("no jbcentral asset"));
 }
 
 #[test]

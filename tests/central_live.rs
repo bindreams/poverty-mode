@@ -6,7 +6,7 @@
 use poverty_mode::central;
 
 #[test]
-#[ignore = "live: downloads jbcentral over the network (sha256-pinned)"]
+#[ignore = "live: downloads jbcentral over the network"]
 fn ensure_installed_downloads_resolved_version() {
     let version = central::resolve_version(None);
     let bin = central::ensure_installed(&version).expect("install jbcentral");
@@ -17,14 +17,14 @@ fn ensure_installed_downloads_resolved_version() {
 }
 
 #[test]
-#[ignore = "live: requires interactive JetBrains login + daemon start"]
+#[ignore = "live: requires a pre-existing JetBrains login + daemon start"]
 fn login_start_health_stop_round_trip() {
     let version = central::resolve_version(None);
     let bin = central::ensure_installed(&version).expect("install jbcentral");
-    central::ensure_logged_in(&bin).expect("login to JB Central");
 
-    // start is threaded the SAME resolved version it was installed at (R4).
-    let info = central::start(&bin, None, &version).expect("start central daemon");
+    // Login is assumed (the run path no longer logs in). `start` no longer takes a
+    // version — it never runs `config set`.
+    let info = central::start(&bin, None).expect("start central daemon");
     assert!(info.port > 0, "expected a bound proxy port");
     assert!(!info.secret.is_empty(), "expected a proxy secret");
 

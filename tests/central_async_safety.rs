@@ -1,7 +1,7 @@
 //! R5 guard: M8's blocking surface must be safe to call via spawn_blocking from a tokio runtime.
 //! A regression that performed blocking I/O directly on the async executor would panic here.
 
-use poverty_mode::{central, download};
+use poverty_mode::central;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn blocking_surface_is_spawn_blocking_safe() {
@@ -30,11 +30,4 @@ async fn blocking_surface_is_spawn_blocking_safe() {
         .await
         .unwrap();
     assert_eq!(state, central::CentralLoginState::LoggedIn);
-
-    let has_pin = tokio::task::spawn_blocking(|| {
-        download::pinned_sha256(central::DEFAULT_JBCENTRAL_VERSION, "linux", "x86_64").is_some()
-    })
-    .await
-    .unwrap();
-    assert!(has_pin, "default-version linux/x86_64 pin must exist after M8.12");
 }

@@ -131,6 +131,39 @@ fn central_settings_default_when_fields_omitted() {
     let c = central_of(&s);
     assert_eq!(c.port, None);
     assert_eq!(c.pinned_version, None);
+    assert_eq!(c.executable, None);
+}
+
+#[test]
+fn default_central_executable_is_jbcentral() {
+    let cfg = Config::default_all_disabled();
+    let central = central_of(&cfg.proxies[2].settings);
+    assert_eq!(central.executable.as_deref(), Some("jbcentral"));
+}
+
+#[test]
+fn central_executable_reads_trailing_central_entry() {
+    // The default config's central entry carries `jbcentral`.
+    assert_eq!(
+        Config::default_all_disabled().central_executable().as_deref(),
+        Some("jbcentral")
+    );
+}
+
+#[test]
+fn central_executable_is_none_when_blank_or_absent() {
+    // Blank/None executable on the central entry => None (Download mode).
+    let mut cfg = Config::default_all_disabled();
+    if let ProxySettings::Central(c) = &mut cfg.proxies[2].settings {
+        c.executable = None;
+    } else {
+        panic!("expected central entry last");
+    }
+    assert_eq!(cfg.central_executable(), None);
+
+    // No central entry at all => None.
+    cfg.proxies.retain(|e| e.name != ProxyName::Central);
+    assert_eq!(cfg.central_executable(), None);
 }
 
 #[test]
@@ -203,6 +236,85 @@ fn load_or_create_writes_default_when_absent() {
     let on_disk = std::fs::read_to_string(g.config_file()).unwrap();
     let parsed: Config = serde_yaml::from_str(&on_disk).unwrap();
     assert_eq!(parsed, Config::default_all_disabled());
+}
+
+#[test]
+fn load_or_default_returns_default_without_writing_when_absent() {
+    let g = ConfigHomeGuard::new();
+    assert!(!g.config_file().exists());
+
+    let cfg = Config::load_or_default().unwrap();
+    assert_eq!(cfg, Config::default_all_disabled());
+    // Read-only: the file must NOT have been created as a side effect.
+    assert!(
+        !g.config_file().exists(),
+        "load_or_default must not create the config file"
+    );
+}
+
+#[test]
+fn load_or_default_reads_existing_file() {
+    let g = ConfigHomeGuard::new();
+    // User enabled pino by hand (main_ttl 1h).
+    let edited = r#"version: 1
+proxies:
+  - name: pino
+    enabled: true
+    settings:
+      auto_cache: true
+      main_ttl: 1h
+      sub_ttl: 5m
+      drop_tools: []
+      strip_ansi: true
+      model_override: null
+  - name: headroom
+    enabled: false
+    settings:
+      compression: false
+  - name: central
+    enabled: false
+    settings:
+      port: null
+      pinned_version: null
+defaults:
+  enable_tool_search: true
+"#;
+    write_file(&g.config_file(), edited);
+
+    let cfg = Config::load_or_default().unwrap();
+    assert_eq!(cfg.proxies[0].name, ProxyName::Pino);
+    assert_eq!(cfg.proxies[0].enabled, true);
+    match &cfg.proxies[0].settings {
+        ProxySettings::Pino(p) => assert_eq!(p.main_ttl, CacheTtl::OneHour),
+        other => panic!("expected pino, got {other:?}"),
+    }
+    // Reading an existing file must not rewrite it.
+    assert_eq!(std::fs::read_to_string(g.config_file()).unwrap(), edited);
+}
+
+#[test]
+fn load_or_default_errors_on_malformed_file_like_load_or_create() {
+    let g = ConfigHomeGuard::new();
+    // `name: pino` but settings are headroom-shaped (compression) -> validate fails,
+    // exactly like load_or_create's existing-file path.
+    let bad = r#"version: 1
+proxies:
+  - name: pino
+    enabled: true
+    settings:
+      compression: true
+defaults:
+  enable_tool_search: true
+"#;
+    write_file(&g.config_file(), bad);
+
+    let err = Config::load_or_default().unwrap_err();
+    let msg = err.to_string().to_lowercase();
+    assert!(msg.contains("pino"), "error should mention proxy name: {msg}");
+    assert!(
+        msg.contains("settings") || msg.contains("mismatch"),
+        "error should mention settings mismatch: {msg}"
+    );
 }
 
 #[test]
@@ -660,7 +772,9 @@ fn characterization_default_yaml_has_spec_5_2_shape() {
     assert!(yaml.contains("strip_ansi: true"), "yaml:\n{yaml}");
     // Headroom + central settings shape.
     assert!(yaml.contains("compression: true"), "yaml:\n{yaml}");
-    // central's null fields round-trip; re-parsing yields the canonical default.
+    // Central defaults to the `jbcentral` external binary (spec 5.2).
+    assert!(yaml.contains("executable: jbcentral"), "yaml:\n{yaml}");
+    // central's fields round-trip; re-parsing yields the canonical default.
     let back: Config = serde_yaml::from_str(&yaml).unwrap();
     assert_eq!(back, Config::default_all_disabled());
 }
@@ -753,6 +867,7 @@ fn with_overrides_applies_central_override() {
         central: CentralOverride {
             port: Some(9000),
             pinned_version: Some("1.2.3".into()),
+            executable: None,
         },
         ..Default::default()
     };
@@ -763,6 +878,7 @@ fn with_overrides_applies_central_override() {
         ProxySettings::Central(CentralSettings {
             port: Some(9000),
             pinned_version: Some("1.2.3".into()),
+            executable: Some("jbcentral".to_string()),
         })
     );
     // pino is unaffected by a central-only override.
@@ -782,6 +898,7 @@ fn save_full_state_rejects_central_not_last() {
             settings: ProxySettings::Central(CentralSettings {
                 port: None,
                 pinned_version: None,
+                executable: None,
             }),
         },
         ProxyEntry {
@@ -830,6 +947,7 @@ fn save_full_state_round_trips() {
             settings: ProxySettings::Central(CentralSettings {
                 port: None,
                 pinned_version: None,
+                executable: None,
             }),
         },
     ];
@@ -856,6 +974,7 @@ fn entries_for_chain_orders_enabled_then_disabled_central_last() {
     cfg.proxies[2].settings = ProxySettings::Central(CentralSettings {
         port: Some(4242),
         pinned_version: None,
+        executable: None,
     });
     let chain = vec![ResolvedProxy {
         name: ProxyName::Headroom,
@@ -889,6 +1008,7 @@ fn entries_for_chain_forces_central_last_even_if_in_chain_middle() {
             settings: ProxySettings::Central(CentralSettings {
                 port: Some(1),
                 pinned_version: None,
+                executable: None,
             }),
         },
         ResolvedProxy {
