@@ -93,6 +93,7 @@ const APP_NAME: &str = "poverty-mode";
 const CONFIG_FILE_NAME: &str = "poverty-mode.yaml";
 const STATE_DIR_ENV: &str = "POVERTY_STATE_DIR";
 const CACHE_DIR_ENV: &str = "POVERTY_CACHE_DIR";
+const LOG_DIR_ENV: &str = "POVERTY_LOG_DIR";
 
 fn project_dirs() -> anyhow::Result<directories::ProjectDirs> {
     directories::ProjectDirs::from(APP_QUALIFIER, APP_ORG, APP_NAME)
@@ -137,6 +138,95 @@ pub fn cache_dir() -> anyhow::Result<PathBuf> {
         return Ok(dir);
     }
     Ok(project_dirs()?.cache_dir().to_path_buf())
+}
+
+/// Absolute path to the per-user log directory that holds per-session run dirs.
+/// Honors `POVERTY_LOG_DIR` (non-empty value wins, for hermetic tests, like
+/// `POVERTY_CACHE_DIR`); otherwise the XDG state home joined with
+/// `poverty-mode/logs`, applied on EVERY OS (XDG-everywhere, mirroring how
+/// `config_path` honors `XDG_CONFIG_HOME` cross-platform).
+pub fn log_dir() -> anyhow::Result<PathBuf> {
+    if let Some(dir) = env_dir_override(LOG_DIR_ENV) {
+        return Ok(dir);
+    }
+    Ok(xdg_state_home()?.join(APP_NAME).join("logs"))
+}
+
+/// XDG state home, applied on every OS: `$XDG_STATE_HOME` when set, non-empty, and
+/// absolute; otherwise `<home>/.local/state`. (The XDG spec designates the state
+/// home for logs.)
+fn xdg_state_home() -> anyhow::Result<PathBuf> {
+    if let Some(v) = std::env::var_os("XDG_STATE_HOME") {
+        let p = PathBuf::from(&v);
+        if !v.is_empty() && p.is_absolute() {
+            return Ok(p);
+        }
+    }
+    let home = directories::BaseDirs::new()
+        .context("could not determine home directory for the log dir")?
+        .home_dir()
+        .to_path_buf();
+    Ok(home.join(".local").join("state"))
+}
+
+/// A fresh, findable session/run directory name: `<cwd-stem>-<local-time>-<ulid>`.
+/// The cwd stem and local timestamp make it greppable in `ls`; the trailing ULID
+/// guarantees uniqueness (so directory creation needs no retry loop) and anchors
+/// the run-dir predicate (`run_ulid`) and the chronological sort.
+pub fn new_session_name() -> String {
+    format!("{}-{}-{}", cwd_stem(), local_timestamp(), new_run_id())
+}
+
+/// The current working directory's final component, sanitized via `sanitize_stem`.
+fn cwd_stem() -> String {
+    let raw = std::env::current_dir()
+        .ok()
+        .and_then(|d| d.file_name().map(|s| s.to_string_lossy().into_owned()))
+        .unwrap_or_default();
+    sanitize_stem(&raw)
+}
+
+/// Sanitize a path component to `[A-Za-z0-9._-]` (every other char -> `_`), keeping
+/// the result both path-safe and CLI-safe (it is threaded as `--run-id`). Empty
+/// input -> `root`.
+fn sanitize_stem(raw: &str) -> String {
+    let sanitized: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if sanitized.is_empty() {
+        "root".to_string()
+    } else {
+        sanitized
+    }
+}
+
+/// Local-time stamp `YYYYMMDD-HHMMSS` for the session dir name. jiff resolves the
+/// system time zone soundly even though the process later builds a multithreaded
+/// runtime (`time::now_local()` refuses to in that case).
+fn local_timestamp() -> String {
+    jiff::Zoned::now().strftime("%Y%m%d-%H%M%S").to_string()
+}
+
+/// The ULID embedded in a run-dir name, or `None` if `name` is not a run dir.
+/// Accepts a bare ULID (`01hxyz…`) or a `<prefix>-<ULID>` name (the session
+/// scheme); the returned ULID also keys the chronological sort.
+pub(crate) fn run_ulid(name: &str) -> Option<&str> {
+    if ulid::Ulid::from_string(name).is_ok() {
+        return Some(name);
+    }
+    let (_, last) = name.rsplit_once('-')?;
+    if ulid::Ulid::from_string(last).is_ok() {
+        Some(last)
+    } else {
+        None
+    }
 }
 
 /// Absolute path to a single run's directory: `<state>/runs/<run_id>`. Pure path

@@ -457,3 +457,56 @@ fn enumerate_run_ids_empty_when_runs_dir_absent() {
     let runs = tmp.path().join("runs"); // never created
     assert!(enumerate_run_ids(&runs).unwrap().is_empty());
 }
+
+// log_dir / session naming =====
+
+#[test]
+fn log_dir_honors_poverty_log_dir_override() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let _g = EnvVarGuard::set("POVERTY_LOG_DIR", Some(dir.path()));
+    assert_eq!(log_dir().unwrap(), dir.path());
+}
+
+#[test]
+fn log_dir_empty_override_falls_back_to_absolute() {
+    let _g = EnvVarGuard::set("POVERTY_LOG_DIR", Some(std::path::Path::new("")));
+    let d = log_dir().unwrap();
+    assert!(d.is_absolute(), "fallback log dir must be absolute, got {}", d.display());
+    // `Path::ends_with` matches whole components; build the suffix from components so
+    // it is correct on Windows (`\`) as well as Unix (`/`).
+    assert!(
+        d.ends_with(std::path::Path::new("poverty-mode").join("logs")),
+        "fallback must be the XDG state subdir, got {}",
+        d.display()
+    );
+}
+
+#[test]
+fn sanitize_stem_replaces_unsafe_chars_and_defaults_empty() {
+    assert_eq!(sanitize_stem("poverty-mode"), "poverty-mode");
+    assert_eq!(sanitize_stem("my project!"), "my_project_");
+    assert_eq!(sanitize_stem("a/b\\c"), "a_b_c");
+    assert_eq!(sanitize_stem(""), "root");
+}
+
+#[test]
+fn new_session_name_is_findable_and_carries_a_ulid() {
+    let name = new_session_name();
+    // Ends with a 26-char lowercase ULID after the last dash.
+    let last = name.rsplit('-').next().unwrap();
+    assert_eq!(last.len(), 26, "session name must end with a ULID: {name}");
+    assert!(run_ulid(&name).is_some(), "session name must be recognized as a run dir: {name}");
+    // Has a prefix before the ULID (stem + timestamp).
+    assert!(name.len() > 27, "session name must carry stem + timestamp: {name}");
+}
+
+#[test]
+fn run_ulid_accepts_bare_and_suffixed_ulids_rejects_junk() {
+    let ulid = "01000000000000000000000001";
+    assert_eq!(run_ulid(ulid), Some(ulid));
+    let suffixed = format!("poverty-mode-20260615-143022-{ulid}");
+    assert_eq!(run_ulid(&suffixed), Some(ulid));
+    assert_eq!(run_ulid("not-a-ulid"), None);
+    assert_eq!(run_ulid("main"), None);
+    assert_eq!(run_ulid("my-scratch-notes"), None);
+}
