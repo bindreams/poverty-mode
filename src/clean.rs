@@ -139,6 +139,19 @@ fn newest_central_binary(cache_dir: &Path) -> Result<Option<PathBuf>> {
     crate::status::newest_central_binary(cache_dir)
 }
 
+/// Resolve the central binary the way the *run* does, honoring the configured mode:
+/// an external `executable` is used verbatim (never consulting the cache); otherwise
+/// fall back to the newest install in the managed download cache. Sharing
+/// `central::central_source` keeps `clean --stop-central` from disagreeing with the
+/// orchestrator and `status` (a blank/whitespace executable is Download, matching the run),
+/// so a running external central is stopped instead of falsely reported "not installed".
+fn resolve_central_bin(executable: Option<&str>, cache: &Path) -> Result<Option<PathBuf>> {
+    Ok(match crate::central::central_source(executable) {
+        crate::central::CentralSource::External(p) => Some(p),
+        crate::central::CentralSource::Download => newest_central_binary(cache)?,
+    })
+}
+
 /// Read a yes/no answer from stdin. Returns true only for an explicit y/yes.
 fn confirm(prompt: &str) -> Result<bool> {
     print!("{prompt}");
@@ -163,14 +176,13 @@ fn confirm(prompt: &str) -> Result<bool> {
 /// Err is a real failure); a stop failure aborts before any filesystem mutation.
 fn execute_confirmed_clean(
     plan: &CleanPlan,
-    cache: &Path,
-    resolve_bin: impl FnOnce(&Path) -> Result<Option<PathBuf>>,
+    resolve_bin: impl FnOnce() -> Result<Option<PathBuf>>,
     stop: impl FnOnce(&Path) -> Result<()>,
 ) -> Result<()> {
     // Central stop, only if opted in. Resolve + stop BEFORE the cache is cleared so
     // a `--clear-cache` clean cannot delete the binary out from under the stop step.
     if plan.stop_central {
-        match resolve_bin(cache)? {
+        match resolve_bin()? {
             Some(bin) => stop(&bin)?,
             None => println!("central not installed; nothing to stop"),
         }
@@ -199,7 +211,15 @@ pub fn run_clean(keep: usize, clear_cache: bool, stop_central: bool, assume_yes:
         return Ok(());
     }
 
-    execute_confirmed_clean(&plan, &cache, newest_central_binary, crate::central::stop)?;
+    // Resolve the binary the way the run does (external used as-is, else the download cache).
+    // Config is read lazily — only when actually stopping central, so a plain `clean` (no
+    // `--stop-central`) never loads or parses config. `execute_confirmed_clean` invokes this
+    // closure only under `plan.stop_central`.
+    let resolve_bin = || -> Result<Option<PathBuf>> {
+        let executable = crate::config::Config::load_or_default()?.central_executable();
+        resolve_central_bin(executable.as_deref(), &cache)
+    };
+    execute_confirmed_clean(&plan, resolve_bin, crate::central::stop)?;
 
     println!("clean complete");
     Ok(())

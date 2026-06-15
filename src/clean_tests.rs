@@ -248,9 +248,8 @@ fn confirmed_clean_stops_central_even_when_clearing_the_cache() {
     let stopped: std::cell::RefCell<Option<PathBuf>> = std::cell::RefCell::new(None);
     execute_confirmed_clean(
         &plan,
-        &cache,
         // Real resolver: must find the binary because the cache is still intact here.
-        newest_central_binary,
+        || newest_central_binary(&cache),
         |bin| {
             *stopped.borrow_mut() = Some(bin.to_path_buf());
             Ok(())
@@ -270,6 +269,80 @@ fn confirmed_clean_stops_central_even_when_clearing_the_cache() {
 }
 
 #[test]
+fn resolve_central_bin_uses_external_executable_verbatim() {
+    // External-by-default regression: with an external central configured, the resolver
+    // returns THAT binary verbatim and never consults the cache. The cache is left empty
+    // on purpose — a cache lookup here would (wrongly) return None and the running external
+    // singleton would be reported "not installed; nothing to stop".
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path().join("cache"); // never populated — an external central lives elsewhere
+
+    let resolved = resolve_central_bin(Some("/opt/jb/jbcentral"), &cache).unwrap();
+    assert_eq!(resolved, Some(PathBuf::from("/opt/jb/jbcentral")));
+}
+
+#[test]
+fn resolve_central_bin_falls_back_to_cache_in_download_mode() {
+    // No external executable (Download mode) -> resolve from the managed cache, agreeing
+    // with `status` (both via newest_central_binary). A blank executable is also Download.
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path().join("cache");
+    let dir = cache.join("bin").join("jbcentral").join("0.2.9");
+    fs::create_dir_all(&dir).unwrap();
+    let binpath = dir.join(crate::central::jbcentral_binary_name());
+    fs::write(&binpath, b"fake").unwrap();
+
+    for executable in [None, Some(""), Some("   ")] {
+        assert_eq!(
+            resolve_central_bin(executable, &cache).unwrap(),
+            Some(binpath.clone()),
+            "Download mode (executable={executable:?}) must resolve from the cache"
+        );
+    }
+}
+
+#[test]
+fn resolve_central_bin_download_mode_none_when_cache_empty() {
+    // Download mode with nothing installed -> None (the "nothing to stop" case).
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path().join("cache");
+    assert_eq!(resolve_central_bin(None, &cache).unwrap(), None);
+}
+
+#[test]
+fn stop_central_uses_external_executable_when_resolver_returns_it() {
+    // External-by-default regression: with an external central configured, `--stop-central`
+    // must stop THAT binary, not a cache lookup. The resolver yields the external path
+    // (skipping the cache entirely), and stop is invoked with it.
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path().join("cache"); // never populated — an external central lives elsewhere
+    let external = PathBuf::from("/opt/jb/jbcentral");
+
+    let plan = CleanPlan {
+        run_dirs_to_delete: vec![],
+        cache_dir_to_clear: None,
+        stop_central: true,
+    };
+
+    let stopped: std::cell::RefCell<Option<PathBuf>> = std::cell::RefCell::new(None);
+    execute_confirmed_clean(
+        &plan,
+        || resolve_central_bin(Some(external.to_str().unwrap()), &cache),
+        |bin| {
+            *stopped.borrow_mut() = Some(bin.to_path_buf());
+            Ok(())
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        stopped.into_inner().as_deref(),
+        Some(external.as_path()),
+        "central::stop must be invoked with the external executable, not a cache lookup"
+    );
+}
+
+#[test]
 fn confirmed_clean_without_stop_central_never_resolves_or_stops() {
     // Without --stop-central, neither the resolver nor stop runs (the resolver would
     // panic if called), and the filesystem side still executes.
@@ -286,8 +359,7 @@ fn confirmed_clean_without_stop_central_never_resolves_or_stops() {
 
     execute_confirmed_clean(
         &plan,
-        &cache,
-        |_| panic!("resolver must not run when stop_central is false"),
+        || panic!("resolver must not run when stop_central is false"),
         |_| panic!("stop must not run when stop_central is false"),
     )
     .unwrap();
