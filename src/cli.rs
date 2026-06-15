@@ -35,6 +35,12 @@ pub struct Cli {
     #[arg(long, global = true, hide = true, value_name = "JSON")]
     pub settings: Option<String>,
 
+    /// Hidden, accepted-and-(mostly-)ignored: mirrors codex's `-c key=value`
+    /// config overrides so the in-repo `__codexpost` stub agent tolerates the belt
+    /// `CodexAgent` injects. Repeatable. Only `__codexpost` reads it.
+    #[arg(short = 'c', long = "config", global = true, hide = true, value_name = "KV")]
+    pub config: Vec<String>,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -130,6 +136,12 @@ pub enum Command {
     /// deterministic in-repo "agent" in run-precedence tests.
     #[command(name = "__printenv", hide = true)]
     PrintEnv { name: String },
+
+    /// Hidden: read the codex `-c …base_url="<url>"` override from the parsed global
+    /// `-c` flags, POST an empty JSON body to `<url>/responses`, exit 0 on 2xx. A
+    /// deterministic in-repo "codex" agent for chain tests.
+    #[command(name = "__codexpost", hide = true)]
+    CodexPost,
 }
 
 /// Arguments for the `proxy` subcommand (R23b). The positional `which` selects
@@ -346,6 +358,7 @@ pub fn engine_config_from_proxy_args(args: &ProxyArgs) -> EngineConfig {
 /// real implementation; `central`/`config` delegate to [`dispatch_central`] /
 /// [`dispatch_config`].
 pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
+    let config_overrides = cli.config.clone();
     match cli.command {
         Command::Run {
             proxies,
@@ -575,6 +588,40 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
             use std::io::Write as _;
             std::io::stdout().flush().ok();
             Ok(())
+        }
+        Command::CodexPost => {
+            let prefix = format!(
+                "model_providers.{}.base_url=",
+                crate::agent::codex::PROVIDER
+            );
+            let base = config_overrides
+                .iter()
+                .find_map(|kv| kv.strip_prefix(&prefix).map(|v| v.trim_matches('"').to_string()))
+                .ok_or_else(|| anyhow::anyhow!("__codexpost: no base_url override in -c flags"))?;
+            let target = format!("{}/responses", base.trim_end_matches('/'));
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?;
+            rt.block_on(async move {
+                let resp = tokio::task::spawn_blocking(move || {
+                    reqwest::blocking::Client::builder()
+                        .redirect(reqwest::redirect::Policy::none())
+                        .build()
+                        .and_then(|c| {
+                            c.post(&target)
+                                .header("content-type", "application/json")
+                                .body("{}")
+                                .send()
+                        })
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!("codexpost task join: {e}"))?;
+                match resp {
+                    Ok(r) if r.status().is_success() => Ok(()),
+                    Ok(r) => anyhow::bail!("__codexpost got HTTP {}", r.status()),
+                    Err(e) => anyhow::bail!("__codexpost failed: {e}"),
+                }
+            })
         }
     }
 }

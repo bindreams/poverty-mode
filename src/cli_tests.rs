@@ -441,3 +441,18 @@ fn dispatch_central_status_live() {
     let cli = Cli::try_parse_from(["poverty-mode", "central", "status"]).unwrap();
     dispatch(cli).expect("`central status` should succeed against a real jbcentral");
 }
+
+#[test]
+fn hidden_config_flag_is_accepted_and_repeatable() {
+    let cli = Cli::try_parse_from([
+        "poverty-mode",
+        "-c",
+        "model_provider=\"povertymode\"",
+        "-c",
+        "model_providers.povertymode.base_url=\"http://127.0.0.1:1/codex/openai\"",
+        "__codexpost",
+    ])
+    .expect("hidden -c + __codexpost must parse");
+    assert_eq!(cli.config.len(), 2);
+    assert!(matches!(cli.command, Command::CodexPost));
+}
