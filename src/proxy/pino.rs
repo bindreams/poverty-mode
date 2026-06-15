@@ -697,7 +697,7 @@ fn find_last_cacheable_index_in_message(message: &mut Value) -> Option<usize> {
 }
 
 /// Injects cache breakpoints within the 4-cap. Returns the JSON-Pointer paths of
-/// the tail blocks placed (so the 1h-rewrite can skip them). Mirrors
+/// the tail blocks placed (so the ttl-rewrite can skip them). Mirrors
 /// injectBreakpointIfAbsent (reference/pino/src/cache.js 124-181).
 pub fn inject_breakpoint_if_absent(body: &mut Value, ttl: CacheTtl) -> Vec<String> {
     let mut tail_paths: Vec<String> = Vec::new();
