@@ -6,7 +6,7 @@
 use poverty_mode::central;
 
 #[test]
-#[ignore = "live: downloads jbcentral over the network (sha256-pinned)"]
+#[ignore = "live: downloads jbcentral over the network"]
 fn ensure_installed_downloads_resolved_version() {
     let version = central::resolve_version(None);
     let bin = central::ensure_installed(&version).expect("install jbcentral");

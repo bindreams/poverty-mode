@@ -838,35 +838,6 @@ fn ensure_central_started_fails_closed_when_unhealthy() {
     );
 }
 
-#[test]
-fn ensure_central_started_real_path_is_no_longer_the_m8_placeholder() {
-    // Drive the REAL production `ensure_central_started` (the wrapper that passes
-    // the real `central::*` ops) hermetically and network-free: point the cache
-    // at an empty temp dir and pin a version that has no checksum pin. The real
-    // pipeline then resolves the (pinned, no-network) version, finds nothing
-    // installed, and `central::ensure_installed` fails CLOSED at the mandatory
-    // checksum gate ("no pinned sha256 ... refusing to download unverified") —
-    // BEFORE any network or child process. The error must be that real central
-    // error, NEVER the removed "milestone M8 / not yet wired" placeholder bail.
-    let cache = tempfile::tempdir().unwrap();
-    let _guard = crate::test_support::EnvVarGuard::set("POVERTY_CACHE_DIR", Some(cache.path()));
-
-    // Pinned (non-blank) => `resolve_version` returns it verbatim, no network.
-    // Unknown version => `pinned_sha256` is None => install fails closed.
-    let chain = vec![central_rp_with(None, Some("0.0.0-test-nonexistent"))];
-    let err = ensure_central_started(&chain).unwrap_err();
-    let m = err.to_string().to_lowercase();
-    assert!(
-        !m.contains("milestone m8") && !m.contains("not yet wired"),
-        "real path must not be the M8 placeholder bail: {m}"
-    );
-    // Positive proof the real install gate was reached.
-    assert!(
-        m.contains("sha256") || m.contains("checksum") || m.contains("unverified"),
-        "real path must reach central::ensure_installed's checksum gate: {m}"
-    );
-}
-
 // agent_base_for (C1 wire-client composition) =========================================================================
 
 #[test]

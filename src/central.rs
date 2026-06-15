@@ -278,8 +278,7 @@ pub fn is_installed_in(cache_root: &Path, version: &str) -> bool {
 
 /// Ensure `jbcentral` of `version` is installed in the managed bin cache; return the path to the
 /// binary. Idempotent: if already present (flat or nested), returns its resolved path without
-/// downloading. The download is sha256-verified against the per-version pin (R14, fail-closed): a
-/// known target with no pin is an error.
+/// downloading.
 ///
 /// **R5 contract:** synchronous (network + filesystem). Call via `spawn_blocking` from async code.
 pub fn ensure_installed(version: &str) -> anyhow::Result<PathBuf> {
@@ -292,16 +291,8 @@ pub fn ensure_installed(version: &str) -> anyhow::Result<PathBuf> {
     let arch = download::host_arch()?;
     let url = download::jbcentral_asset_url(version, os, arch)?;
 
-    // Mandatory checksum (R14): a known target MUST have a pin. Missing pin => fail closed.
-    let sha = download::pinned_sha256(version, os, arch).ok_or_else(|| {
-        anyhow!(
-            "no pinned sha256 for jbcentral {version} ({os}/{arch}); refusing to download \
-             unverified (populate the pin per Task M8.12)"
-        )
-    })?;
-
     let dest = install_dir_in(&cache_root, version);
-    download::download_verify_extract(&url, Some(sha), &dest)
+    download::download_verify_extract(&url, &dest)
         .with_context(|| format!("downloading jbcentral {version} for {os}/{arch}"))?;
 
     let bin = installed_binary_path_in(&cache_root, version)

@@ -132,7 +132,7 @@ start/health/stop) live in `tests/central_live.rs`, gated behind `#[ignore]` so 
 cargo test --test central_live -- --ignored
 ```
 
-This installs the sha256-pinned `jbcentral` (default version `0.2.9`), performs the interactive login,
+This installs `jbcentral` (default version `0.2.9`), performs the interactive login,
 starts the singleton daemon, asserts `/health`, and stops it. There is **no** skip-on-missing: when
 run, every test must pass (fail loudly otherwise). CI runs only the default `cargo test` and therefore
 never touches this suite (R7).
