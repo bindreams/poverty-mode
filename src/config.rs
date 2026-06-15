@@ -77,6 +77,10 @@ pub struct CentralSettings {
     pub port: Option<u16>,
     #[serde(default)]
     pub pinned_version: Option<String>,
+    /// External binary to use (path or PATH name). `Some` ⇒ use it as-is (no
+    /// download/version/config-set/login). `None`/empty ⇒ download fallback.
+    #[serde(default)]
+    pub executable: Option<String>,
 }
 
 /// Global defaults not tied to a specific proxy.
@@ -120,6 +124,7 @@ impl Config {
                     settings: ProxySettings::Central(CentralSettings {
                         port: None,
                         pinned_version: None,
+                        executable: Some("jbcentral".to_string()),
                     }),
                 },
             ],

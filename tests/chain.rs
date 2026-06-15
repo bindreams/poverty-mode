@@ -61,6 +61,7 @@ pub fn central_rp() -> ResolvedProxy {
         settings: ProxySettings::Central(CentralSettings {
             port: None,
             pinned_version: None,
+            executable: None,
         }),
     }
 }

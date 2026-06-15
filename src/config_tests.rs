@@ -131,6 +131,14 @@ fn central_settings_default_when_fields_omitted() {
     let c = central_of(&s);
     assert_eq!(c.port, None);
     assert_eq!(c.pinned_version, None);
+    assert_eq!(c.executable, None);
+}
+
+#[test]
+fn default_central_executable_is_jbcentral() {
+    let cfg = Config::default_all_disabled();
+    let central = central_of(&cfg.proxies[2].settings);
+    assert_eq!(central.executable.as_deref(), Some("jbcentral"));
 }
 
 #[test]
@@ -660,7 +668,9 @@ fn characterization_default_yaml_has_spec_5_2_shape() {
     assert!(yaml.contains("strip_ansi: true"), "yaml:\n{yaml}");
     // Headroom + central settings shape.
     assert!(yaml.contains("compression: true"), "yaml:\n{yaml}");
-    // central's null fields round-trip; re-parsing yields the canonical default.
+    // Central defaults to the `jbcentral` external binary (spec 5.2).
+    assert!(yaml.contains("executable: jbcentral"), "yaml:\n{yaml}");
+    // central's fields round-trip; re-parsing yields the canonical default.
     let back: Config = serde_yaml::from_str(&yaml).unwrap();
     assert_eq!(back, Config::default_all_disabled());
 }
@@ -753,6 +763,7 @@ fn with_overrides_applies_central_override() {
         central: CentralOverride {
             port: Some(9000),
             pinned_version: Some("1.2.3".into()),
+            executable: None,
         },
         ..Default::default()
     };
@@ -763,6 +774,7 @@ fn with_overrides_applies_central_override() {
         ProxySettings::Central(CentralSettings {
             port: Some(9000),
             pinned_version: Some("1.2.3".into()),
+            executable: Some("jbcentral".to_string()),
         })
     );
     // pino is unaffected by a central-only override.
@@ -782,6 +794,7 @@ fn save_full_state_rejects_central_not_last() {
             settings: ProxySettings::Central(CentralSettings {
                 port: None,
                 pinned_version: None,
+                executable: None,
             }),
         },
         ProxyEntry {
@@ -830,6 +843,7 @@ fn save_full_state_round_trips() {
             settings: ProxySettings::Central(CentralSettings {
                 port: None,
                 pinned_version: None,
+                executable: None,
             }),
         },
     ];
@@ -856,6 +870,7 @@ fn entries_for_chain_orders_enabled_then_disabled_central_last() {
     cfg.proxies[2].settings = ProxySettings::Central(CentralSettings {
         port: Some(4242),
         pinned_version: None,
+        executable: None,
     });
     let chain = vec![ResolvedProxy {
         name: ProxyName::Headroom,
@@ -889,6 +904,7 @@ fn entries_for_chain_forces_central_last_even_if_in_chain_middle() {
             settings: ProxySettings::Central(CentralSettings {
                 port: Some(1),
                 pinned_version: None,
+                executable: None,
             }),
         },
         ResolvedProxy {

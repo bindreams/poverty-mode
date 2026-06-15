@@ -31,6 +31,7 @@ pub(crate) fn central_rp() -> ResolvedProxy {
         settings: ProxySettings::Central(CentralSettings {
             port: None,
             pinned_version: None,
+            executable: None,
         }),
     }
 }
@@ -742,6 +743,7 @@ fn central_rp_with(port: Option<u16>, pinned: Option<&str>) -> ResolvedProxy {
         settings: ProxySettings::Central(CentralSettings {
             port,
             pinned_version: pinned.map(str::to_string),
+            executable: None,
         }),
     }
 }

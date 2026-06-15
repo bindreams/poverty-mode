@@ -35,6 +35,7 @@ fn cfg_all_disabled() -> Config {
                 settings: ProxySettings::Central(CentralSettings {
                     port: None,
                     pinned_version: None,
+                    executable: None,
                 }),
             },
         ],
@@ -375,6 +376,7 @@ fn freshly_seeded_to_entries_is_central_last_with_zero_actions() {
             settings: ProxySettings::Central(CentralSettings {
                 port: None,
                 pinned_version: None,
+                executable: None,
             }),
         },
     ];

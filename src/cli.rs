@@ -372,6 +372,7 @@ impl RunSettingsArgs {
             central: CentralOverride {
                 port: self.central_port,
                 pinned_version: self.central_pinned_version.clone(),
+                executable: None,
             },
         }
     }

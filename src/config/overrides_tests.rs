@@ -84,6 +84,7 @@ fn empty_central_override_keeps_base() {
     let mut s = CentralSettings {
         port: Some(7000),
         pinned_version: Some("9.9.9".into()),
+        executable: None,
     };
     CentralOverride::default().apply(&mut s);
     assert_eq!(s.port, Some(7000));
@@ -95,12 +96,47 @@ fn central_override_sets_port_and_version() {
     let mut s = CentralSettings {
         port: None,
         pinned_version: None,
+        executable: None,
     };
     CentralOverride {
         port: Some(9000),
         pinned_version: Some("1.2.3".into()),
+        executable: None,
     }
     .apply(&mut s);
     assert_eq!(s.port, Some(9000));
     assert_eq!(s.pinned_version.as_deref(), Some("1.2.3"));
+}
+
+#[test]
+fn central_override_sets_and_clears_executable() {
+    let mut s = CentralSettings {
+        port: None,
+        pinned_version: None,
+        executable: Some("jbcentral".into()),
+    };
+    CentralOverride {
+        port: None,
+        pinned_version: None,
+        executable: Some("/opt/jb".into()),
+    }
+    .apply(&mut s);
+    assert_eq!(s.executable.as_deref(), Some("/opt/jb"));
+    // Empty string clears to Download mode (None).
+    CentralOverride {
+        port: None,
+        pinned_version: None,
+        executable: Some(String::new()),
+    }
+    .apply(&mut s);
+    assert_eq!(s.executable, None);
+    // A whitespace-only value clears too (trimmed before the empty check).
+    s.executable = Some("jbcentral".into());
+    CentralOverride {
+        port: None,
+        pinned_version: None,
+        executable: Some("   ".into()),
+    }
+    .apply(&mut s);
+    assert_eq!(s.executable, None);
 }

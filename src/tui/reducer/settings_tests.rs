@@ -88,6 +88,7 @@ fn commit_number_parses_empty_is_none_garbage_errs() {
     let mut s = ProxySettings::Central(CentralSettings {
         port: None,
         pinned_version: None,
+        executable: None,
     });
     SettingId::Port.commit_edit(&mut s, "9000").unwrap();
     assert_eq!(render_value(&s, SettingId::Port), "9000");
