@@ -195,10 +195,7 @@ fn latest_version_url_targets_latest_version_txt() {
 fn central_source_external_vs_download() {
     assert!(matches!(central_source(None), CentralSource::Download));
     assert!(matches!(central_source(Some("")), CentralSource::Download));
-    assert!(matches!(
-        central_source(Some("   ")),
-        CentralSource::Download
-    ));
+    assert!(matches!(central_source(Some("   ")), CentralSource::Download));
     match central_source(Some("jbcentral")) {
         CentralSource::External(p) => assert_eq!(p, std::path::PathBuf::from("jbcentral")),
         _ => panic!("expected External"),
@@ -309,18 +306,6 @@ fn login_state_unknown_on_killed_process() {
     assert_eq!(st, CentralLoginState::Unknown);
 }
 
-#[test]
-fn run_status_text_errors_when_binary_is_missing() {
-    // R23c name/signature: run_status_text(&Path) -> anyhow::Result<String>, runs `<bin> status`.
-    // A non-existent binary path must surface a spawn error (never panic, never silent empty string).
-    let missing = std::path::Path::new("/nonexistent/pm-jbcentral-does-not-exist");
-    let err = run_status_text(missing).unwrap_err();
-    assert!(
-        err.to_string().contains("status"),
-        "error should name the failed `status` invocation: {err}"
-    );
-}
-
 /// Write a fake `jbcentral` into `dir` that prints `stdout`, exits with `code`, and ignores
 /// its arguments. Cross-platform: a `.bat` on Windows (executed via the full path) and a
 /// `chmod +x` shell script elsewhere. Returns the executable's path.
@@ -376,32 +361,6 @@ fn run_status_classified_errors_when_binary_is_missing() {
 }
 
 // start/health argv + env =============================================================================================
-
-#[test]
-fn configure_argv_sets_analytics_off_and_threaded_pinned_version() {
-    let argvs = configure_commands("0.3.7");
-    assert!(
-        argvs.iter().any(|a| a
-            == &vec![
-                "config".to_string(),
-                "set".to_string(),
-                "google-analytics".to_string(),
-                "off".to_string(),
-            ]),
-        "missing analytics-off config: {argvs:?}"
-    );
-    // The pinned-version MUST be the threaded version, not a const default.
-    assert!(
-        argvs.iter().any(|a| a
-            == &vec![
-                "config".to_string(),
-                "set".to_string(),
-                "pinned-version".to_string(),
-                "0.3.7".to_string(),
-            ]),
-        "missing/incorrect pinned-version config: {argvs:?}"
-    );
-}
 
 #[test]
 fn proxy_start_argv_is_proxy_start() {

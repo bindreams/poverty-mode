@@ -664,7 +664,7 @@ fn hop_log_file_embeds_literal_port_token_per_proxy() {
 // ensure_central_started (FIX-A: central-tail orchestration wiring) ===================================================
 //
 // The production `ensure_central_started` must drive the REAL `central::*`
-// install/login/start/health pipeline (R4/R5/M8) — not the removed M6
+// install/start/health pipeline (R4/R5/M8) — not the removed M6
 // placeholder that `bail!`ed "(milestone M8)". These tests pin the orchestration
 // through the `CentralOps` seam (the same injection style as `ProxyManager`,
 // R15), so the seam cannot silently regress to the bail or to wrong threading.
@@ -683,8 +683,8 @@ struct FakeCentralOps {
     seen_pinned: RefCell<Option<Option<String>>>,
     /// Captured `version` passed to `ensure_installed`.
     seen_install_version: RefCell<Option<String>>,
-    /// Captured `(port, version)` passed to `start`.
-    seen_start: RefCell<Option<(Option<u16>, String)>>,
+    /// Captured `port` passed to `start`.
+    seen_start: RefCell<Option<Option<u16>>>,
     /// Captured `port` passed to `health`.
     seen_health_port: RefCell<Option<u16>>,
     /// What `start` returns.
@@ -721,13 +721,9 @@ impl CentralOps for FakeCentralOps {
         *self.seen_install_version.borrow_mut() = Some(version.to_string());
         Ok(PathBuf::from("/fake/jbcentral"))
     }
-    fn ensure_logged_in(&self, _bin: &Path) -> anyhow::Result<()> {
-        self.calls.borrow_mut().push("ensure_logged_in".to_string());
-        Ok(())
-    }
-    fn start(&self, _bin: &Path, port: Option<u16>, version: &str) -> anyhow::Result<CentralInfo> {
+    fn start(&self, _bin: &Path, port: Option<u16>) -> anyhow::Result<CentralInfo> {
         self.calls.borrow_mut().push("start".to_string());
-        *self.seen_start.borrow_mut() = Some((port, version.to_string()));
+        *self.seen_start.borrow_mut() = Some(port);
         Ok(self.start_info.clone())
     }
     fn health(&self, port: u16) -> bool {
@@ -738,12 +734,16 @@ impl CentralOps for FakeCentralOps {
 }
 
 fn central_rp_with(port: Option<u16>, pinned: Option<&str>) -> ResolvedProxy {
+    central_rp_full(port, pinned, None)
+}
+
+fn central_rp_full(port: Option<u16>, pinned: Option<&str>, executable: Option<&str>) -> ResolvedProxy {
     ResolvedProxy {
         name: ProxyName::Central,
         settings: ProxySettings::Central(CentralSettings {
             port,
             pinned_version: pinned.map(str::to_string),
-            executable: None,
+            executable: executable.map(str::to_string),
         }),
     }
 }
@@ -770,27 +770,19 @@ fn ensure_central_started_drives_real_central_pipeline_in_order() {
             secret: "s3cr3t".to_string()
         }
     );
-    // It drove the real pipeline (NOT the removed M8 bail), in order.
+    // It drove the real pipeline (NOT the removed M8 bail), in order. Login is no
+    // longer in the run path (assumed); `config set` is gone with `start`.
     assert_eq!(
         *ops.calls.borrow(),
-        vec![
-            "resolve_version",
-            "ensure_installed",
-            "ensure_logged_in",
-            "start",
-            "health"
-        ]
+        vec!["resolve_version", "ensure_installed", "start", "health"]
     );
     // R4: version is resolved from the entry's pinned_version (live-or-fallback),
-    // then threaded unchanged into install and start.
+    // then threaded unchanged into install (start no longer takes a version).
     assert_eq!(ops.seen_pinned.borrow().clone(), Some(Some("9.9.9".to_string())));
     assert_eq!(ops.seen_install_version.borrow().clone(), Some("0.2.9".to_string()));
     // The Central entry's port is threaded into `start`; health probes the
     // LIVE daemon's port from the returned CentralInfo (not the requested one).
-    assert_eq!(
-        ops.seen_start.borrow().clone(),
-        Some((Some(20000), "0.2.9".to_string()))
-    );
+    assert_eq!(ops.seen_start.borrow().clone(), Some(Some(20000)));
     assert_eq!(*ops.seen_health_port.borrow(), Some(41733));
 }
 
@@ -810,7 +802,7 @@ fn ensure_central_started_threads_default_when_unpinned_and_no_port() {
     ensure_central_started_with(&chain, &ops).unwrap();
 
     assert_eq!(ops.seen_pinned.borrow().clone(), Some(None));
-    assert_eq!(ops.seen_start.borrow().clone(), Some((None, "0.2.9".to_string())));
+    assert_eq!(ops.seen_start.borrow().clone(), Some(None));
 }
 
 #[test]
@@ -835,6 +827,78 @@ fn ensure_central_started_fails_closed_when_unhealthy() {
     assert!(
         !m.contains("milestone m8") && !m.contains("not yet wired"),
         "must drive the real pipeline, not the placeholder: {m}"
+    );
+}
+
+// External vs Download source: the run path branches on `executable` (the
+// `CentralSource::External | Download` decision), never logs in, and ignores a
+// pinned version in External mode.
+
+#[test]
+fn external_mode_skips_resolve_install_and_login() {
+    let ops = FakeCentralOps::new(
+        "0.2.9",
+        CentralInfo {
+            port: 41733,
+            secret: "s".to_string(),
+        },
+        true,
+    );
+    // executable set => External source: use the binary as-is.
+    let chain = vec![central_rp_full(None, None, Some("jbcentral"))];
+
+    ensure_central_started_with(&chain, &ops).expect("external-mode start must succeed");
+
+    // External mode never resolves a version, never installs, never logs in.
+    assert_eq!(*ops.calls.borrow(), vec!["start", "health"]);
+}
+
+#[test]
+fn download_mode_resolves_and_installs_but_never_logs_in() {
+    let ops = FakeCentralOps::new(
+        "0.2.9",
+        CentralInfo {
+            port: 41733,
+            secret: "s".to_string(),
+        },
+        true,
+    );
+    // executable unset => Download source: resolve + install, then start.
+    let chain = vec![central_rp_full(None, None, None)];
+
+    ensure_central_started_with(&chain, &ops).expect("download-mode start must succeed");
+
+    let calls = ops.calls.borrow();
+    assert!(calls.contains(&"resolve_version".to_string()), "{calls:?}");
+    assert!(calls.contains(&"ensure_installed".to_string()), "{calls:?}");
+    assert!(calls.contains(&"start".to_string()), "{calls:?}");
+    assert!(calls.contains(&"health".to_string()), "{calls:?}");
+    // Login is assumed; the run path never logs in.
+    assert!(
+        !calls.contains(&"ensure_logged_in".to_string()),
+        "run path must never log in: {calls:?}"
+    );
+}
+
+#[test]
+fn external_mode_ignores_pinned_version() {
+    let ops = FakeCentralOps::new(
+        "0.2.9",
+        CentralInfo {
+            port: 41733,
+            secret: "s".to_string(),
+        },
+        true,
+    );
+    // External AND pinned: the pinned version is ignored (no version resolution).
+    let chain = vec![central_rp_full(None, Some("9.9.9"), Some("jbcentral"))];
+
+    ensure_central_started_with(&chain, &ops).expect("external-mode start must succeed");
+
+    assert!(
+        !ops.calls.borrow().contains(&"resolve_version".to_string()),
+        "External mode must ignore pinned_version: {:?}",
+        ops.calls.borrow()
     );
 }
 

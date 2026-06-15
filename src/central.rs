@@ -1,5 +1,6 @@
-//! JB Central: the downloaded shared singleton that always runs last in the
-//! chain. M8 fills install / login / start / health / stop; this module currently
+//! JB Central: the shared singleton that always runs last in the chain (an
+//! externally-installed `jbcentral` by default, or an unpinned download). M8 fills
+//! install / start / health / stop (login is assumed, not driven); this module currently
 //! provides the items the orchestrator (M6) consumes — the started `CentralInfo`
 //! (port + wire secret) and `central_wire_upstream`, which renders the JetBrains
 //! wire URL the pre-central hop (or a central-only agent) targets — plus the M8.5
@@ -337,26 +338,12 @@ pub fn classify_login_status(code: Option<i32>, stdout: &str, stderr: &str) -> C
     }
 }
 
-/// Run `<bin> status` and return its captured stdout (R23c). Used by M10's `status`/`doctor` to render
-/// the human-readable login line and by `ensure_logged_in` for classification. Errors if the process
-/// cannot be spawned; a non-zero exit is NOT an error here (the stdout is still returned so the caller
-/// can classify it via `classify_login_status`).
-///
-/// **R5 contract:** synchronous (spawns a child process). Call via `spawn_blocking` from async code.
-pub fn run_status_text(bin: &Path) -> anyhow::Result<String> {
-    let output = std::process::Command::new(bin)
-        .arg("status")
-        .output()
-        .with_context(|| format!("running {} status", bin.display()))?;
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
 /// Run `<bin> status` and classify the login state from the real exit code AND output (R20).
 ///
-/// `run_status_text` discards the exit code, but `classify_login_status` needs it: with a `None`
-/// code it short-circuits to `Unknown` and can never report logged-in/out. The `status`/`doctor`
-/// login line must therefore go through this helper so a logged-in central (exit 0 + banner) renders
-/// as such. Errors if the process cannot be spawned; a non-zero exit is classified, not an error.
+/// `classify_login_status` needs the exit code: with a `None` code it short-circuits to `Unknown`
+/// and can never report logged-in/out. The `status`/`doctor` login line goes through this helper
+/// so a logged-in central (exit 0 + banner) renders as such. Errors if the process cannot be
+/// spawned; a non-zero exit is classified, not an error.
 ///
 /// **R5 contract:** synchronous (spawns a child process). Call via `spawn_blocking` from async code.
 pub fn run_status_classified(bin: &Path) -> anyhow::Result<CentralLoginState> {
@@ -369,75 +356,7 @@ pub fn run_status_classified(bin: &Path) -> anyhow::Result<CentralLoginState> {
     Ok(classify_login_status(output.status.code(), &stdout, &stderr))
 }
 
-/// Detect login state by running `<bin> status`; if logged out, surface and run the interactive
-/// `<bin> login` (inheriting stdio so the browser-OAuth flow reaches the user). Never bypasses.
-///
-/// **R5 contract:** synchronous (spawns child processes). Call via `spawn_blocking` from async code.
-pub fn ensure_logged_in(bin: &Path) -> anyhow::Result<()> {
-    let output = std::process::Command::new(bin)
-        .arg("status")
-        .output()
-        .with_context(|| format!("running {} status", bin.display()))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    match classify_login_status(output.status.code(), &stdout, &stderr) {
-        CentralLoginState::LoggedIn => Ok(()),
-        CentralLoginState::Unknown => {
-            bail!("`jbcentral status` was terminated abnormally; cannot determine login state")
-        }
-        CentralLoginState::LoggedOut => {
-            eprintln!(
-                "JB Central is not logged in. Launching `jbcentral login` (browser OAuth; requires a JetBrains AI Pro subscription)."
-            );
-            let status = std::process::Command::new(bin)
-                .arg("login")
-                .stdin(std::process::Stdio::inherit())
-                .stdout(std::process::Stdio::inherit())
-                .stderr(std::process::Stdio::inherit())
-                .status()
-                .with_context(|| format!("running {} login", bin.display()))?;
-            if !status.success() {
-                bail!(
-                    "`jbcentral login` failed (exit {:?}); cannot use JB Central",
-                    status.code()
-                );
-            }
-            // Re-check: login must have actually taken effect.
-            let recheck = std::process::Command::new(bin)
-                .arg("status")
-                .output()
-                .with_context(|| format!("re-running {} status after login", bin.display()))?;
-            let so = String::from_utf8_lossy(&recheck.stdout);
-            let se = String::from_utf8_lossy(&recheck.stderr);
-            match classify_login_status(recheck.status.code(), &so, &se) {
-                CentralLoginState::LoggedIn => Ok(()),
-                _ => bail!("still not logged in to JB Central after `jbcentral login`"),
-            }
-        }
-    }
-}
-
 // start / health / stop ===============================================================================================
-
-/// The `jbcentral config set ...` argv lines we apply before starting: analytics off + the RESOLVED
-/// pinned version (threaded in by the orchestrator, R4 — never re-derived from a const here), so the
-/// singleton stays on the same version we installed.
-pub fn configure_commands(version: &str) -> Vec<Vec<String>> {
-    vec![
-        vec![
-            "config".to_string(),
-            "set".to_string(),
-            "google-analytics".to_string(),
-            "off".to_string(),
-        ],
-        vec![
-            "config".to_string(),
-            "set".to_string(),
-            "pinned-version".to_string(),
-            version.to_string(),
-        ],
-    ]
-}
 
 /// argv for starting the proxy daemon.
 pub fn proxy_start_argv() -> Vec<String> {
@@ -528,11 +447,10 @@ fn reuse_if_healthy() -> Option<CentralInfo> {
     reuse_decision(Some(info), healthy)
 }
 
-/// Configure jbcentral (analytics off + the threaded pinned `version`, R4), set the requested port,
-/// start the daemon, then read `~/.wire/config.json` for the actual `proxy_port` + `proxy_secret`.
-///
-/// **Idempotent singleton (spec 5.7):** if `~/.wire/config.json` already describes a daemon that
-/// answers `/health`, that `CentralInfo` is returned immediately without re-configuring or restarting.
+/// Start (or reuse) the central singleton. Idempotent: a healthy daemon described
+/// by `~/.wire/config.json` is reused without spawning `bin`. poverty-mode never
+/// runs `config set` (that would mutate the global `~/.wire` shared with the user's
+/// own central). Login is assumed.
 ///
 /// **Port semantics on reuse:** `port` is a REQUEST honored only when we actually start a new daemon.
 /// JB Central is a shared singleton, so when an existing healthy daemon is reused, the live daemon's
@@ -540,23 +458,12 @@ fn reuse_if_healthy() -> Option<CentralInfo> {
 /// other sessions may be using). Callers must use the returned `CentralInfo.port`, not the requested
 /// one. This is asserted by `start_reuse_keeps_live_daemon_port` in the unit tests.
 ///
-/// **R5 contract:** synchronous (spawns child processes + blocking health GET). Call via
-/// `spawn_blocking` from async code.
-pub fn start(bin: &Path, port: Option<u16>, version: &str) -> anyhow::Result<CentralInfo> {
+/// **R5 contract:** synchronous (spawns a child process + blocking health GET). Call
+/// via `spawn_blocking` from async code.
+pub fn start(bin: &Path, port: Option<u16>) -> anyhow::Result<CentralInfo> {
     if let Some(info) = reuse_if_healthy() {
         return Ok(info);
     }
-
-    for argv in configure_commands(version) {
-        let status = std::process::Command::new(bin)
-            .args(&argv)
-            .status()
-            .with_context(|| format!("running {} {}", bin.display(), argv.join(" ")))?;
-        if !status.success() {
-            bail!("`jbcentral {}` failed (exit {:?})", argv.join(" "), status.code());
-        }
-    }
-
     let mut cmd = std::process::Command::new(bin);
     cmd.args(proxy_start_argv());
     for (k, v) in start_env(port) {
