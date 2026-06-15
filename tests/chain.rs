@@ -242,11 +242,7 @@ async fn trailing_central_strips_hop_and_carries_secret_path_to_tail() {
     // <stub>/wire/SECRET/claude-code/anthropic/v1/messages.
     let stub = start_stub(r#"{"ok":true}"#);
     let tail = Upstream {
-        url: Url::parse(&format!(
-            "http://127.0.0.1:{}/wire/SECRET",
-            stub.port
-        ))
-        .unwrap(),
+        url: Url::parse(&format!("http://127.0.0.1:{}/wire/SECRET", stub.port)).unwrap(),
     };
     let agent = PostingAgent::default();
     let chain = vec![pino_passthrough(), central_rp()];
@@ -358,13 +354,23 @@ async fn codex_chain_carries_codex_openai_wire_path_to_tail() {
     let status = orchestrator::build_and_run(chain, tail, &CodexAgent, &argv, true)
         .await
         .expect("build_and_run codex chain");
-    assert!(status.success(), "codex agent should succeed through the chain");
+    assert!(
+        status.success(),
+        "codex agent should succeed through the chain"
+    );
 
     let cap = stub.last().expect("stub recorded a request");
     assert_eq!(cap.method, "POST");
     assert_eq!(cap.uri, "/wire/SECRET/codex/openai/responses");
-    assert_eq!(cap.x_api_key, None, "codex sends no api key; central injects the JWT");
-    assert_eq!(stub.count(), 1, "exactly one hop (pino) forwarded to the stub");
+    assert_eq!(
+        cap.x_api_key, None,
+        "codex sends no api key; central injects the JWT"
+    );
+    assert_eq!(
+        stub.count(),
+        1,
+        "exactly one hop (pino) forwarded to the stub"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -98,10 +98,7 @@ fn tail_is_central_wire_url_when_central_is_tail() {
     };
     let up = resolve_tail_upstream(&inputs).unwrap();
     // central wins over a pre-existing base url.
-    assert_eq!(
-        up.url.as_str(),
-        "http://127.0.0.1:19516/wire/abc123"
-    );
+    assert_eq!(up.url.as_str(), "http://127.0.0.1:19516/wire/abc123");
 }
 
 #[test]
@@ -919,7 +916,10 @@ fn agent_base_for_central_appends_to_wire_envelope_without_clobbering_secret() {
     // replace the last path segment (a naive Url::join would eat `SECRET`).
     let head = url::Url::parse("http://127.0.0.1:9000/wire/SECRET").unwrap();
     let got = agent_base_for(&head, &crate::agent::claude::ClaudeAgent, true).unwrap();
-    assert_eq!(got.as_str(), "http://127.0.0.1:9000/wire/SECRET/claude-code/anthropic");
+    assert_eq!(
+        got.as_str(),
+        "http://127.0.0.1:9000/wire/SECRET/claude-code/anthropic"
+    );
 }
 
 #[test]
@@ -927,5 +927,8 @@ fn agent_env_includes_poverty_proxy_head() {
     let chain = vec![pino_rp(), headroom_rp()];
     let head = url::Url::parse("http://127.0.0.1:4100").unwrap();
     let env = compute_agent_env(&chain, false, true, &head);
-    assert_eq!(get(&env, "POVERTY_PROXY_HEAD"), Some("http://127.0.0.1:4100/"));
+    assert_eq!(
+        get(&env, "POVERTY_PROXY_HEAD"),
+        Some("http://127.0.0.1:4100/")
+    );
 }

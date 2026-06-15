@@ -38,7 +38,13 @@ pub struct Cli {
     /// Hidden, accepted-and-(mostly-)ignored: mirrors codex's `-c key=value`
     /// config overrides so the in-repo `__codexpost` stub agent tolerates the belt
     /// `CodexAgent` injects. Repeatable. Only `__codexpost` reads it.
-    #[arg(short = 'c', long = "config", global = true, hide = true, value_name = "KV")]
+    #[arg(
+        short = 'c',
+        long = "config",
+        global = true,
+        hide = true,
+        value_name = "KV"
+    )]
     pub config: Vec<String>,
 
     #[command(subcommand)]
@@ -596,7 +602,10 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
             );
             let base = config_overrides
                 .iter()
-                .find_map(|kv| kv.strip_prefix(&prefix).map(|v| v.trim_matches('"').to_string()))
+                .find_map(|kv| {
+                    kv.strip_prefix(&prefix)
+                        .map(|v| v.trim_matches('"').to_string())
+                })
                 .ok_or_else(|| anyhow::anyhow!("__codexpost: no base_url override in -c flags"))?;
             let target = format!("{}/responses", base.trim_end_matches('/'));
             let rt = tokio::runtime::Builder::new_multi_thread()

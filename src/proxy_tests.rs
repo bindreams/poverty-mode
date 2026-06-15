@@ -16,8 +16,12 @@ fn messages_path_matches_with_wire_client_prefix() {
     // C1: the agent carries its central-wire client segment in the base URL, so the
     // inbound path reaching an agent-agnostic hop is prefixed. The prefix is opaque.
     assert!(is_messages_path("/claude-code/anthropic/v1/messages"));
-    assert!(is_messages_path("/claude-code/anthropic/v1/messages?beta=true"));
-    assert!(is_messages_path("/claude-code/anthropic/v1/messages/count_tokens"));
+    assert!(is_messages_path(
+        "/claude-code/anthropic/v1/messages?beta=true"
+    ));
+    assert!(is_messages_path(
+        "/claude-code/anthropic/v1/messages/count_tokens"
+    ));
 }
 
 #[test]

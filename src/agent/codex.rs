@@ -50,10 +50,14 @@ impl Agent for CodexAgent {
         // subcommand (`exec`) or user args. `-c` values are TOML; emit quoted
         // strings so they parse deterministically (not via codex's raw fallback).
         cmd.arg("-c").arg(format!("model_provider=\"{PROVIDER}\""));
-        cmd.arg("-c").arg(format!("model_providers.{PROVIDER}.name=\"poverty-mode\""));
         cmd.arg("-c")
-            .arg(format!("model_providers.{PROVIDER}.base_url=\"{}\"", base_url.as_str()));
-        cmd.arg("-c").arg(format!("model_providers.{PROVIDER}.wire_api=\"responses\""));
+            .arg(format!("model_providers.{PROVIDER}.name=\"poverty-mode\""));
+        cmd.arg("-c").arg(format!(
+            "model_providers.{PROVIDER}.base_url=\"{}\"",
+            base_url.as_str()
+        ));
+        cmd.arg("-c")
+            .arg(format!("model_providers.{PROVIDER}.wire_api=\"responses\""));
 
         cmd.args(rest);
 
