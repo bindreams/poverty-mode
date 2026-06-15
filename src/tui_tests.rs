@@ -31,6 +31,22 @@ fn shift_enter_and_shift_space_expand() {
 }
 
 #[test]
+fn tab_expands_when_not_editing() {
+    // Tab is the universal expand/collapse toggle (works in every terminal,
+    // unlike Shift+Enter/Shift+Space which need the keyboard-enhancement protocol).
+    assert_eq!(
+        m(KeyCode::Tab, KeyModifiers::NONE, false),
+        Some(TuiAction::Expand)
+    );
+}
+
+#[test]
+fn tab_is_ignored_while_editing() {
+    // Inside the inline text editor Tab does nothing (no field navigation here).
+    assert_eq!(m(KeyCode::Tab, KeyModifiers::NONE, true), None);
+}
+
+#[test]
 fn arrows_cycle_and_reorder() {
     assert_eq!(
         m(KeyCode::Left, KeyModifiers::NONE, false),

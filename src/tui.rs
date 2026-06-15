@@ -59,15 +59,55 @@ pub enum TuiError {
 /// explicit `ratatui::restore()` below runs on the normal and `?`-error return
 /// paths (a panic is covered by that installed hook instead). If stdio is not a
 /// TTY this returns [`TuiError::NotATerminal`] without touching the terminal.
+///
+/// Keyboard enhancement: when the host terminal supports the kitty keyboard
+/// protocol we push `DISAMBIGUATE_ESCAPE_CODES` so modified whitespace keys
+/// (Shift+Enter / Shift+Space) arrive with their SHIFT bit set — otherwise legacy
+/// terminals send them identically to plain Enter/Space and the Expand binding is
+/// unreachable. The flags are popped before `restore()` on the normal and error
+/// paths. (Tab is the protocol-independent expand fallback, so the picker is fully
+/// usable even when enhancement is unsupported.)
 pub fn run_picker(config: &Config, resolved: &[ResolvedProxy]) -> anyhow::Result<TuiOutcome> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         return Err(TuiError::NotATerminal.into());
     }
     let mut state = TuiState::from_config_and_resolved(config, resolved);
     let mut terminal = ratatui::init();
+    let enhanced = push_keyboard_enhancement();
     let result = event_loop(&mut terminal, &mut state);
+    if enhanced {
+        pop_keyboard_enhancement();
+    }
     ratatui::restore();
     result
+}
+
+/// Enable the kitty keyboard protocol's escape-code disambiguation when the
+/// terminal advertises support, so Shift+Enter / Shift+Space are reported with
+/// their modifier. Returns whether the flags were pushed (so the caller knows to
+/// pop them). Best-effort: any failure leaves the picker in legacy mode, where Tab
+/// still drives expand/collapse.
+fn push_keyboard_enhancement() -> bool {
+    use crossterm::event::{KeyboardEnhancementFlags, PushKeyboardEnhancementFlags};
+    if matches!(
+        crossterm::terminal::supports_keyboard_enhancement(),
+        Ok(true)
+    ) {
+        crossterm::execute!(
+            std::io::stdout(),
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )
+        .is_ok()
+    } else {
+        false
+    }
+}
+
+/// Pop the keyboard-enhancement flags pushed by [`push_keyboard_enhancement`],
+/// restoring the terminal's prior keyboard mode. Best-effort.
+fn pop_keyboard_enhancement() {
+    use crossterm::event::PopKeyboardEnhancementFlags;
+    let _ = crossterm::execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
 }
 
 /// The blocking draw/read loop. Returns when the reducer yields a terminal
@@ -116,8 +156,13 @@ fn map_key(code: KeyCode, mods: KeyModifiers, editing: bool) -> Option<TuiAction
         KeyCode::Down => Some(TuiAction::Down),
         KeyCode::Left => Some(TuiAction::CycleLeft),
         KeyCode::Right => Some(TuiAction::CycleRight),
-        // Shift+Space often arrives without the SHIFT bit; Shift+Enter is the
-        // reliable expand key. Plain Space/Enter must remain Activate.
+        // Tab is the UNIVERSAL expand/collapse toggle: every terminal delivers it
+        // unmodified. Shift+Enter/Shift+Space below also expand, but the SHIFT bit
+        // only reaches us when the keyboard-enhancement protocol is active (see
+        // `run_picker`); without it those keys are indistinguishable from plain
+        // Enter/Space, so Tab is the dependable fallback. Plain Space/Enter remain
+        // Activate.
+        KeyCode::Tab => Some(TuiAction::Expand),
         KeyCode::Enter | KeyCode::Char(' ') if shift => Some(TuiAction::Expand),
         KeyCode::Enter | KeyCode::Char(' ') => Some(TuiAction::Activate),
         KeyCode::Esc => Some(TuiAction::Cancel),
