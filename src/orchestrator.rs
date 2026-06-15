@@ -201,7 +201,7 @@ pub async fn build_and_run(
 
 /// Like [`build_and_run`], but constructs an [`manager::EphemeralManager`] with a
 /// fault knob (test-only: forces the tail-most hop to fail readiness). Inert when
-/// `fault` is false; [`build_and_run`] calls this with `false`.
+/// `fault` is false.
 #[doc(hidden)]
 pub async fn build_and_run_with_fault(
     chain: Vec<ResolvedProxy>,
