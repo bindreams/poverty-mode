@@ -18,16 +18,17 @@ use std::path::{Path, PathBuf};
 pub fn write_fake_jbcentral(dir: &Path, version_line: &str, other_code: i32) -> PathBuf {
     if cfg!(windows) {
         let p = dir.join("jbcentral.bat");
-        // `@echo off` so the command line itself is not echoed into stdout.
+        // `@echo off` so the command line itself is not echoed into stdout. We must NOT wrap the
+        // `echo` in a parenthesized `if (...)` block: a `)` inside `version_line` (e.g. "(fake)")
+        // would close the block early and truncate the output. A single-line `if not ... exit`
+        // guard avoids any block, so the echoed line is emitted verbatim.
         std::fs::write(
             &p,
             format!(
                 "@echo off\r\n\
-                 if \"%1\"==\"--version\" (\r\n\
+                 if not \"%1\"==\"--version\" exit /b {other_code}\r\n\
                  echo {version_line}\r\n\
-                 exit /b 0\r\n\
-                 )\r\n\
-                 exit /b {other_code}\r\n"
+                 exit /b 0\r\n"
             ),
         )
         .unwrap();
