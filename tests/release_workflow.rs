@@ -6,12 +6,12 @@ fn rel_text() -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join(".github")
         .join("workflows")
-        .join("release.yml");
+        .join("release.yaml");
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
 }
 
 fn workflow() -> serde_yaml::Value {
-    serde_yaml::from_str(&rel_text()).expect("release.yml must be valid YAML")
+    serde_yaml::from_str(&rel_text()).expect("release.yaml must be valid YAML")
 }
 
 #[test]
@@ -34,7 +34,7 @@ fn release_triggers_on_version_tags() {
 }
 
 #[test]
-fn release_builds_five_targets_and_uploads() {
+fn release_builds_four_targets_and_uploads() {
     let wf = workflow();
     let jobs = wf.get("jobs").expect("jobs");
     let rel = jobs.get("release").expect("release job");
@@ -53,13 +53,17 @@ fn release_builds_five_targets_and_uploads() {
         .collect();
     for expected in [
         "x86_64-pc-windows-msvc",
-        "x86_64-apple-darwin",
         "aarch64-apple-darwin",
         "x86_64-unknown-linux-gnu",
         "aarch64-unknown-linux-gnu",
     ] {
         assert!(targets.iter().any(|t| t == expected), "missing {expected}");
     }
+    assert!(
+        !targets.iter().any(|t| t == "x86_64-apple-darwin"),
+        "Intel macOS dropped per the four-platform decision; got {targets:?}"
+    );
+    assert_eq!(targets.len(), 4, "exactly four release targets; got {targets:?}");
 
     assert!(
         rel_text().contains("softprops/action-gh-release"),
