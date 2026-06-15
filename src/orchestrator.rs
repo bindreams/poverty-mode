@@ -683,8 +683,6 @@ pub fn nested_reuse_check(desired_chain: &[ResolvedProxy]) -> Option<url::Url> {
     })
 }
 
-use crate::agent::claude::ClaudeAgent;
-
 /// High-level `run` orchestration (R5-safe): nested-reuse short-circuit, central
 /// daemon start (when central is tail), tail resolution, then `build_and_run`
 /// with the v1 ClaudeAgent. `chain` is the already-resolved chain (caller applies
@@ -702,7 +700,18 @@ pub async fn run_command(
     argv: &[String],
     enable_tool_search: bool,
 ) -> anyhow::Result<std::process::ExitStatus> {
-    let agent = ClaudeAgent;
+    let agent = crate::agent::select_agent(argv);
+
+    // codex's wire client/api segment is a JetBrains Central concept; without a
+    // central tail there is no valid upstream for it (spec §5 decision #4). Guard
+    // before any spawn — covers both the fresh and the reuse paths below.
+    if agent.requires_central() && !central_is_tail(&chain) {
+        anyhow::bail!(
+            "{} requires 'central' as the chain tail (its wire path is a JetBrains \
+             Central concept); add 'central' to the chain",
+            agent.name()
+        );
+    }
 
     // Design §7 nested-reuse: run the BLOCKING health probe off the executor (R5).
     let chain_for_probe = chain.clone();
@@ -712,7 +721,7 @@ pub async fn run_command(
     if let Some(base) = reuse {
         let central_tail = central_is_tail(&chain);
         let env = compute_agent_env(&chain, central_tail, enable_tool_search, &base);
-        let agent_base = agent_base_for(&base, &agent, central_tail)?;
+        let agent_base = agent_base_for(&base, agent.as_ref(), central_tail)?;
         let cmd = agent.build_command(argv, &agent_base, &env);
         return run_agent_forwarding_signals(cmd, agent.name()).await;
     }
@@ -737,7 +746,7 @@ pub async fn run_command(
     };
     let tail = resolve_tail_upstream(&inputs)?;
 
-    build_and_run(chain, tail, &agent, argv, enable_tool_search).await
+    build_and_run(chain, tail, agent.as_ref(), argv, enable_tool_search).await
 }
 
 /// The Central install/login/start/health operations the orchestrator drives,

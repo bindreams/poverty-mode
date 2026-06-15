@@ -1,4 +1,5 @@
 use crate::agent::Agent;
+use crate::agent::select_agent;
 use url::Url;
 
 // A minimal Agent implementation used only to lock the trait shape.
@@ -63,4 +64,20 @@ fn build_command_through_trait_object_carries_inputs() {
         .find(|(k, _)| *k == std::ffi::OsStr::new("FOO"))
         .map(|(_, v)| v.unwrap().to_string_lossy().into_owned());
     assert_eq!(foo, Some("bar".to_string()));
+}
+
+#[test]
+fn select_agent_picks_codex_by_basename() {
+    assert_eq!(select_agent(&["codex".to_string()]).name(), "codex");
+    assert_eq!(select_agent(&["/usr/local/bin/codex".to_string()]).name(), "codex");
+    assert_eq!(select_agent(&["codex.exe".to_string()]).name(), "codex");
+    assert_eq!(select_agent(&[r"C:\tools\codex.EXE".to_string()]).name(), "codex");
+}
+
+#[test]
+fn select_agent_defaults_to_claude() {
+    assert_eq!(select_agent(&["claude".to_string()]).name(), "claude");
+    assert_eq!(select_agent(&["/opt/claude".to_string()]).name(), "claude");
+    assert_eq!(select_agent(&["something-else".to_string()]).name(), "claude");
+    assert_eq!(select_agent(&[]).name(), "claude");
 }

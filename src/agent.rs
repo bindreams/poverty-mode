@@ -46,6 +46,28 @@ pub trait Agent {
     ) -> tokio::process::Command;
 }
 
+use crate::agent::claude::ClaudeAgent;
+use crate::agent::codex::CodexAgent;
+
+/// Pick the agent adapter from the user's pass-through program (`run -- <prog> …`).
+/// Match on `argv[0]`'s basename, lowercased, with a trailing `.exe` stripped
+/// (Windows is case-insensitive): `codex` → [`CodexAgent`], everything else
+/// (including empty argv) → [`ClaudeAgent`].
+pub fn select_agent(argv: &[String]) -> Box<dyn Agent> {
+    let base = argv
+        .first()
+        .map(|p| {
+            let stem = p.rsplit(['/', '\\']).next().unwrap_or(p.as_str());
+            let lower = stem.to_ascii_lowercase();
+            lower.strip_suffix(".exe").unwrap_or(&lower).to_string()
+        })
+        .unwrap_or_else(|| "claude".to_string());
+    match base.as_str() {
+        "codex" => Box::new(CodexAgent),
+        _ => Box::new(ClaudeAgent),
+    }
+}
+
 // Characterization guard (R12): the `Agent` trait already exists (M6 typed it so
 // `build_and_run` could take `&dyn Agent`). These tests lock its object-safe
 // shape — usable through a trait object, `build_command` reachable via `&dyn` —
