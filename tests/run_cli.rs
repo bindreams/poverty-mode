@@ -113,7 +113,7 @@ async fn run_empty_chain_execs_agent_unchanged() {
 #[tokio::test(flavor = "multi_thread")]
 async fn run_reuses_live_chain_via_nested_guard() {
     // Stand up a fake live chain. We set POVERTY_PROXY_CHAIN=pino and
-    // ANTHROPIC_BASE_URL=<server>; the resolved chain is also `pino` (cli
+    // POVERTY_PROXY_HEAD=<server>; the resolved chain is also `pino` (cli
     // --proxies pino), so the signatures match and the guard fires. The agent
     // (__post, pointed at the chain HEAD base_url that run_command hands it) posts
     // to that base and gets 200. Critically this drives the REAL async
