@@ -104,6 +104,34 @@ pub fn central_is_tail(chain: &[ResolvedProxy]) -> bool {
     chain.last().map(|p| p.name.must_be_last()).unwrap_or(false)
 }
 
+use anyhow::Context as _;
+
+/// Compose the base URL an agent points at (C1). When central is the tail, append
+/// the agent's wire-client segment to the agent-agnostic `head`; otherwise the
+/// agent talks native paths straight to the real upstream, so `head` is returned
+/// unchanged. The append is string-level (trim one trailing slash, then add
+/// `/<segment>`) so it never clobbers the wire envelope's last segment the way a
+/// relative `Url::join` would.
+pub fn agent_base_for(
+    head: &url::Url,
+    agent: &dyn Agent,
+    central_is_tail: bool,
+) -> anyhow::Result<url::Url> {
+    if !central_is_tail {
+        return Ok(head.clone());
+    }
+    let trimmed = head.as_str().trim_end_matches('/');
+    // Contract guard: `head` is the BARE agent-agnostic head; composing twice would
+    // duplicate the client segment. Catch a double-apply in debug/CI.
+    debug_assert!(
+        !trimmed.ends_with(agent.wire_client_path()),
+        "agent_base_for called on an already-composed base: {head}"
+    );
+    let composed = format!("{trimmed}/{}", agent.wire_client_path());
+    url::Url::parse(&composed)
+        .with_context(|| format!("composing agent base from head '{head}' + wire client path"))
+}
+
 /// Split off a SINGLE trailing must-be-last (Central) entry, returning
 /// (first_party_hops, central_is_tail). Asserts (debug) that no non-trailing
 /// entry is must_be_last (the central-last contract; `resolve_chain` enforces it).

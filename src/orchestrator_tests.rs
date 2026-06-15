@@ -892,3 +892,28 @@ fn ensure_central_started_real_path_is_no_longer_the_m8_placeholder() {
         "real path must reach central::ensure_installed's checksum gate: {m}"
     );
 }
+
+// agent_base_for (C1 wire-client composition) =====
+
+#[test]
+fn agent_base_for_non_central_returns_head_unchanged() {
+    let head = url::Url::parse("http://127.0.0.1:4100").unwrap();
+    let got = agent_base_for(&head, &crate::agent::claude::ClaudeAgent, false).unwrap();
+    assert_eq!(got.as_str(), "http://127.0.0.1:4100/");
+}
+
+#[test]
+fn agent_base_for_central_appends_claude_client_segment() {
+    let head = url::Url::parse("http://127.0.0.1:4100").unwrap();
+    let got = agent_base_for(&head, &crate::agent::claude::ClaudeAgent, true).unwrap();
+    assert_eq!(got.as_str(), "http://127.0.0.1:4100/claude-code/anthropic");
+}
+
+#[test]
+fn agent_base_for_central_appends_to_wire_envelope_without_clobbering_secret() {
+    // head is the central wire ENVELOPE; the client segment must append, not
+    // replace the last path segment (a naive Url::join would eat `SECRET`).
+    let head = url::Url::parse("http://127.0.0.1:9000/wire/SECRET").unwrap();
+    let got = agent_base_for(&head, &crate::agent::claude::ClaudeAgent, true).unwrap();
+    assert_eq!(got.as_str(), "http://127.0.0.1:9000/wire/SECRET/claude-code/anthropic");
+}

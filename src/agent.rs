@@ -21,6 +21,20 @@ pub trait Agent {
     /// A short, stable identifier for diagnostics (e.g. `"claude"`).
     fn name(&self) -> &str;
 
+    /// The central-wire client/api path segment this agent's requests carry into
+    /// the chain (C1), e.g. `"claude-code/anthropic"` or `"codex/openai"`. The
+    /// orchestrator appends it to the agent-agnostic head when central is the tail.
+    /// Default is Claude's segment (Claude was the only agent before codex).
+    fn wire_client_path(&self) -> &str {
+        "claude-code/anthropic"
+    }
+
+    /// True iff this agent only works with JetBrains Central as the chain tail
+    /// (its wire client/api segment is a Central concept). Default false.
+    fn requires_central(&self) -> bool {
+        false
+    }
+
     /// Build the child command for this agent, pointed at `base_url` with
     /// `extra_env` applied. Does not spawn — the caller runs it.
     fn build_command(
