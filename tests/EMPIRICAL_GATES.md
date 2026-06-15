@@ -102,8 +102,8 @@ the decision here:
 
 The live-central integration tests (added in M8) also require an external,
 human-provisioned dependency: a logged-in `jbcentral` with a JetBrains AI Pro
-subscription. There is **no** non-interactive `central login --token`; CI never
-logs in. Those tests are likewise `#[ignore]`d and run only when a human
+subscription. poverty-mode assumes that pre-existing login and never drives it;
+CI never logs in. Those tests are likewise `#[ignore]`d and run only when a human
 provisions the dependency. Record their results in this file's section 2 table
 (add `central:<name>` rows) so all human-provisioned gate outcomes live in one
 place.
@@ -117,14 +117,15 @@ on the default test job — the gates are excluded there by design (R7: default
 
 ## Central live suite
 
-The JB Central integration's genuinely external actions (download, interactive login, daemon
+The JB Central integration's genuinely external actions (unpinned download, daemon
 start/health/stop) live in `tests/central_live.rs`, gated behind `#[ignore]` so the default
-`cargo test` never blocks on a network download or a browser-OAuth flow.
+`cargo test` never blocks on a network download.
 
 **Prerequisites (human-provisioned; NOT run in CI — see R7):**
 
 - Network access to JetBrains' public S3 (`jetbrains-central-cli.s3.eu-west-1.amazonaws.com`).
-- A JetBrains **AI Pro** subscription and an interactive browser login (`jbcentral login`).
+- A JetBrains **AI Pro** subscription and a pre-existing `jbcentral` login (the suite assumes
+  it; poverty-mode never drives login).
 
 **Run the central live suite deliberately:**
 
@@ -132,7 +133,7 @@ start/health/stop) live in `tests/central_live.rs`, gated behind `#[ignore]` so 
 cargo test --test central_live -- --ignored
 ```
 
-This installs `jbcentral` (default version `0.2.9`), performs the interactive login,
+This downloads the latest `jbcentral` unpinned, then (assuming the pre-existing login)
 starts the singleton daemon, asserts `/health`, and stops it. There is **no** skip-on-missing: when
 run, every test must pass (fail loudly otherwise). CI runs only the default `cargo test` and therefore
 never touches this suite (R7).

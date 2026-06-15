@@ -186,8 +186,8 @@ impl ProxyArgs {
 }
 
 /// Restrict the `which` positional to the first-party proxies (`pino`/`headroom`).
-/// `central` is a downloaded singleton, never run via `proxy`, so it (and any
-/// unknown name) is rejected with a clap `InvalidValue` error.
+/// `central` is the shared external/downloaded singleton, never run via `proxy`, so
+/// it (and any unknown name) is rejected with a clap `InvalidValue` error.
 fn parse_first_party_proxy(s: &str) -> Result<ProxyName, String> {
     match s {
         "pino" => Ok(ProxyName::Pino),

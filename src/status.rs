@@ -303,11 +303,7 @@ pub struct WireConfig {
 /// for the carried port (see `run_status`). With `NotInstalled` we emit a fully dead
 /// probe so login is forced Unknown by `build_status_report`. External mode does not
 /// use this helper — `run_status` builds its probe directly.
-pub fn assemble_probe(
-    install: CentralInstall,
-    wire: Option<WireConfig>,
-    login: CentralLogin,
-) -> CentralProbe {
+pub fn assemble_probe(install: CentralInstall, wire: Option<WireConfig>, login: CentralLogin) -> CentralProbe {
     debug_assert!(
         !matches!(install, CentralInstall::External { .. }),
         "assemble_probe is the Download-mode helper; External probes are built directly in run_status"
@@ -339,9 +335,8 @@ pub async fn probe_health_blocking(port: u16) -> Result<bool> {
 ///
 /// Mirrors `central::parse_wire_config`'s port coercion (some jbcentral builds write
 /// `proxy_port` as a string), but unlike that helper this never requires `proxy_secret`:
-/// the status probe only needs the port to decide whether to `/health`-check. This is the
-/// single source of truth shared by BOTH `poverty-mode status` and `poverty-mode central
-/// status` so they cannot disagree about liveness for a port-only (secretless) wire config.
+/// the status probe only needs the port to decide whether to `/health`-check (a port-only,
+/// secretless wire config still yields a liveness verdict).
 pub(crate) fn parse_wire_config_port(contents: &str) -> Option<u16> {
     let json: serde_json::Value = serde_json::from_str(contents).ok()?;
     match json.get("proxy_port") {

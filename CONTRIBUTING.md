@@ -17,7 +17,7 @@ cargo fmt --all --check
 
 ## Architecture
 
-One multiplexed lib+bin. The binary (`src/main.rs`) is a thin shim over `lib::run`; everything lives in modules declared in `src/lib.rs`. The CLI (`src/cli.rs`) dispatches subcommands: `run` (orchestrate a chain + agent), `proxy` (run one first-party proxy in the foreground — the debugging entry point), `central`, `config`, `status`, `doctor`, `clean`.
+One multiplexed lib+bin. The binary (`src/main.rs`) is a thin shim over `lib::run`; everything lives in modules declared in `src/lib.rs`. The CLI (`src/cli.rs`) dispatches subcommands: `run` (orchestrate a chain + agent), `proxy` (run one first-party proxy in the foreground — the debugging entry point), `config`, `status`, `doctor`, `clean`.
 
 ```
 src/cli.rs            clap definitions + dispatch (where each subcommand is wired)
@@ -28,7 +28,7 @@ src/proxy.rs          the shared async reverse-proxy engine (forward, /__pm/heal
   proxy/pino.rs       transform: prompt-cache breakpoint injection, drop-tools, etc.
   proxy/headroom.rs   transform: context compression via the vendored headroom-core
 src/agent.rs          Agent trait (generic over the wrapped tool); agent/claude.rs is v1
-src/central.rs        JB Central (jbcentral): download, login, lifecycle; download.rs is generic
+src/central.rs        JB Central (jbcentral): external-vs-download source, daemon lifecycle; download.rs is generic
 src/config.rs         the $XDG_CONFIG_HOME/poverty-mode.yaml model + chain resolution
 src/paths.rs          dirs, run-ids, atomic writes, advisory file locks
 src/tui.rs            interactive picker; tui/reducer.rs is the pure, headless-tested state
@@ -37,6 +37,8 @@ vendor/headroom-core  vendored, feature-trimmed copy of hybloid/headroom (Apache
 ```
 
 **How a chain works.** Each proxy is `(inbound 127.0.0.1 port) + (outbound upstream URL)`. The orchestrator allocates a port per hop and wires `upstream[i] → 127.0.0.1:port[i+1]`; the agent points at the head. The two first-party proxies are the *same* engine differing only in their body transform — adding a v2 proxy means adding a transform, not a server.
+
+**Central.** When `central` is the (always-last) hop, the binary it runs is the `central.executable` setting (default `jbcentral`), resolved through `central::central_source` — the single External-vs-Download decision point. A non-blank value is used as-is (no download, no version resolution); blank/unset downloads the latest `jbcentral` unpinned into the cache. Either way poverty-mode assumes the user is logged in: it never runs `jbcentral config set`, never writes `~/.wire` config, and never drives login. `status`, `doctor`, and `clean --stop-central` all route their binary choice through `central_source` so they agree with the run.
 
 ## Conventions
 

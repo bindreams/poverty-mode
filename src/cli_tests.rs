@@ -98,22 +98,11 @@ fn central_executable_flag_projects_into_override() {
 
 #[test]
 fn run_parses_central_executable_flag_into_override() {
-    let cli = Cli::try_parse_from([
-        "poverty-mode",
-        "run",
-        "--central-executable",
-        "/opt/jb",
-        "--",
-        "claude",
-    ])
-    .unwrap();
+    let cli = Cli::try_parse_from(["poverty-mode", "run", "--central-executable", "/opt/jb", "--", "claude"]).unwrap();
     let Command::Run { settings, .. } = cli.command else {
         panic!("expected Run")
     };
-    assert_eq!(
-        settings.to_overrides().central.executable.as_deref(),
-        Some("/opt/jb")
-    );
+    assert_eq!(settings.to_overrides().central.executable.as_deref(), Some("/opt/jb"));
 }
 
 #[test]
@@ -496,13 +485,13 @@ fn proxy_transform_kind_matches_chosen_proxy() {
     }
 }
 
-// FIX-D: `central` / `config` subcommand dispatch =====================================================================
+// FIX-D: `config` subcommand dispatch =================================================================================
 //
 // These exercise the safe, hermetic arms of the new dispatch handlers. The env
 // guards (`crate::test_support`) serialize and isolate the config/cache roots so
-// the tests never touch the real user dirs (R13/R23j). The live `central login`
-// and `central status`-against-a-running-daemon paths spawn `jbcentral` and need a
-// real install + login; those are covered by `#[ignore]` live tests below.
+// the tests never touch the real user dirs (R13/R23j). The live central paths
+// (daemon start/health/stop against a real `jbcentral`) are covered by `#[ignore]`
+// live tests below.
 
 #[test]
 fn dispatch_config_path_succeeds_in_isolated_home() {
