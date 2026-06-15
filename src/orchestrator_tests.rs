@@ -165,10 +165,14 @@ fn get<'a>(env: &'a [(String, String)], key: &str) -> Option<&'a str> {
     env.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
 }
 
+fn test_head() -> url::Url {
+    url::Url::parse("http://127.0.0.1:4100").unwrap()
+}
+
 #[test]
 fn agent_env_always_sets_chain_and_tool_search() {
     let chain = vec![pino_rp(), headroom_rp()];
-    let env = compute_agent_env(&chain, false, true);
+    let env = compute_agent_env(&chain, false, true, &test_head());
     assert_eq!(get(&env, "POVERTY_PROXY_CHAIN"), Some("pino,headroom"));
     assert_eq!(get(&env, "ENABLE_TOOL_SEARCH"), Some("true"));
 }
@@ -179,23 +183,23 @@ fn agent_env_emits_configured_tool_search_value() {
     // into ENABLE_TOOL_SEARCH verbatim (the orchestrator still ORIGINATES the key,
     // M7 contract), so a `false` config disables MCP tool search through the proxy.
     let chain = vec![pino_rp(), headroom_rp()];
-    let env_off = compute_agent_env(&chain, false, false);
+    let env_off = compute_agent_env(&chain, false, false, &test_head());
     assert_eq!(get(&env_off, "ENABLE_TOOL_SEARCH"), Some("false"));
-    let env_on = compute_agent_env(&chain, false, true);
+    let env_on = compute_agent_env(&chain, false, true, &test_head());
     assert_eq!(get(&env_on, "ENABLE_TOOL_SEARCH"), Some("true"));
 }
 
 #[test]
 fn agent_env_omits_auth_token_for_non_central_tail() {
     let chain = vec![pino_rp()];
-    let env = compute_agent_env(&chain, false, true);
+    let env = compute_agent_env(&chain, false, true, &test_head());
     assert_eq!(get(&env, "ANTHROPIC_AUTH_TOKEN"), None);
 }
 
 #[test]
 fn agent_env_sets_wire_proxy_auth_token_for_central_tail() {
     let chain = vec![pino_rp(), central_rp()];
-    let env = compute_agent_env(&chain, true, true);
+    let env = compute_agent_env(&chain, true, true, &test_head());
     assert_eq!(get(&env, "ANTHROPIC_AUTH_TOKEN"), Some("wire-proxy"));
     assert_eq!(get(&env, "POVERTY_PROXY_CHAIN"), Some("pino,central"));
     assert_eq!(get(&env, "ENABLE_TOOL_SEARCH"), Some("true"));
@@ -205,14 +209,14 @@ fn agent_env_sets_wire_proxy_auth_token_for_central_tail() {
 fn agent_env_never_includes_base_url_key() {
     // ANTHROPIC_BASE_URL is set by the Agent from its base_url arg, not here.
     let chain = vec![pino_rp(), central_rp()];
-    let env = compute_agent_env(&chain, true, true);
+    let env = compute_agent_env(&chain, true, true, &test_head());
     assert_eq!(get(&env, "ANTHROPIC_BASE_URL"), None);
 }
 
 #[test]
 fn agent_env_for_empty_chain_has_empty_chain_value() {
     let chain: Vec<ResolvedProxy> = vec![];
-    let env = compute_agent_env(&chain, false, true);
+    let env = compute_agent_env(&chain, false, true, &test_head());
     assert_eq!(get(&env, "POVERTY_PROXY_CHAIN"), Some(""));
     assert_eq!(get(&env, "ENABLE_TOOL_SEARCH"), Some("true"));
     assert_eq!(get(&env, "ANTHROPIC_AUTH_TOKEN"), None);
@@ -916,4 +920,12 @@ fn agent_base_for_central_appends_to_wire_envelope_without_clobbering_secret() {
     let head = url::Url::parse("http://127.0.0.1:9000/wire/SECRET").unwrap();
     let got = agent_base_for(&head, &crate::agent::claude::ClaudeAgent, true).unwrap();
     assert_eq!(got.as_str(), "http://127.0.0.1:9000/wire/SECRET/claude-code/anthropic");
+}
+
+#[test]
+fn agent_env_includes_poverty_proxy_head() {
+    let chain = vec![pino_rp(), headroom_rp()];
+    let head = url::Url::parse("http://127.0.0.1:4100").unwrap();
+    let env = compute_agent_env(&chain, false, true, &head);
+    assert_eq!(get(&env, "POVERTY_PROXY_HEAD"), Some("http://127.0.0.1:4100/"));
 }

@@ -83,6 +83,7 @@ pub fn compute_agent_env(
     chain: &[ResolvedProxy],
     central_is_tail: bool,
     enable_tool_search: bool,
+    head: &url::Url,
 ) -> Vec<(String, String)> {
     let mut env = vec![
         ("POVERTY_PROXY_CHAIN".to_string(), serialize_chain(chain)),
@@ -90,6 +91,9 @@ pub fn compute_agent_env(
             "ENABLE_TOOL_SEARCH".to_string(),
             enable_tool_search.to_string(),
         ),
+        // The bare agent-agnostic head (no wire-client segment), so a nested
+        // `poverty-mode run -- <agent>` can attach to the live chain (C1 / option B).
+        ("POVERTY_PROXY_HEAD".to_string(), head.as_str().to_string()),
     ];
     if central_is_tail {
         env.push(("ANTHROPIC_AUTH_TOKEN".to_string(), "wire-proxy".to_string()));
@@ -203,7 +207,7 @@ pub async fn build_and_run_with_fault(
         // No first-party proxies to spawn: the agent talks directly to the tail
         // upstream (for central-only, that is the wire URL). agent_env still
         // reflects central_tail for the auth override.
-        let env = compute_agent_env(&chain, central_tail, enable_tool_search);
+        let env = compute_agent_env(&chain, central_tail, enable_tool_search, &tail_upstream.url);
         let cmd = agent.build_command(argv, &tail_upstream.url, &env);
         let status = run_agent_forwarding_signals(cmd, agent.name()).await?;
         return Ok(status);
@@ -322,7 +326,7 @@ async fn build_via_manager(
         .ok_or_else(|| anyhow::anyhow!("manager returned no running hops"))?;
     let head_base_url = head.base_url.clone();
 
-    let agent_env = compute_agent_env(chain, central_tail, enable_tool_search);
+    let agent_env = compute_agent_env(chain, central_tail, enable_tool_search, &head_base_url);
     let agent_cmd = agent.build_command(argv, &head_base_url, &agent_env);
     let status_result = run_agent_forwarding_signals(agent_cmd, agent.name()).await;
 
@@ -703,7 +707,7 @@ pub async fn run_command(
         .await
         .map_err(|e| anyhow::anyhow!("nested-reuse probe task join error: {e}"))?;
     if let Some(base) = reuse {
-        let env = compute_agent_env(&chain, central_is_tail(&chain), enable_tool_search);
+        let env = compute_agent_env(&chain, central_is_tail(&chain), enable_tool_search, &base);
         let cmd = agent.build_command(argv, &base, &env);
         return run_agent_forwarding_signals(cmd, agent.name()).await;
     }
