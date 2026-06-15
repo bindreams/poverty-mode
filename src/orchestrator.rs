@@ -415,7 +415,7 @@ fn tail_ttl_str(t: TailTtl) -> &'static str {
 ///   nothing when the value already matches the CLI default), never a value.
 ///
 /// pino default: `auto_cache=false`, `strip_ansi=true`. headroom default:
-/// `compression=false`. Optional flags (`--drop-tools`, `--model-override`) are
+/// `compression=true`. Optional flags (`--drop-tools`, `--model-override`) are
 /// omitted when empty/unset.
 pub fn proxy_child_args(spec: &ProxyHopSpec) -> Vec<String> {
     let mut args = vec![
@@ -453,7 +453,7 @@ pub fn proxy_child_args(spec: &ProxyHopSpec) -> Vec<String> {
             }
         }
         ProxySettings::Headroom(h) => {
-            // compression default is false: emit the explicit flag either way so
+            // compression default is true: emit the explicit flag either way so
             // the child's resolved value is unambiguous regardless of defaults.
             if h.compression {
                 args.push("--compression".to_string());
