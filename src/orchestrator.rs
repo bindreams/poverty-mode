@@ -186,12 +186,22 @@ pub async fn build_and_run(
     argv: &[String],
     enable_tool_search: bool,
 ) -> anyhow::Result<std::process::ExitStatus> {
-    build_and_run_with_fault(chain, tail_upstream, agent, argv, enable_tool_search, false).await
+    let run_id = crate::paths::new_run_id();
+    build_and_run_inner(
+        &run_id,
+        chain,
+        tail_upstream,
+        agent,
+        argv,
+        enable_tool_search,
+        false,
+    )
+    .await
 }
 
 /// Like [`build_and_run`], but constructs an [`manager::EphemeralManager`] with a
 /// fault knob (test-only: forces the tail-most hop to fail readiness). Inert when
-/// `fault` is false; [`build_and_run`] calls this with `false`.
+/// `fault` is false.
 #[doc(hidden)]
 pub async fn build_and_run_with_fault(
     chain: Vec<ResolvedProxy>,
@@ -201,8 +211,33 @@ pub async fn build_and_run_with_fault(
     enable_tool_search: bool,
     fault: bool,
 ) -> anyhow::Result<std::process::ExitStatus> {
+    let run_id = crate::paths::new_run_id();
+    build_and_run_inner(
+        &run_id,
+        chain,
+        tail_upstream,
+        agent,
+        argv,
+        enable_tool_search,
+        fault,
+    )
+    .await
+}
+
+async fn build_and_run_inner(
+    run_id: &str,
+    chain: Vec<ResolvedProxy>,
+    tail_upstream: Upstream,
+    agent: &dyn Agent,
+    argv: &[String],
+    enable_tool_search: bool,
+    fault: bool,
+) -> anyhow::Result<std::process::ExitStatus> {
     let (hops, central_tail) = split_trailing_central(&chain);
 
+    // No-hop branch: reproduce the CURRENT no-hop logic verbatim. `compute_agent_env`
+    // takes the head URL (4th arg); the agent base is composed via `agent_base_for`
+    // (appends the wire-client segment for a central tail). Do NOT drop agent_base_for.
     if hops.is_empty() {
         // No first-party proxies to spawn: the agent talks directly to the tail
         // upstream (for central-only, that is the wire URL). agent_env still
@@ -219,6 +254,7 @@ pub async fn build_and_run_with_fault(
 
     build_via_manager(
         &mut manager,
+        run_id,
         &chain,
         &hops,
         central_tail,
@@ -265,6 +301,7 @@ fn hop_log_file(run_dir: &std::path::Path, name: ProxyName) -> std::path::PathBu
 #[allow(clippy::too_many_arguments)]
 async fn build_via_manager(
     manager: &mut dyn manager::ProxyManager,
+    run_id: &str,
     chain: &[ResolvedProxy],
     hops: &[ResolvedProxy],
     central_tail: bool,
@@ -273,17 +310,16 @@ async fn build_via_manager(
     argv: &[String],
     enable_tool_search: bool,
 ) -> anyhow::Result<std::process::ExitStatus> {
-    let run_id = crate::paths::new_run_id();
     // `ensure_run_dir` hardens the dir to 0700 on POSIX (the run dir holds proxy
     // body-log files with full request/response bodies), unlike a raw create.
-    let run_dir = crate::paths::ensure_run_dir(&run_id)?;
+    let run_dir = crate::paths::ensure_run_dir(run_id)?;
 
     // Carry STRUCTURED hop fields; the manager renders the exact argv via the
     // single source of truth `proxy_child_args` once it knows each hop's real
     // back-to-front --upstream. No placeholder/strip/re-append dance.
     //
     // The body-log file is named per design spec §5.11 as
-    // `<state>/runs/<run-id>/<proxy>-<port>.log`, where `<port>` is the hop's REAL
+    // `<log_dir>/<run-id>/<proxy>-<port>.log`, where `<port>` is the hop's REAL
     // listening port — the value `status::enumerate_runs` parses back out. The port
     // is OS-assigned and unknown here (hops bind `127.0.0.1:0` later), so we embed
     // the `{port}` token; the engine substitutes its bound port at file-open
@@ -293,8 +329,9 @@ async fn build_via_manager(
         .iter()
         .map(|hop| manager::HopSpec {
             proxy: hop.clone(),
-            run_id: run_id.clone(),
+            run_id: run_id.to_string(),
             log_file: hop_log_file(&run_dir, hop.name),
+            stderr_log: run_dir.join(format!("{}.log", hop.name.as_str())),
         })
         .collect();
 
@@ -699,6 +736,7 @@ pub fn nested_reuse_check(desired_chain: &[ResolvedProxy]) -> Option<url::Url> {
 /// dispatched off the executor via `tokio::task::spawn_blocking`. Calling either
 /// synchronously here would panic ("Cannot start a runtime from within a runtime").
 pub async fn run_command(
+    run_id: &str,
     chain: Vec<ResolvedProxy>,
     argv: &[String],
     enable_tool_search: bool,
@@ -749,7 +787,16 @@ pub async fn run_command(
     };
     let tail = resolve_tail_upstream(&inputs)?;
 
-    build_and_run(chain, tail, agent.as_ref(), argv, enable_tool_search).await
+    build_and_run_inner(
+        run_id,
+        chain,
+        tail,
+        agent.as_ref(),
+        argv,
+        enable_tool_search,
+        false,
+    )
+    .await
 }
 
 /// The Central install/login/start/health operations the orchestrator drives,

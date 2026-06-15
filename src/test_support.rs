@@ -45,7 +45,7 @@ impl Drop for XdgConfigGuard {
 
 /// Holds `ENV_LOCK` and sets one or more env vars to chosen values (or removes
 /// them) for the guard's lifetime, restoring each prior value on drop. Used by
-/// `paths_tests` to exercise the `POVERTY_STATE_DIR`/`POVERTY_CACHE_DIR` overrides
+/// `paths_tests` to exercise the `POVERTY_LOG_DIR`/`POVERTY_CACHE_DIR` overrides
 /// (R23j) under the same serialization as the XDG guard. `ENV_LOCK` is a plain
 /// (non-reentrant) `Mutex`, so a single guard must own ALL the vars a test sets at
 /// once — use `set_pair` rather than two `set` calls (which would deadlock).

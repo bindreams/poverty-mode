@@ -201,30 +201,19 @@ fn config_path_xdg_empty_is_treated_as_unset() {
 }
 
 #[test]
-fn state_dir_and_cache_dir_are_absolute_and_distinct() {
-    // Pin to known overrides so this test does not depend on the host's real dirs
-    // (and is isolated from any ambient POVERTY_STATE_DIR/POVERTY_CACHE_DIR). Both
-    // vars are set under ONE `ENV_LOCK` acquisition via `set_pair` — taking two
-    // separate `EnvVarGuard`s would deadlock on the non-reentrant `ENV_LOCK`.
-    let s_dir = tempfile::TempDir::new().unwrap();
+fn log_dir_and_cache_dir_are_absolute_and_distinct() {
+    let l_dir = tempfile::TempDir::new().unwrap();
     let c_dir = tempfile::TempDir::new().unwrap();
     let _g = EnvVarGuard::set_pair(
-        ("POVERTY_STATE_DIR", Some(s_dir.path())),
+        ("POVERTY_LOG_DIR", Some(l_dir.path())),
         ("POVERTY_CACHE_DIR", Some(c_dir.path())),
     );
 
-    let s = state_dir().unwrap();
+    let l = log_dir().unwrap();
     let c = cache_dir().unwrap();
-    assert!(s.is_absolute());
+    assert!(l.is_absolute());
     assert!(c.is_absolute());
-    assert_ne!(s, c);
-}
-
-#[test]
-fn state_dir_honors_poverty_state_dir_override() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let _g = EnvVarGuard::set("POVERTY_STATE_DIR", Some(dir.path()));
-    assert_eq!(state_dir().unwrap(), dir.path());
+    assert_ne!(l, c);
 }
 
 #[test]
@@ -235,46 +224,29 @@ fn cache_dir_honors_poverty_cache_dir_override() {
 }
 
 #[test]
-fn state_dir_empty_override_is_treated_as_unset() {
-    // An empty override is ignored (falls back to the platform dir), like XDG.
-    let _g = EnvVarGuard::set("POVERTY_STATE_DIR", Some(std::path::Path::new("")));
-    let s = state_dir().unwrap();
-    assert!(
-        s.is_absolute(),
-        "fallback state dir must be absolute, got {}",
-        s.display()
-    );
-}
-
-#[test]
-fn run_dir_is_state_runs_runid() {
-    // run_dir is state-relative; pin state via the override so the assertion is
-    // independent of the host's real state dir.
+fn run_dir_is_log_dir_name() {
     let dir = tempfile::TempDir::new().unwrap();
-    let _g = EnvVarGuard::set("POVERTY_STATE_DIR", Some(dir.path()));
+    let _g = EnvVarGuard::set("POVERTY_LOG_DIR", Some(dir.path()));
     let id = "01hxyzrunid0000000000000abc";
-    let rd = run_dir(id).unwrap();
-    let expected = state_dir().unwrap().join("runs").join(id);
-    assert_eq!(rd, expected);
+    assert_eq!(run_dir(id).unwrap(), dir.path().join(id));
 }
 
 #[test]
-fn ensure_run_dir_creates_state_runs_runid() {
-    // Redirect state under XDG by setting XDG_CONFIG_HOME is not enough (state uses
-    // data_dir, not config_dir); instead assert the path shape and existence
-    // relative to the real state_dir, then clean up the created run dir.
+fn ensure_run_dir_creates_log_dir_name() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let _g = EnvVarGuard::set("POVERTY_LOG_DIR", Some(dir.path()));
     let id = new_run_id();
     let created = ensure_run_dir(&id).unwrap();
-    assert_eq!(created, run_dir(&id).unwrap());
+    assert_eq!(created, dir.path().join(&id));
     assert!(created.is_dir(), "ensure_run_dir must create the directory");
-    // Cleanup so repeated test runs do not accumulate dirs under the real state dir.
-    std::fs::remove_dir_all(&created).unwrap();
 }
 
 #[cfg(unix)]
 #[test]
 fn ensure_run_dir_hardens_dir_to_0700_on_unix() {
     use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::TempDir::new().unwrap();
+    let _g = EnvVarGuard::set("POVERTY_LOG_DIR", Some(dir.path()));
     let id = new_run_id();
     let created = ensure_run_dir(&id).unwrap();
     let mode = std::fs::metadata(&created).unwrap().permissions().mode() & 0o777;
@@ -282,7 +254,6 @@ fn ensure_run_dir_hardens_dir_to_0700_on_unix() {
         mode, 0o700,
         "run dir must be owner-only on POSIX, got {mode:o}"
     );
-    std::fs::remove_dir_all(&created).unwrap();
 }
 
 #[cfg(unix)]
@@ -456,4 +427,89 @@ fn enumerate_run_ids_empty_when_runs_dir_absent() {
     let tmp = tempfile::TempDir::new().unwrap();
     let runs = tmp.path().join("runs"); // never created
     assert!(enumerate_run_ids(&runs).unwrap().is_empty());
+}
+
+#[test]
+fn enumerate_run_ids_accepts_suffixed_session_names_sorted_by_ulid() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let runs = tmp.path().join("logs");
+    std::fs::create_dir_all(&runs).unwrap();
+    // Out of chronological order on disk; ULID suffix dictates the sort.
+    std::fs::create_dir(runs.join("proj-20260615-120000-01000000000000000000000003")).unwrap();
+    std::fs::create_dir(runs.join("proj-20260615-110000-01000000000000000000000001")).unwrap();
+    std::fs::create_dir(runs.join("other-20260615-130000-01000000000000000000000002")).unwrap();
+    std::fs::create_dir(runs.join("not-a-run")).unwrap();
+
+    let ids = enumerate_run_ids(&runs).unwrap();
+    assert_eq!(
+        ids,
+        vec![
+            "proj-20260615-110000-01000000000000000000000001".to_string(),
+            "other-20260615-130000-01000000000000000000000002".to_string(),
+            "proj-20260615-120000-01000000000000000000000003".to_string(),
+        ]
+    );
+}
+
+// log_dir / session naming =====
+
+#[test]
+fn log_dir_honors_poverty_log_dir_override() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let _g = EnvVarGuard::set("POVERTY_LOG_DIR", Some(dir.path()));
+    assert_eq!(log_dir().unwrap(), dir.path());
+}
+
+#[test]
+fn log_dir_empty_override_falls_back_to_absolute() {
+    let _g = EnvVarGuard::set("POVERTY_LOG_DIR", Some(std::path::Path::new("")));
+    let d = log_dir().unwrap();
+    assert!(
+        d.is_absolute(),
+        "fallback log dir must be absolute, got {}",
+        d.display()
+    );
+    // `Path::ends_with` matches whole components; build the suffix from components so
+    // it is correct on Windows (`\`) as well as Unix (`/`).
+    assert!(
+        d.ends_with(std::path::Path::new("poverty-mode").join("logs")),
+        "fallback must be the XDG state subdir, got {}",
+        d.display()
+    );
+}
+
+#[test]
+fn sanitize_stem_replaces_unsafe_chars_and_defaults_empty() {
+    assert_eq!(sanitize_stem("poverty-mode"), "poverty-mode");
+    assert_eq!(sanitize_stem("my project!"), "my_project_");
+    assert_eq!(sanitize_stem("a/b\\c"), "a_b_c");
+    assert_eq!(sanitize_stem(""), "root");
+}
+
+#[test]
+fn new_session_name_is_findable_and_carries_a_ulid() {
+    let name = new_session_name();
+    // Ends with a 26-char lowercase ULID after the last dash.
+    let last = name.rsplit('-').next().unwrap();
+    assert_eq!(last.len(), 26, "session name must end with a ULID: {name}");
+    assert!(
+        run_ulid(&name).is_some(),
+        "session name must be recognized as a run dir: {name}"
+    );
+    // Has a prefix before the ULID (stem + timestamp).
+    assert!(
+        name.len() > 27,
+        "session name must carry stem + timestamp: {name}"
+    );
+}
+
+#[test]
+fn run_ulid_accepts_bare_and_suffixed_ulids_rejects_junk() {
+    let ulid = "01000000000000000000000001";
+    assert_eq!(run_ulid(ulid), Some(ulid));
+    let suffixed = format!("poverty-mode-20260615-143022-{ulid}");
+    assert_eq!(run_ulid(&suffixed), Some(ulid));
+    assert_eq!(run_ulid("not-a-ulid"), None);
+    assert_eq!(run_ulid("main"), None);
+    assert_eq!(run_ulid("my-scratch-notes"), None);
 }

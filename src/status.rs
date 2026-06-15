@@ -16,7 +16,7 @@ pub struct ProxyLog {
     pub log: PathBuf,
 }
 
-/// One run directory under `<state>/runs/<run_id>/`.
+/// One run directory under `<log_dir>/<run_id>/`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunRecord {
     pub run_id: String,
@@ -38,20 +38,21 @@ fn parse_log_name(file_name: &str) -> Option<(String, u16)> {
     Some((name.to_string(), port))
 }
 
-/// True iff `name` is a syntactically valid ULID (26 Crockford-base32 chars).
+/// True iff `name` is a run directory name (carries a ULID; see `paths::run_ulid`).
 fn is_run_id(name: &str) -> bool {
-    ulid::Ulid::from_string(name).is_ok()
+    crate::paths::run_ulid(name).is_some()
 }
 
 /// Enumerate run directories under `runs_root`, collecting their proxy logs.
 ///
 /// - A missing `runs_root` is not an error; it yields an empty list.
 /// - Non-directory entries directly under `runs_root` are ignored.
-/// - A directory is treated as a run ONLY if its name is a valid ULID; non-ULID
-///   directories are skipped so they can never be enumerated (or pruned by `clean`).
+/// - A directory is treated as a run ONLY if `paths::run_ulid` accepts its name
+///   (a bare ULID or a `<prefix>-<ULID>` session name); others are skipped so they
+///   can never be enumerated (or pruned by `clean`).
 /// - Within a run directory, only files matching `<proxy>-<port>.log` are collected.
-/// - Runs are sorted ascending by `run_id` (ULID == chronological). Within a run,
-///   proxy logs are sorted ascending by `(name, port)` for deterministic output.
+/// - Runs are sorted by the embedded ULID (chronological). Within a run, proxy logs
+///   are sorted ascending by `(name, port)` for deterministic output.
 pub fn enumerate_runs(runs_root: &Path) -> Result<Vec<RunRecord>> {
     if !runs_root.exists() {
         return Ok(Vec::new());
@@ -99,7 +100,7 @@ pub fn enumerate_runs(runs_root: &Path) -> Result<Vec<RunRecord>> {
         });
     }
 
-    runs.sort_by(|a, b| a.run_id.cmp(&b.run_id));
+    runs.sort_by(|a, b| crate::paths::run_ulid(&a.run_id).cmp(&crate::paths::run_ulid(&b.run_id)));
     Ok(runs)
 }
 
@@ -389,7 +390,7 @@ pub(crate) fn newest_central_binary(cache_dir: &Path) -> Result<Option<PathBuf>>
 /// identity concern that motivates the first-party hops' identity check.
 pub async fn run_status() -> Result<()> {
     let cache = crate::paths::cache_dir()?;
-    let runs_root = crate::paths::state_dir()?.join("runs");
+    let runs_root = crate::paths::log_dir()?;
 
     let cache_for_blocking = cache.clone();
     // Off-runtime: install scan, wire-config read, jbcentral status parse, health.

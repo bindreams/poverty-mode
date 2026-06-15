@@ -29,9 +29,13 @@ use predicates::str::contains;
 #[test]
 fn interactive_run_reaches_picker_and_hits_non_tty_guard() {
     let cfg_home = tempfile::tempdir().unwrap();
+    // Isolate the session log dir so `run` does not write into the real $HOME
+    // (every `run` creates a session dir + main.log before dispatch).
+    let log_home = tempfile::tempdir().unwrap();
 
     let mut cmd = Command::cargo_bin("poverty-mode").unwrap();
     cmd.env("XDG_CONFIG_HOME", cfg_home.path())
+        .env("POVERTY_LOG_DIR", log_home.path())
         .env_remove("POVERTY_PROXY_CHAIN")
         .env_remove("ANTHROPIC_BASE_URL")
         .arg("run")
@@ -57,9 +61,13 @@ fn interactive_run_reaches_picker_and_hits_non_tty_guard() {
 #[test]
 fn interactive_resolves_proxies_before_picker_so_bogus_proxies_errors() {
     let cfg_home = tempfile::tempdir().unwrap();
+    // Isolate the session log dir so `run` does not write into the real $HOME
+    // (every `run` creates a session dir + main.log before dispatch).
+    let log_home = tempfile::tempdir().unwrap();
 
     let mut cmd = Command::cargo_bin("poverty-mode").unwrap();
     cmd.env("XDG_CONFIG_HOME", cfg_home.path())
+        .env("POVERTY_LOG_DIR", log_home.path())
         .env_remove("POVERTY_PROXY_CHAIN")
         .env_remove("ANTHROPIC_BASE_URL")
         .arg("run")
@@ -81,9 +89,13 @@ fn interactive_resolves_proxies_before_picker_so_bogus_proxies_errors() {
 #[test]
 fn interactive_resolves_env_chain_before_picker_so_bogus_env_errors() {
     let cfg_home = tempfile::tempdir().unwrap();
+    // Isolate the session log dir so `run` does not write into the real $HOME
+    // (every `run` creates a session dir + main.log before dispatch).
+    let log_home = tempfile::tempdir().unwrap();
 
     let mut cmd = Command::cargo_bin("poverty-mode").unwrap();
     cmd.env("XDG_CONFIG_HOME", cfg_home.path())
+        .env("POVERTY_LOG_DIR", log_home.path())
         .env("POVERTY_PROXY_CHAIN", "bogus")
         .env_remove("ANTHROPIC_BASE_URL")
         .arg("run")

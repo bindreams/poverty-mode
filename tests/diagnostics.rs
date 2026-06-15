@@ -7,7 +7,7 @@ use tempfile::TempDir;
 fn pm(home: &TempDir) -> Command {
     let mut cmd = Command::cargo_bin("poverty-mode").unwrap();
     let p = home.path();
-    cmd.env("POVERTY_STATE_DIR", p.join("state"))
+    cmd.env("POVERTY_LOG_DIR", p.join("logs"))
         .env("POVERTY_CACHE_DIR", p.join("cache"))
         .env("XDG_CONFIG_HOME", p.join("config"))
         // Point managed-settings detection at a hermetic (absent) path so a real
@@ -19,9 +19,9 @@ fn pm(home: &TempDir) -> Command {
     cmd
 }
 
-/// The runs root the binary will use given the injected POVERTY_STATE_DIR.
+/// The runs root the binary will use given the injected POVERTY_LOG_DIR.
 fn runs_root(home: &TempDir) -> std::path::PathBuf {
-    home.path().join("state").join("runs")
+    home.path().join("logs")
 }
 
 // Valid ULIDs (ascending == chronological).

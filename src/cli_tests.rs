@@ -518,7 +518,7 @@ fn dispatch_config_path_succeeds_in_isolated_home() {
     let cli = Cli::try_parse_from(["poverty-mode", "config", "path"]).unwrap();
     // `config path` is pure path math (no file is created); it must succeed and
     // resolve under the isolated config home.
-    dispatch(cli).expect("`config path` should succeed");
+    dispatch(cli, None).expect("`config path` should succeed");
     assert_eq!(crate::paths::config_path().unwrap(), guard.config_file());
 }
 
@@ -532,7 +532,7 @@ fn dispatch_config_show_creates_default_and_succeeds() {
     let cli = Cli::try_parse_from(["poverty-mode", "config", "show"]).unwrap();
     // `config show` loads-or-creates: on first run it writes the safe default, then
     // prints it. The file must exist afterwards and re-parse into the canonical default.
-    dispatch(cli).expect("`config show` should succeed");
+    dispatch(cli, None).expect("`config show` should succeed");
     let text = std::fs::read_to_string(guard.config_file()).expect("config written on first show");
     let cfg: crate::config::Config = serde_yaml::from_str(&text).unwrap();
     assert_eq!(cfg, crate::config::Config::default_all_disabled());
@@ -546,7 +546,7 @@ fn dispatch_central_stop_when_not_installed_is_ok() {
     let dir = tempfile::TempDir::new().unwrap();
     let _guard = crate::test_support::EnvVarGuard::set("POVERTY_CACHE_DIR", Some(dir.path()));
     let cli = Cli::try_parse_from(["poverty-mode", "central", "stop"]).unwrap();
-    dispatch(cli).expect("`central stop` with no install should be Ok");
+    dispatch(cli, None).expect("`central stop` with no install should be Ok");
 }
 
 #[test]
@@ -557,21 +557,21 @@ fn dispatch_central_status_when_not_installed_is_ok() {
     let dir = tempfile::TempDir::new().unwrap();
     let _guard = crate::test_support::EnvVarGuard::set("POVERTY_CACHE_DIR", Some(dir.path()));
     let cli = Cli::try_parse_from(["poverty-mode", "central", "status"]).unwrap();
-    dispatch(cli).expect("`central status` with no install should be Ok");
+    dispatch(cli, None).expect("`central status` with no install should be Ok");
 }
 
 #[test]
 #[ignore = "live: spawns `jbcentral` and drives the interactive browser-OAuth login (needs a real install + JetBrains AI Pro)"]
 fn dispatch_central_login_live() {
     let cli = Cli::try_parse_from(["poverty-mode", "central", "login"]).unwrap();
-    dispatch(cli).expect("`central login` should succeed against a real jbcentral");
+    dispatch(cli, None).expect("`central login` should succeed against a real jbcentral");
 }
 
 #[test]
 #[ignore = "live: classifies login via a real `jbcentral status` and probes a running daemon's /health"]
 fn dispatch_central_status_live() {
     let cli = Cli::try_parse_from(["poverty-mode", "central", "status"]).unwrap();
-    dispatch(cli).expect("`central status` should succeed against a real jbcentral");
+    dispatch(cli, None).expect("`central status` should succeed against a real jbcentral");
 }
 
 #[test]
