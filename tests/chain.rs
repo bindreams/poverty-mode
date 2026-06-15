@@ -5,6 +5,7 @@ mod common; // the canonical M3 stub helper at tests/common/ (R3)
 use std::sync::{Arc, Mutex};
 
 use common::stub::start_stub;
+use poverty_mode::agent::codex::CodexAgent;
 use poverty_mode::agent::Agent;
 use poverty_mode::config::{CentralSettings, ProxySettings, ResolvedProxy};
 use poverty_mode::orchestrator;
@@ -337,4 +338,50 @@ async fn hop_emits_exactly_one_ready_line_then_silence_on_stdout() {
         rest.trim().is_empty(),
         "hop wrote to stdout after the READY line (contract violation): {rest:?}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn codex_chain_carries_codex_openai_wire_path_to_tail() {
+    point_self_spawn_at_real_binary();
+    // chain = [pino, central]; tail is the wire ENVELOPE. The real CodexAgent
+    // composes base = <head>/codex/openai and injects it via `-c`; __codexpost reads
+    // it back and POSTs <base>/responses. The stub must receive
+    // /wire/SECRET/codex/openai/responses, with no x-api-key (central injects auth).
+    let stub = start_stub(r#"{"ok":true}"#);
+    let tail = Upstream {
+        url: Url::parse(&format!("http://127.0.0.1:{}/wire/SECRET", stub.port)).unwrap(),
+    };
+    let exe = env!("CARGO_BIN_EXE_poverty-mode");
+    let argv = vec![exe.to_string(), "__codexpost".to_string()];
+    let chain = vec![pino_passthrough(), central_rp()];
+
+    let status = orchestrator::build_and_run(chain, tail, &CodexAgent, &argv, true)
+        .await
+        .expect("build_and_run codex chain");
+    assert!(status.success(), "codex agent should succeed through the chain");
+
+    let cap = stub.last().expect("stub recorded a request");
+    assert_eq!(cap.method, "POST");
+    assert_eq!(cap.uri, "/wire/SECRET/codex/openai/responses");
+    assert_eq!(cap.x_api_key, None, "codex sends no api key; central injects the JWT");
+    assert_eq!(stub.count(), 1, "exactly one hop (pino) forwarded to the stub");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn claude_chain_still_carries_anthropic_wire_path_to_tail() {
+    point_self_spawn_at_real_binary();
+    let stub = start_stub(r#"{"ok":true}"#);
+    let tail = Upstream {
+        url: Url::parse(&format!("http://127.0.0.1:{}/wire/SECRET", stub.port)).unwrap(),
+    };
+    let agent = PostingAgent::default();
+    let chain = vec![pino_passthrough(), central_rp()];
+
+    let status = orchestrator::build_and_run(chain, tail, &agent, &[], true)
+        .await
+        .expect("build_and_run claude chain");
+    assert!(status.success());
+
+    let cap = stub.last().expect("stub recorded a request");
+    assert_eq!(cap.uri, "/wire/SECRET/claude-code/anthropic/v1/messages");
 }
