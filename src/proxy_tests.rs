@@ -12,6 +12,19 @@ fn messages_path_matches_exact_and_query_and_count_tokens() {
 }
 
 #[test]
+fn messages_path_matches_with_wire_client_prefix() {
+    // C1: the agent carries its central-wire client segment in the base URL, so the
+    // inbound path reaching an agent-agnostic hop is prefixed. The prefix is opaque.
+    assert!(is_messages_path("/claude-code/anthropic/v1/messages"));
+    assert!(is_messages_path(
+        "/claude-code/anthropic/v1/messages?beta=true"
+    ));
+    assert!(is_messages_path(
+        "/claude-code/anthropic/v1/messages/count_tokens"
+    ));
+}
+
+#[test]
 fn messages_path_rejects_other_paths() {
     assert!(!is_messages_path("/v1/complete"));
     assert!(!is_messages_path("/__pm/health"));
@@ -19,6 +32,9 @@ fn messages_path_rejects_other_paths() {
     assert!(!is_messages_path("/v1/messages/count_tokensX"));
     assert!(!is_messages_path("/"));
     assert!(!is_messages_path(""));
+    // Codex's OpenAI Responses path must never be treated as a messages path.
+    assert!(!is_messages_path("/responses"));
+    assert!(!is_messages_path("/codex/openai/responses"));
 }
 
 #[test]

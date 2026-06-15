@@ -10,12 +10,9 @@ fn central_wire_upstream_renders_jetbrains_wire_url() {
         secret: "abc123".to_string(),
     };
     let up = central_wire_upstream(&info).unwrap();
-    assert_eq!(
-        up.url.as_str(),
-        "http://127.0.0.1:19516/wire/abc123/claude-code/anthropic"
-    );
+    assert_eq!(up.url.as_str(), "http://127.0.0.1:19516/wire/abc123");
     // The wire path is carried as the upstream's path prefix (no trailing slash).
-    assert_eq!(up.path_prefix(), "/wire/abc123/claude-code/anthropic");
+    assert_eq!(up.path_prefix(), "/wire/abc123");
     assert_eq!(up.host_header(), "127.0.0.1:19516");
 }
 
@@ -33,15 +30,12 @@ fn central_wire_upstream_percent_encodes_special_secret() {
     let up = central_wire_upstream(&info).unwrap();
     assert_eq!(
         up.url.as_str(),
-        "http://127.0.0.1:19516/wire/a%23b%3Fc%2Fd%20e%26f%25g/claude-code/anthropic"
+        "http://127.0.0.1:19516/wire/a%23b%3Fc%2Fd%20e%26f%25g"
     );
     // It stays one segment: no fragment, no query, no extra path separators.
     assert_eq!(up.url.fragment(), None);
     assert_eq!(up.url.query(), None);
-    assert_eq!(
-        up.path_prefix(),
-        "/wire/a%23b%3Fc%2Fd%20e%26f%25g/claude-code/anthropic"
-    );
+    assert_eq!(up.path_prefix(), "/wire/a%23b%3Fc%2Fd%20e%26f%25g");
     assert_eq!(up.host_header(), "127.0.0.1:19516");
 }
 
@@ -113,10 +107,7 @@ fn builds_wire_upstream_url() {
         secret: "abc123".to_string(),
     };
     let up: Upstream = central_wire_upstream(&info).unwrap();
-    assert_eq!(
-        up.url.as_str(),
-        "http://127.0.0.1:19516/wire/abc123/claude-code/anthropic"
-    );
+    assert_eq!(up.url.as_str(), "http://127.0.0.1:19516/wire/abc123");
 }
 
 #[test]
@@ -127,7 +118,7 @@ fn wire_upstream_path_prefix_excludes_v1_messages() {
         secret: "S".to_string(),
     };
     let up = central_wire_upstream(&info).unwrap();
-    assert_eq!(up.path_prefix(), "/wire/S/claude-code/anthropic");
+    assert_eq!(up.path_prefix(), "/wire/S");
     assert_eq!(up.host_header(), "127.0.0.1:7000");
 }
 
@@ -138,8 +129,8 @@ fn wire_url_string_helper_matches_upstream() {
         secret: "xyz".to_string(),
     };
     assert_eq!(
-        central_wire_url(&info),
-        "http://127.0.0.1:8080/wire/xyz/claude-code/anthropic"
+        central_wire_envelope_url(&info),
+        "http://127.0.0.1:8080/wire/xyz"
     );
 }
 
@@ -151,11 +142,8 @@ fn wire_secret_with_url_significant_chars_is_percent_encoded() {
         port: 9000,
         secret: "a b/c?d#e\u{00e9}".to_string(),
     };
-    let url = central_wire_url(&info);
-    assert_eq!(
-        url,
-        "http://127.0.0.1:9000/wire/a%20b%2Fc%3Fd%23e%C3%A9/claude-code/anthropic"
-    );
+    let url = central_wire_envelope_url(&info);
+    assert_eq!(url, "http://127.0.0.1:9000/wire/a%20b%2Fc%3Fd%23e%C3%A9");
     // It parses without panicking and the secret stays inside the path (no query/fragment leaked).
     let up = central_wire_upstream(&info).unwrap();
     assert!(
@@ -166,10 +154,7 @@ fn wire_secret_with_url_significant_chars_is_percent_encoded() {
         up.url.fragment().is_none(),
         "secret must not leak into the fragment"
     );
-    assert_eq!(
-        up.url.path(),
-        "/wire/a%20b%2Fc%3Fd%23e%C3%A9/claude-code/anthropic"
-    );
+    assert_eq!(up.url.path(), "/wire/a%20b%2Fc%3Fd%23e%C3%A9");
 }
 
 #[test]
@@ -179,7 +164,7 @@ fn wire_url_helper_and_upstream_agree_on_encoded_secret() {
         secret: "x y".to_string(),
     };
     let up = central_wire_upstream(&info).unwrap();
-    assert_eq!(up.url.as_str(), central_wire_url(&info));
+    assert_eq!(up.url.as_str(), central_wire_envelope_url(&info));
 }
 
 // version resolution (pure) =====

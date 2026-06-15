@@ -83,6 +83,7 @@ pub fn compute_agent_env(
     chain: &[ResolvedProxy],
     central_is_tail: bool,
     enable_tool_search: bool,
+    head: &url::Url,
 ) -> Vec<(String, String)> {
     let mut env = vec![
         ("POVERTY_PROXY_CHAIN".to_string(), serialize_chain(chain)),
@@ -90,6 +91,9 @@ pub fn compute_agent_env(
             "ENABLE_TOOL_SEARCH".to_string(),
             enable_tool_search.to_string(),
         ),
+        // The bare agent-agnostic head (no wire-client segment), so a nested
+        // `poverty-mode run -- <agent>` can attach to the live chain (C1 / option B).
+        ("POVERTY_PROXY_HEAD".to_string(), head.as_str().to_string()),
     ];
     if central_is_tail {
         env.push(("ANTHROPIC_AUTH_TOKEN".to_string(), "wire-proxy".to_string()));
@@ -102,6 +106,41 @@ use crate::agent::Agent;
 /// True iff the chain's last hop is the must-be-last (Central) proxy.
 pub fn central_is_tail(chain: &[ResolvedProxy]) -> bool {
     chain.last().map(|p| p.name.must_be_last()).unwrap_or(false)
+}
+
+use anyhow::Context as _;
+
+/// Compose the base URL an agent points at (C1). When central is the tail, append
+/// the agent's wire-client segment to the agent-agnostic `head`; otherwise the
+/// agent talks native paths straight to the real upstream, so `head` is returned
+/// unchanged. The append is string-level (trim trailing slashes, then add
+/// `/<segment>`) so it never clobbers the wire envelope's last segment the way a
+/// relative `Url::join` would.
+pub fn agent_base_for(
+    head: &url::Url,
+    agent: &dyn Agent,
+    central_is_tail: bool,
+) -> anyhow::Result<url::Url> {
+    if !central_is_tail {
+        return Ok(head.clone());
+    }
+    // The string-level append onto `head.as_str()` is only correct when `head`
+    // has no query and no fragment; otherwise the appended segment would land
+    // after them and corrupt the URL. Catch a non-bare head in debug/CI.
+    debug_assert!(
+        head.query().is_none() && head.fragment().is_none(),
+        "agent_base_for expects a bare head (no query/fragment): {head}"
+    );
+    let trimmed = head.as_str().trim_end_matches('/');
+    // Contract guard: `head` is the BARE agent-agnostic head; composing twice would
+    // duplicate the client segment. Catch a double-apply in debug/CI.
+    debug_assert!(
+        !trimmed.ends_with(agent.wire_client_path()),
+        "agent_base_for called on an already-composed base: {head}"
+    );
+    let composed = format!("{trimmed}/{}", agent.wire_client_path());
+    url::Url::parse(&composed)
+        .with_context(|| format!("composing agent base from head '{head}' + wire client path"))
 }
 
 /// Split off a SINGLE trailing must-be-last (Central) entry, returning
@@ -168,8 +207,9 @@ pub async fn build_and_run_with_fault(
         // No first-party proxies to spawn: the agent talks directly to the tail
         // upstream (for central-only, that is the wire URL). agent_env still
         // reflects central_tail for the auth override.
-        let env = compute_agent_env(&chain, central_tail, enable_tool_search);
-        let cmd = agent.build_command(argv, &tail_upstream.url, &env);
+        let env = compute_agent_env(&chain, central_tail, enable_tool_search, &tail_upstream.url);
+        let agent_base = agent_base_for(&tail_upstream.url, agent, central_tail)?;
+        let cmd = agent.build_command(argv, &agent_base, &env);
         let status = run_agent_forwarding_signals(cmd, agent.name()).await?;
         return Ok(status);
     }
@@ -287,8 +327,9 @@ async fn build_via_manager(
         .ok_or_else(|| anyhow::anyhow!("manager returned no running hops"))?;
     let head_base_url = head.base_url.clone();
 
-    let agent_env = compute_agent_env(chain, central_tail, enable_tool_search);
-    let agent_cmd = agent.build_command(argv, &head_base_url, &agent_env);
+    let agent_env = compute_agent_env(chain, central_tail, enable_tool_search, &head_base_url);
+    let agent_base = agent_base_for(&head_base_url, agent, central_tail)?;
+    let agent_cmd = agent.build_command(argv, &agent_base, &agent_env);
     let status_result = run_agent_forwarding_signals(agent_cmd, agent.name()).await;
 
     // Drain on agent exit (R17): tear down the proxy hops, await reaping.
@@ -598,8 +639,8 @@ pub fn health_chain_id(base: &url::Url) -> Option<String> {
 
 /// Pure nested-reuse decision (design §7 / R10). Reuse the live chain iff:
 /// the desired chain signature is non-empty, the env `POVERTY_PROXY_CHAIN`
-/// equals it, the env `ANTHROPIC_BASE_URL` parses, and that base is LIVE
-/// (probe returns true). Returns `Some(base)` to reuse, else `None`.
+/// equals it, the env `POVERTY_PROXY_HEAD` (the agent-agnostic head; C1) parses,
+/// and that base is LIVE (probe returns true). Returns `Some(base)` to reuse, else `None`.
 ///
 /// The chain-signature match is against the env value (the live chain's
 /// signature), NOT the `/__pm/health` body — the body carries the per-run
@@ -628,24 +669,24 @@ pub fn nested_reuse_decision(
 }
 
 /// Design §7 nested-invocation guard. If our env has `POVERTY_PROXY_CHAIN` equal
-/// to `desired_chain`'s signature and `ANTHROPIC_BASE_URL` set to a LIVE
-/// `/__pm/health`, return `Some(base)` so the caller execs the agent against the
-/// live chain (no second chain). Else `None`. SYNCHRONOUS (calls `health_probe`)
+/// to `desired_chain`'s signature and `POVERTY_PROXY_HEAD` (the agent-agnostic
+/// head; C1) set to a LIVE `/__pm/health`, return `Some(base)` so the caller
+/// execs the agent against the live chain (no second chain). Else `None`.
+/// SYNCHRONOUS (calls `health_probe`)
 /// — invoke via `spawn_blocking` from async (R5; see `run_command`).
 pub fn nested_reuse_check(desired_chain: &[ResolvedProxy]) -> Option<url::Url> {
     let desired_sig = serialize_chain(desired_chain);
     let env_chain = std::env::var("POVERTY_PROXY_CHAIN").ok();
-    let env_base = std::env::var("ANTHROPIC_BASE_URL").ok();
+    let env_base = std::env::var("POVERTY_PROXY_HEAD").ok();
     nested_reuse_decision(&desired_sig, env_chain, env_base, |u| {
         health_probe(u).is_some()
     })
 }
 
-use crate::agent::claude::ClaudeAgent;
-
 /// High-level `run` orchestration (R5-safe): nested-reuse short-circuit, central
 /// daemon start (when central is tail), tail resolution, then `build_and_run`
-/// with the v1 ClaudeAgent. `chain` is the already-resolved chain (caller applies
+/// with the agent chosen by `select_agent` (claude or codex). `chain` is the
+/// already-resolved chain (caller applies
 /// cli>env>file precedence + optional TUI). `enable_tool_search` is the resolved
 /// `config.defaults.enable_tool_search` (default `true`), threaded into the agent
 /// env. Returns the agent's exit status.
@@ -660,7 +701,18 @@ pub async fn run_command(
     argv: &[String],
     enable_tool_search: bool,
 ) -> anyhow::Result<std::process::ExitStatus> {
-    let agent = ClaudeAgent;
+    let agent = crate::agent::select_agent(argv);
+
+    // codex's wire client/api segment is a JetBrains Central concept; without a
+    // central tail there is no valid upstream for it (spec §5 decision #4). Guard
+    // before any spawn — covers both the fresh and the reuse paths below.
+    if agent.requires_central() && !central_is_tail(&chain) {
+        anyhow::bail!(
+            "{} requires 'central' as the chain tail (its wire path is a JetBrains \
+             Central concept); add 'central' to the chain",
+            agent.name()
+        );
+    }
 
     // Design §7 nested-reuse: run the BLOCKING health probe off the executor (R5).
     let chain_for_probe = chain.clone();
@@ -668,8 +720,10 @@ pub async fn run_command(
         .await
         .map_err(|e| anyhow::anyhow!("nested-reuse probe task join error: {e}"))?;
     if let Some(base) = reuse {
-        let env = compute_agent_env(&chain, central_is_tail(&chain), enable_tool_search);
-        let cmd = agent.build_command(argv, &base, &env);
+        let central_tail = central_is_tail(&chain);
+        let env = compute_agent_env(&chain, central_tail, enable_tool_search, &base);
+        let agent_base = agent_base_for(&base, agent.as_ref(), central_tail)?;
+        let cmd = agent.build_command(argv, &agent_base, &env);
         return run_agent_forwarding_signals(cmd, agent.name()).await;
     }
 
@@ -693,7 +747,7 @@ pub async fn run_command(
     };
     let tail = resolve_tail_upstream(&inputs)?;
 
-    build_and_run(chain, tail, &agent, argv, enable_tool_search).await
+    build_and_run(chain, tail, agent.as_ref(), argv, enable_tool_search).await
 }
 
 /// The Central install/login/start/health operations the orchestrator drives,

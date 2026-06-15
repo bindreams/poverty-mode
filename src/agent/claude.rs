@@ -76,6 +76,10 @@ impl Agent for ClaudeAgent {
         "claude"
     }
 
+    fn wire_client_path(&self) -> &str {
+        "claude-code/anthropic"
+    }
+
     /// Build the not-yet-spawned child command for the agent.
     ///
     /// `argv` is the user's pass-through agent invocation (`run -- <prog> args…`):

@@ -7,19 +7,36 @@
 //! wiring without re-typing the trait.
 
 pub mod claude;
+pub mod codex;
 
 use url::Url;
 
 /// An AI agent the proxy chain fronts.
 ///
-/// `build_command` returns a fully-prepared, not-yet-spawned child command. The
-/// agent sets `ANTHROPIC_BASE_URL` from `base_url` (the chain head — NOT carried
-/// in `extra_env`, see `orchestrator::compute_agent_env`) and mirrors every
-/// `extra_env` pair into the process environment. `argv` is the user's
-/// pass-through agent arguments.
+/// `build_command` returns a fully-prepared, not-yet-spawned child command. Each
+/// agent points ITSELF at `base_url` by its own mechanism (Claude:
+/// `ANTHROPIC_BASE_URL` + inline `--settings`; codex: a `-c` model-provider
+/// override). `base_url` is the composed agent base (chain head + the agent's
+/// wire-client segment when central is the tail; see `orchestrator::agent_base_for`),
+/// NOT carried in `extra_env`. Agents mirror the relevant `extra_env` pairs into
+/// the child process environment. `argv` is the user's pass-through agent arguments.
 pub trait Agent {
     /// A short, stable identifier for diagnostics (e.g. `"claude"`).
     fn name(&self) -> &str;
+
+    /// The central-wire client/api path segment this agent's requests carry into
+    /// the chain (C1), e.g. `"claude-code/anthropic"` or `"codex/openai"`. The
+    /// orchestrator appends it to the agent-agnostic head when central is the tail.
+    /// Default is Claude's segment (Claude was the only agent before codex).
+    fn wire_client_path(&self) -> &str {
+        "claude-code/anthropic"
+    }
+
+    /// True iff this agent only works with JetBrains Central as the chain tail
+    /// (its wire client/api segment is a Central concept). Default false.
+    fn requires_central(&self) -> bool {
+        false
+    }
 
     /// Build the child command for this agent, pointed at `base_url` with
     /// `extra_env` applied. Does not spawn — the caller runs it.
@@ -29,6 +46,28 @@ pub trait Agent {
         base_url: &Url,
         extra_env: &[(String, String)],
     ) -> tokio::process::Command;
+}
+
+use crate::agent::claude::ClaudeAgent;
+use crate::agent::codex::CodexAgent;
+
+/// Pick the agent adapter from the user's pass-through program (`run -- <prog> …`).
+/// Match on `argv[0]`'s basename, lowercased, with a trailing `.exe` stripped
+/// (Windows is case-insensitive): `codex` → [`CodexAgent`], everything else
+/// (including empty argv) → [`ClaudeAgent`].
+pub fn select_agent(argv: &[String]) -> Box<dyn Agent> {
+    let base = argv
+        .first()
+        .map(|p| {
+            let stem = p.rsplit(['/', '\\']).next().unwrap_or(p.as_str());
+            let lower = stem.to_ascii_lowercase();
+            lower.strip_suffix(".exe").unwrap_or(&lower).to_string()
+        })
+        .unwrap_or_else(|| "claude".to_string());
+    match base.as_str() {
+        "codex" => Box::new(CodexAgent),
+        _ => Box::new(ClaudeAgent),
+    }
 }
 
 // Characterization guard (R12): the `Agent` trait already exists (M6 typed it so

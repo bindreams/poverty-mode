@@ -25,6 +25,7 @@ struct LiveChain {
     port: u16,
     health_hits: Arc<AtomicUsize>,
     post_hits: Arc<AtomicUsize>,
+    codex_post_hits: Arc<AtomicUsize>,
 }
 
 async fn serve_chain(run_id: &'static str) -> LiveChain {
@@ -37,8 +38,10 @@ async fn serve_chain(run_id: &'static str) -> LiveChain {
     );
     let health_hits = Arc::new(AtomicUsize::new(0));
     let post_hits = Arc::new(AtomicUsize::new(0));
+    let codex_post_hits = Arc::new(AtomicUsize::new(0));
     let h_counter = health_hits.clone();
     let p_counter = post_hits.clone();
+    let c_counter = codex_post_hits.clone();
     tokio::spawn(async move {
         loop {
             let (stream, _) = match listener.accept().await {
@@ -49,11 +52,13 @@ async fn serve_chain(run_id: &'static str) -> LiveChain {
             let health = health.clone();
             let h_counter = h_counter.clone();
             let p_counter = p_counter.clone();
+            let c_counter = c_counter.clone();
             tokio::spawn(async move {
                 let svc = service_fn(move |req: Request<Incoming>| {
                     let health = health.clone();
                     let h_counter = h_counter.clone();
                     let p_counter = p_counter.clone();
+                    let c_counter = c_counter.clone();
                     async move {
                         let body = if req.uri().path() == "/__pm/health" {
                             h_counter.fetch_add(1, Ordering::SeqCst);
@@ -63,6 +68,11 @@ async fn serve_chain(run_id: &'static str) -> LiveChain {
                                 && req.uri().path() == "/v1/messages"
                             {
                                 p_counter.fetch_add(1, Ordering::SeqCst);
+                            }
+                            if req.method() == hyper::Method::POST
+                                && req.uri().path() == "/codex/openai/responses"
+                            {
+                                c_counter.fetch_add(1, Ordering::SeqCst);
                             }
                             r#"{"ok":true}"#.to_string()
                         };
@@ -85,6 +95,7 @@ async fn serve_chain(run_id: &'static str) -> LiveChain {
         port,
         health_hits,
         post_hits,
+        codex_post_hits,
     }
 }
 
@@ -113,7 +124,7 @@ async fn run_empty_chain_execs_agent_unchanged() {
 #[tokio::test(flavor = "multi_thread")]
 async fn run_reuses_live_chain_via_nested_guard() {
     // Stand up a fake live chain. We set POVERTY_PROXY_CHAIN=pino and
-    // ANTHROPIC_BASE_URL=<server>; the resolved chain is also `pino` (cli
+    // POVERTY_PROXY_HEAD=<server>; the resolved chain is also `pino` (cli
     // --proxies pino), so the signatures match and the guard fires. The agent
     // (__post, pointed at the chain HEAD base_url that run_command hands it) posts
     // to that base and gets 200. Critically this drives the REAL async
@@ -135,7 +146,7 @@ async fn run_reuses_live_chain_via_nested_guard() {
     let mut cmd = StdCommand::new(exe);
     cmd.env("XDG_CONFIG_HOME", cfg_home.path())
         .env("POVERTY_PROXY_CHAIN", "pino")
-        .env("ANTHROPIC_BASE_URL", &base)
+        .env("POVERTY_PROXY_HEAD", &base)
         .arg("run")
         .args(["--proxies", "pino"])
         .arg("--")
@@ -189,7 +200,7 @@ async fn nested_reuse_fires_when_desired_sig_matches_env_and_live() {
     let out = StdCommand::new(exe)
         .env("XDG_CONFIG_HOME", cfg_home.path())
         .env("POVERTY_PROXY_CHAIN", "pino")
-        .env("ANTHROPIC_BASE_URL", &base)
+        .env("POVERTY_PROXY_HEAD", &base)
         .arg("run")
         .args(&args)
         .output()
@@ -228,7 +239,7 @@ async fn cli_proxies_override_env_in_resolution_signature() {
     let out = StdCommand::new(exe)
         .env("XDG_CONFIG_HOME", cfg_home.path())
         .env("POVERTY_PROXY_CHAIN", "headroom") // match the cli resolution
-        .env("ANTHROPIC_BASE_URL", &base)
+        .env("POVERTY_PROXY_HEAD", &base)
         .arg("run")
         .args(&args)
         .output()
@@ -246,6 +257,86 @@ async fn cli_proxies_override_env_in_resolution_signature() {
     assert!(
         !stdout.trim().eq("pino"),
         "must not be the stale env value: {stdout:?}"
+    );
+}
+
+/// Copy the test binary to a temp dir under the basename `codex` (`codex.exe` on
+/// Windows) so `select_agent` picks `CodexAgent` for `run -- <copy> …`.
+fn codex_named_copy() -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let name = if cfg!(windows) { "codex.exe" } else { "codex" };
+    let dst = dir.path().join(name);
+    std::fs::copy(env!("CARGO_BIN_EXE_poverty-mode"), &dst).expect("copy codex binary");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&dst).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&dst, perms).unwrap();
+    }
+    (dir, dst)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn run_codex_requires_central_errors_without_central() {
+    // Selection seam through the real CLI: argv[0] basename `codex` selects
+    // CodexAgent; with no central tail the guard errors before any spawn. The
+    // binary at the codex path is never executed (the guard fires first), so a
+    // non-existent path is fine.
+    let cfg_home = tempfile::tempdir().unwrap();
+    let out = StdCommand::new(env!("CARGO_BIN_EXE_poverty-mode"))
+        .env("XDG_CONFIG_HOME", cfg_home.path())
+        .env_remove("POVERTY_PROXY_CHAIN")
+        .arg("run")
+        .args(["--proxies", "pino"])
+        .arg("--")
+        .arg("/nonexistent/codex")
+        .output()
+        .expect("run output");
+    assert!(!out.status.success(), "codex without central must fail");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("requires 'central'"),
+        "expected codex-requires-central error; got: {stderr}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn run_codex_reuses_live_chain_end_to_end() {
+    // Full selection→guard→reuse→codex-exec path through the real CLI. A codex-named
+    // copy makes select_agent pick CodexAgent; the desired chain is `pino,central`
+    // (central-tail, so the guard passes); POVERTY_PROXY_HEAD points at a fake live
+    // chain so reuse short-circuits (NO real central started). The agent is the copy
+    // running `__codexpost`, which posts <head>/codex/openai/responses → 200.
+    let chain = serve_chain("any").await;
+    let base = format!("http://127.0.0.1:{}", chain.port);
+    let cfg_home = tempfile::tempdir().unwrap();
+    let (_dir, codex) = codex_named_copy();
+
+    let out = StdCommand::new(env!("CARGO_BIN_EXE_poverty-mode"))
+        .env("XDG_CONFIG_HOME", cfg_home.path())
+        .env("POVERTY_PROXY_CHAIN", "pino,central")
+        .env("POVERTY_PROXY_HEAD", &base)
+        .arg("run")
+        .args(["--proxies", "pino,central"])
+        .arg("--")
+        .arg(&codex)
+        .arg("__codexpost")
+        .output()
+        .expect("run output");
+    assert!(
+        out.status.success(),
+        "codex reuse run should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        chain.health_hits.load(Ordering::SeqCst) >= 1,
+        "nested-reuse guard must have probed /__pm/health at the reused base"
+    );
+    assert_eq!(
+        chain.codex_post_hits.load(Ordering::SeqCst),
+        1,
+        "codex must have POSTed exactly once to /codex/openai/responses on the reused chain"
     );
 }
 
