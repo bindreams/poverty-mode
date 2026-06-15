@@ -1,3 +1,6 @@
 /target
 vendor/**/target/
 .tmp/
+
+.claude/*.local.*
+CLAUDE.local.md
