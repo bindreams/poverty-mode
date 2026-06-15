@@ -296,7 +296,11 @@ pub(crate) fn enumerate_run_ids(runs_dir: &Path) -> anyhow::Result<Vec<String>> 
             continue;
         }
         if let Some(name) = entry.file_name().to_str() {
-            if ulid::Ulid::from_string(name).is_ok() {
+            // A run dir is always named with a bare ULID (not a session name);
+            // run_ulid accepts bare ULIDs as well as session names, so it
+            // subsumes the `Ulid::from_string` check and unifies the definition
+            // of "what counts as a run dir" across the module.
+            if run_ulid(name) == Some(name) {
                 ids.push(name.to_string());
             }
         }
