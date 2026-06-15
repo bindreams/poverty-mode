@@ -25,6 +25,7 @@ struct LiveChain {
     port: u16,
     health_hits: Arc<AtomicUsize>,
     post_hits: Arc<AtomicUsize>,
+    codex_post_hits: Arc<AtomicUsize>,
 }
 
 async fn serve_chain(run_id: &'static str) -> LiveChain {
@@ -37,8 +38,10 @@ async fn serve_chain(run_id: &'static str) -> LiveChain {
     );
     let health_hits = Arc::new(AtomicUsize::new(0));
     let post_hits = Arc::new(AtomicUsize::new(0));
+    let codex_post_hits = Arc::new(AtomicUsize::new(0));
     let h_counter = health_hits.clone();
     let p_counter = post_hits.clone();
+    let c_counter = codex_post_hits.clone();
     tokio::spawn(async move {
         loop {
             let (stream, _) = match listener.accept().await {
@@ -49,11 +52,13 @@ async fn serve_chain(run_id: &'static str) -> LiveChain {
             let health = health.clone();
             let h_counter = h_counter.clone();
             let p_counter = p_counter.clone();
+            let c_counter = c_counter.clone();
             tokio::spawn(async move {
                 let svc = service_fn(move |req: Request<Incoming>| {
                     let health = health.clone();
                     let h_counter = h_counter.clone();
                     let p_counter = p_counter.clone();
+                    let c_counter = c_counter.clone();
                     async move {
                         let body = if req.uri().path() == "/__pm/health" {
                             h_counter.fetch_add(1, Ordering::SeqCst);
@@ -63,6 +68,11 @@ async fn serve_chain(run_id: &'static str) -> LiveChain {
                                 && req.uri().path() == "/v1/messages"
                             {
                                 p_counter.fetch_add(1, Ordering::SeqCst);
+                            }
+                            if req.method() == hyper::Method::POST
+                                && req.uri().path() == "/codex/openai/responses"
+                            {
+                                c_counter.fetch_add(1, Ordering::SeqCst);
                             }
                             r#"{"ok":true}"#.to_string()
                         };
@@ -85,6 +95,7 @@ async fn serve_chain(run_id: &'static str) -> LiveChain {
         port,
         health_hits,
         post_hits,
+        codex_post_hits,
     }
 }
 
@@ -321,5 +332,10 @@ async fn run_codex_reuses_live_chain_end_to_end() {
     assert!(
         chain.health_hits.load(Ordering::SeqCst) >= 1,
         "nested-reuse guard must have probed /__pm/health at the reused base"
+    );
+    assert_eq!(
+        chain.codex_post_hits.load(Ordering::SeqCst),
+        1,
+        "codex must have POSTed exactly once to /codex/openai/responses on the reused chain"
     );
 }

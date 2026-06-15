@@ -923,6 +923,25 @@ fn agent_base_for_central_appends_to_wire_envelope_without_clobbering_secret() {
 }
 
 #[test]
+fn agent_base_for_preserves_percent_encoded_secret_segment() {
+    // R20: a percent-encoded wire secret must survive composition as ONE path
+    // segment — the appended client segment must not let it leak into a query or
+    // fragment, or split the path.
+    let head = url::Url::parse("http://127.0.0.1:9000/wire/a%23b%3Fc%2Fd").unwrap();
+    let got = agent_base_for(&head, &crate::agent::codex::CodexAgent, true).unwrap();
+    assert_eq!(
+        got.as_str(),
+        "http://127.0.0.1:9000/wire/a%23b%3Fc%2Fd/codex/openai"
+    );
+    assert_eq!(got.query(), None, "secret must not leak into the query");
+    assert_eq!(
+        got.fragment(),
+        None,
+        "secret must not leak into the fragment"
+    );
+}
+
+#[test]
 fn agent_env_includes_poverty_proxy_head() {
     let chain = vec![pino_rp(), headroom_rp()];
     let head = url::Url::parse("http://127.0.0.1:4100").unwrap();
