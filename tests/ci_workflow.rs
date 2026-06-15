@@ -6,16 +6,16 @@ fn ci_text() -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join(".github")
         .join("workflows")
-        .join("ci.yml");
+        .join("ci.yaml");
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
 }
 
 fn workflow() -> serde_yaml::Value {
-    serde_yaml::from_str(&ci_text()).expect("ci.yml must be valid YAML")
+    serde_yaml::from_str(&ci_text()).expect("ci.yaml must be valid YAML")
 }
 
 #[test]
-fn ci_has_build_test_job_with_five_targets() {
+fn ci_build_test_job_covers_four_docker_style_platforms() {
     let wf = workflow();
     let jobs = wf.get("jobs").expect("jobs key");
     let bt = jobs.get("build-test").expect("build-test job");
@@ -27,25 +27,27 @@ fn ci_has_build_test_job_with_five_targets() {
         .as_sequence()
         .expect("include is a sequence");
 
-    let targets: Vec<String> = matrix
+    let platforms: Vec<(String, String)> = matrix
         .iter()
-        .filter_map(|e| e.get("target"))
-        .filter_map(|t| t.as_str())
-        .map(|s| s.to_string())
+        .filter_map(|e| {
+            let os = e.get("os")?.as_str()?.to_string();
+            let arch = e.get("arch")?.as_str()?.to_string();
+            Some((os, arch))
+        })
         .collect();
 
-    for expected in [
-        "x86_64-pc-windows-msvc",
-        "x86_64-apple-darwin",
-        "aarch64-apple-darwin",
-        "x86_64-unknown-linux-gnu",
-        "aarch64-unknown-linux-gnu",
+    for (os, arch) in [
+        ("windows", "amd64"),
+        ("darwin", "arm64"),
+        ("linux", "amd64"),
+        ("linux", "arm64"),
     ] {
         assert!(
-            targets.iter().any(|t| t == expected),
-            "missing target {expected}; got {targets:?}"
+            platforms.iter().any(|(o, a)| o == os && a == arch),
+            "missing platform {os}/{arch}; got {platforms:?}"
         );
     }
+    assert_eq!(platforms.len(), 4, "exactly four platforms; got {platforms:?}");
 }
 
 #[test]
@@ -54,18 +56,21 @@ fn ci_runs_cargo_test() {
 }
 
 #[test]
-fn ci_runs_fmt_check_in_a_single_lint_job() {
+fn ci_runs_lint_via_prek_not_per_platform_fmt() {
     let wf = workflow();
     let jobs = wf.get("jobs").expect("jobs key");
     let lint = jobs.get("lint").expect("dedicated lint job");
     let text = serde_yaml::to_string(lint).unwrap();
-    assert!(text.contains("cargo fmt"), "lint job must run cargo fmt --check");
-    // fmt must NOT be duplicated inside the per-target build-test job.
+    assert!(
+        text.contains("prek run"),
+        "lint job must run prek (which owns cargo fmt + the other linters)"
+    );
+    // Linting runs once in the lint job, never per matrix platform.
     let bt = jobs.get("build-test").expect("build-test job");
     let bt_text = serde_yaml::to_string(bt).unwrap();
     assert!(
-        !bt_text.contains("cargo fmt"),
-        "fmt must run once in the lint job, not per matrix target"
+        !bt_text.contains("cargo fmt") && !bt_text.contains("prek"),
+        "fmt/prek must not run per platform"
     );
 }
 
