@@ -13,11 +13,13 @@ use url::Url;
 
 /// An AI agent the proxy chain fronts.
 ///
-/// `build_command` returns a fully-prepared, not-yet-spawned child command. The
-/// agent sets `ANTHROPIC_BASE_URL` from `base_url` (the chain head — NOT carried
-/// in `extra_env`, see `orchestrator::compute_agent_env`) and mirrors every
-/// `extra_env` pair into the process environment. `argv` is the user's
-/// pass-through agent arguments.
+/// `build_command` returns a fully-prepared, not-yet-spawned child command. Each
+/// agent points ITSELF at `base_url` by its own mechanism (Claude:
+/// `ANTHROPIC_BASE_URL` + inline `--settings`; codex: a `-c` model-provider
+/// override). `base_url` is the composed agent base (chain head + the agent's
+/// wire-client segment when central is the tail; see `orchestrator::agent_base_for`),
+/// NOT carried in `extra_env`. Agents mirror the relevant `extra_env` pairs into
+/// the child process environment. `argv` is the user's pass-through agent arguments.
 pub trait Agent {
     /// A short, stable identifier for diagnostics (e.g. `"claude"`).
     fn name(&self) -> &str;

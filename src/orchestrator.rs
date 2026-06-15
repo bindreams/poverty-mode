@@ -685,7 +685,8 @@ pub fn nested_reuse_check(desired_chain: &[ResolvedProxy]) -> Option<url::Url> {
 
 /// High-level `run` orchestration (R5-safe): nested-reuse short-circuit, central
 /// daemon start (when central is tail), tail resolution, then `build_and_run`
-/// with the v1 ClaudeAgent. `chain` is the already-resolved chain (caller applies
+/// with the agent chosen by `select_agent` (claude or codex). `chain` is the
+/// already-resolved chain (caller applies
 /// cli>env>file precedence + optional TUI). `enable_tool_search` is the resolved
 /// `config.defaults.enable_tool_search` (default `true`), threaded into the agent
 /// env. Returns the agent's exit status.

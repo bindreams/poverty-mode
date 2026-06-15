@@ -1,9 +1,16 @@
 # poverty-mode
 
-Run an AI coding agent (v1: `claude`) behind a user-chosen, ordered chain of
+Run an AI coding agent (`claude` or `codex`) behind a user-chosen, ordered chain of
 local HTTP proxies — pino + headroom compiled into the binary, JB Central
 downloaded on demand — wiring each proxy's inbound port to the next hop's
 outbound upstream.
+
+`codex` is routed by injecting a `-c` model-provider override (the codex analog of
+Claude's inline `--settings`) that points it at the chain head. Because its
+`codex/openai` wire path is a JetBrains Central concept, `codex` requires `central`
+in the chain and errors otherwise. When `codex` runs as an MCP server inside a
+poverty-mode `claude` session, it reuses the live chain via the `POVERTY_PROXY_HEAD`
+env var.
 
 ## Install
 
