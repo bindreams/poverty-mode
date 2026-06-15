@@ -82,12 +82,6 @@ pub enum Command {
     /// and read `args.which`).
     Proxy(ProxyArgs),
 
-    /// Manage the JB Central singleton.
-    Central {
-        #[command(subcommand)]
-        action: CentralAction,
-    },
-
     /// Inspect or edit the config file.
     Config {
         #[command(subcommand)]
@@ -379,16 +373,6 @@ impl RunSettingsArgs {
 }
 
 #[derive(Subcommand, Debug)]
-pub enum CentralAction {
-    /// Run the interactive JetBrains login flow.
-    Login,
-    /// Report central install and login status.
-    Status,
-    /// Stop the central singleton daemon.
-    Stop,
-}
-
-#[derive(Subcommand, Debug)]
 pub enum ConfigAction {
     /// Print the effective config.
     Show,
@@ -437,8 +421,7 @@ pub fn engine_config_from_proxy_args(args: &ProxyArgs) -> EngineConfig {
 /// Dispatch a parsed CLI to the matching subcommand handler. The `proxy` arm is
 /// FILLED here (M3): it builds the [`EngineConfig`] and runs the async engine to
 /// completion on a fresh multi-thread runtime. Every other handler is wired to its
-/// real implementation; `central`/`config` delegate to [`dispatch_central`] /
-/// [`dispatch_config`].
+/// real implementation; `config` delegates to [`dispatch_config`].
 ///
 /// `run_id`: for the `run` subcommand, the caller pre-generates a session id (so
 /// that a session dir is created BEFORE tracing is initialized). Other subcommands
@@ -555,7 +538,6 @@ pub fn dispatch(cli: Cli, run_id: Option<String>) -> anyhow::Result<()> {
             let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
             rt.block_on(proxy::run_proxy(cfg))
         }
-        Command::Central { action } => dispatch_central(action),
         Command::Config { action } => dispatch_config(action),
         Command::Status => {
             // `dispatch` is synchronous; `run_status` is async (R5: its blocking
@@ -727,66 +709,6 @@ pub fn dispatch(cli: Cli, run_id: Option<String>) -> anyhow::Result<()> {
             Ok(())
         }
     }
-}
-
-/// Handle `poverty-mode central <login|status|stop>` (spec §5.1). All three arms
-/// shell out / hit the network through the blocking `central` primitives; `dispatch`
-/// is synchronous and off any executor, so they are called directly (no runtime).
-fn dispatch_central(action: CentralAction) -> anyhow::Result<()> {
-    use crate::central;
-    let cache = crate::paths::cache_dir()?;
-    match action {
-        CentralAction::Login => {
-            // Ensure the pinned/default version is installed, then drive the
-            // detect-and-prompt login flow (R20: never bypass; browser OAuth).
-            let version = central::resolve_version(None);
-            let bin = central::ensure_installed(&version)?;
-            central::ensure_logged_in(&bin)
-        }
-        CentralAction::Status => {
-            // Install presence (semantic-sorted, R23f), live run state via the
-            // wire-config port + `/health`, and login truth from `jbcentral status`.
-            let versions = crate::status::central_versions(&cache)?;
-            let running_port = central_running_port(&versions);
-            let login = match crate::status::newest_central_binary(&cache)? {
-                Some(bin) => central::run_status_classified(&bin).unwrap_or(central::CentralLoginState::Unknown),
-                None => central::CentralLoginState::Unknown,
-            };
-            let status = central::CentralCommandStatus {
-                versions,
-                running_port,
-                login,
-            };
-            print!("{}", central::render_central_command_status(&status));
-            Ok(())
-        }
-        CentralAction::Stop => {
-            // Best-effort stop: a not-running daemon is normalized to Ok by
-            // `central::stop`; a missing install has nothing to stop.
-            match crate::status::newest_central_binary(&cache)? {
-                Some(bin) => central::stop(&bin),
-                None => {
-                    println!("central not installed; nothing to stop");
-                    Ok(())
-                }
-            }
-        }
-    }
-}
-
-/// The live daemon port for `central status`: the `~/.wire/config.json` port iff an
-/// install exists AND that port answers `/health`. `None` (stopped) otherwise.
-///
-/// Liveness is read through the SAME secret-free port reader as the global `poverty-mode
-/// status` (`status::wire_config_port`), not `central::read_wire_config` (which bails when
-/// `proxy_secret` is missing/empty). Sharing one reader guarantees the two status commands
-/// can never disagree about whether central is running for the same on-disk state.
-fn central_running_port(versions: &[String]) -> Option<u16> {
-    if versions.is_empty() {
-        return None;
-    }
-    let port = crate::status::wire_config_port()?;
-    crate::central::health(port).then_some(port)
 }
 
 /// Handle `poverty-mode config <show|edit|path>` (spec §5.1).

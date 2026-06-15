@@ -9,7 +9,6 @@ fn help_lists_all_subcommands() {
         .success()
         .stdout(contains("run"))
         .stdout(contains("proxy"))
-        .stdout(contains("central"))
         .stdout(contains("config"))
         .stdout(contains("status"))
         .stdout(contains("doctor"))
@@ -156,34 +155,4 @@ fn config_show_subcommand_creates_default_and_prints_yaml() {
         .stdout(contains("enable_tool_search: true"));
     // First run wrote the default config into the isolated home.
     assert!(tmp.path().join("poverty-mode.yaml").exists());
-}
-
-/// FIX-D: `central stop` with no install reports "nothing to stop" and exits
-/// success WITHOUT spawning any process or hitting the network. Hermetic via an
-/// empty `POVERTY_CACHE_DIR` (child-only env) so no jbcentral binary is found.
-#[test]
-fn central_stop_subcommand_not_installed_is_success() {
-    let tmp = tempfile::tempdir().unwrap();
-    let mut cmd = Command::cargo_bin("poverty-mode").unwrap();
-    cmd.args(["central", "stop"])
-        .env("POVERTY_CACHE_DIR", tmp.path().join("cache"))
-        .assert()
-        .success()
-        .stdout(contains("central not installed; nothing to stop"));
-}
-
-/// FIX-D: `central status` with no install reports not-installed/stopped/unknown
-/// and exits success without any spawn or network probe (the empty-versions
-/// short-circuit skips `/health`). Hermetic via an empty `POVERTY_CACHE_DIR`.
-#[test]
-fn central_status_subcommand_not_installed_is_success() {
-    let tmp = tempfile::tempdir().unwrap();
-    let mut cmd = Command::cargo_bin("poverty-mode").unwrap();
-    cmd.args(["central", "status"])
-        .env("POVERTY_CACHE_DIR", tmp.path().join("cache"))
-        .assert()
-        .success()
-        .stdout(contains("install: not installed"))
-        .stdout(contains("state: stopped"))
-        .stdout(contains("login: unknown"));
 }

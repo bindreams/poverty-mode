@@ -587,53 +587,6 @@ pub fn stop(bin: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-// `central` subcommand support ========================================================================================
-
-/// A focused snapshot for `central <status>`: install presence, daemon run state,
-/// and login truth. Kept independent of `crate::status`'s full report so the
-/// `central status` command renders only central facts.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CentralCommandStatus {
-    /// Installed versions under `<cache>/bin/jbcentral/`, newest last; empty when none.
-    pub versions: Vec<String>,
-    /// The live daemon port (from `~/.wire/config.json`) when `/health` answers.
-    pub running_port: Option<u16>,
-    /// Login truth parsed from `jbcentral status` (R20).
-    pub login: CentralLoginState,
-}
-
-/// Render a [`CentralCommandStatus`] as the human-facing text for `central status`.
-pub fn render_central_command_status(status: &CentralCommandStatus) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::new();
-    if status.versions.is_empty() {
-        let _ = writeln!(out, "install: not installed");
-    } else {
-        let _ = writeln!(out, "install: {}", status.versions.join(", "));
-    }
-    match status.running_port {
-        Some(port) => {
-            let _ = writeln!(out, "state: running on port {port}");
-        }
-        None => {
-            let _ = writeln!(out, "state: stopped");
-        }
-    }
-    // Login is only meaningful with an install; absent one it is Unknown.
-    let login = if status.versions.is_empty() {
-        CentralLoginState::Unknown
-    } else {
-        status.login
-    };
-    let login_str = match login {
-        CentralLoginState::LoggedIn => "logged in",
-        CentralLoginState::LoggedOut => "logged out",
-        CentralLoginState::Unknown => "unknown",
-    };
-    let _ = writeln!(out, "login: {login_str}");
-    out
-}
-
 #[cfg(test)]
 #[path = "central_tests.rs"]
 mod central_tests;
