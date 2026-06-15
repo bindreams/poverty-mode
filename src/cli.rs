@@ -562,7 +562,7 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
                 }
                 unsafe {
                     let mut sa: libc::sigaction = std::mem::zeroed();
-                    sa.sa_sigaction = on_term as usize;
+                    sa.sa_sigaction = on_term as *const () as usize;
                     libc::sigemptyset(&mut sa.sa_mask);
                     libc::sigaction(libc::SIGTERM, &sa, std::ptr::null_mut());
                 }
