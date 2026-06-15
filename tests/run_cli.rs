@@ -248,3 +248,184 @@ async fn cli_proxies_override_env_in_resolution_signature() {
         "must not be the stale env value: {stdout:?}"
     );
 }
+
+// `run` setting overrides persisted by `--save` =====
+
+use poverty_mode::config::{Config, ProxySettings};
+use poverty_mode::proxy::pino::CacheTtl;
+use poverty_mode::proxy::ProxyName;
+
+/// Read and parse the config the child persisted under its temp `XDG_CONFIG_HOME`.
+/// Reading the file directly (rather than via `Config::load_or_create`) keeps the
+/// assertion free of any process-global env mutation, so it is safe under the
+/// parallel test runner.
+fn load_persisted_config(cfg_home: &std::path::Path) -> Config {
+    let path = cfg_home.join("poverty-mode.yaml");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("reading persisted config {}: {e}", path.display()));
+    serde_yaml::from_str(&text)
+        .unwrap_or_else(|e| panic!("parsing persisted config {}: {e}", path.display()))
+}
+
+/// The pino entry's resolved settings from a loaded config.
+fn pino_settings(cfg: &Config) -> (bool, &poverty_mode::proxy::pino::PinoSettings) {
+    let entry = cfg
+        .proxies
+        .iter()
+        .find(|e| e.name == ProxyName::Pino)
+        .expect("config always lists pino");
+    match &entry.settings {
+        ProxySettings::Pino(s) => (entry.enabled, s),
+        other => panic!("pino entry carries non-pino settings: {other:?}"),
+    }
+}
+
+/// The headroom entry's resolved settings from a loaded config.
+fn headroom_settings(cfg: &Config) -> (bool, &poverty_mode::proxy::headroom::HeadroomSettings) {
+    let entry = cfg
+        .proxies
+        .iter()
+        .find(|e| e.name == ProxyName::Headroom)
+        .expect("config always lists headroom");
+    match &entry.settings {
+        ProxySettings::Headroom(s) => (entry.enabled, s),
+        other => panic!("headroom entry carries non-headroom settings: {other:?}"),
+    }
+}
+
+/// A cross-platform "exit 0 immediately, make no requests" stub agent (mirrors
+/// `run_empty_chain_execs_agent_unchanged`).
+#[cfg(unix)]
+fn exit0_agent() -> Vec<&'static str> {
+    vec!["--", "true"]
+}
+#[cfg(windows)]
+fn exit0_agent() -> Vec<&'static str> {
+    vec!["--", "cmd", "/c", "exit", "0"]
+}
+
+/// `--save` must persist a CLI-source setting override: `--proxies pino` puts pino
+/// in the chain, and `--pino-sub-ttl 1h` overrides the loaded config's pino
+/// settings BEFORE chain resolution / save, so the saved pino entry is enabled and
+/// carries `sub_ttl = 1h`. With the override not yet applied in the handler, the
+/// saved entry would keep the default `5m`, failing this test.
+#[tokio::test(flavor = "multi_thread")]
+async fn run_save_persists_setting_override_cli_source() {
+    let cfg_home = tempfile::tempdir().unwrap();
+
+    let mut cmd = StdCommand::new(env!("CARGO_BIN_EXE_poverty-mode"));
+    cmd.env("XDG_CONFIG_HOME", cfg_home.path())
+        .env_remove("POVERTY_PROXY_CHAIN")
+        .env_remove("ANTHROPIC_BASE_URL")
+        .arg("run")
+        .args(["--proxies", "pino"])
+        .args(["--pino-sub-ttl", "1h"])
+        .arg("--save")
+        .args(exit0_agent());
+    let out = cmd.output().expect("spawn poverty-mode run");
+    assert!(
+        out.status.success(),
+        "run --save should exit 0; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let cfg = load_persisted_config(cfg_home.path());
+    let (enabled, pino) = pino_settings(&cfg);
+    assert!(enabled, "--proxies pino must persist pino as enabled");
+    assert_eq!(
+        pino.sub_ttl,
+        CacheTtl::OneHour,
+        "--pino-sub-ttl 1h override must be persisted"
+    );
+    // main_ttl was not overridden, so it keeps the default 1h.
+    assert_eq!(pino.main_ttl, CacheTtl::OneHour);
+}
+
+/// `--save` must apply a setting override even when the chain is FILE-sourced (no
+/// `--proxies`, no env chain): pre-enabled pino is resolved from the file, and
+/// `--pino-sub-ttl 1h` overrides the loaded config before resolution / save, so
+/// the saved pino entry carries `sub_ttl = 1h`. Without the handler applying the
+/// override, the saved entry would keep the file's `5m`, failing this test.
+#[tokio::test(flavor = "multi_thread")]
+async fn run_save_persists_setting_override_file_source() {
+    let cfg_home = tempfile::tempdir().unwrap();
+
+    // Pre-write a config with pino ENABLED at the default 5m sub-ttl.
+    let mut seed = Config::default_all_disabled();
+    let pino_entry = seed
+        .proxies
+        .iter_mut()
+        .find(|e| e.name == ProxyName::Pino)
+        .expect("default config lists pino");
+    pino_entry.enabled = true;
+    let yaml = serde_yaml::to_string(&seed).expect("serialize seed config");
+    std::fs::write(cfg_home.path().join("poverty-mode.yaml"), yaml).expect("write seed config");
+
+    let mut cmd = StdCommand::new(env!("CARGO_BIN_EXE_poverty-mode"));
+    cmd.env("XDG_CONFIG_HOME", cfg_home.path())
+        .env_remove("POVERTY_PROXY_CHAIN")
+        .env_remove("ANTHROPIC_BASE_URL")
+        .arg("run")
+        .args(["--pino-sub-ttl", "1h"])
+        .arg("--save")
+        .args(exit0_agent());
+    let out = cmd.output().expect("spawn poverty-mode run");
+    assert!(
+        out.status.success(),
+        "run --save should exit 0; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let cfg = load_persisted_config(cfg_home.path());
+    let (enabled, pino) = pino_settings(&cfg);
+    assert!(enabled, "file-source pino must remain enabled");
+    assert_eq!(
+        pino.sub_ttl,
+        CacheTtl::OneHour,
+        "--pino-sub-ttl 1h override must apply on file-source resolution"
+    );
+}
+
+/// `--save` must persist a setting override onto a proxy that is NOT in the chain
+/// and therefore stays DISABLED (spec §2 guarantee, end-to-end). The chain is
+/// `--proxies pino`, so headroom is never enabled; yet `--headroom-no-compression`
+/// flips the default `compression = true` to `false`, and `with_overrides` applies
+/// it to EVERY entry regardless of enabled-state — so the saved (still-disabled)
+/// headroom entry carries `compression = false`. If overrides were applied only to
+/// enabled/in-chain entries, the saved headroom would keep the default `true`,
+/// failing this test.
+#[tokio::test(flavor = "multi_thread")]
+async fn run_save_persists_override_on_disabled_proxy() {
+    let cfg_home = tempfile::tempdir().unwrap();
+
+    let mut cmd = StdCommand::new(env!("CARGO_BIN_EXE_poverty-mode"));
+    cmd.env("XDG_CONFIG_HOME", cfg_home.path())
+        .env_remove("POVERTY_PROXY_CHAIN")
+        .env_remove("ANTHROPIC_BASE_URL")
+        .arg("run")
+        .args(["--proxies", "pino"])
+        .arg("--headroom-no-compression")
+        .arg("--save")
+        .args(exit0_agent());
+    let out = cmd.output().expect("spawn poverty-mode run");
+    assert!(
+        out.status.success(),
+        "run --save should exit 0; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let cfg = load_persisted_config(cfg_home.path());
+    let (headroom_enabled, headroom) = headroom_settings(&cfg);
+    assert!(
+        !headroom_enabled,
+        "headroom is not in the `pino` chain, so it must remain disabled"
+    );
+    assert!(
+        !headroom.compression,
+        "--headroom-no-compression override must persist onto the disabled headroom entry"
+    );
+
+    // Sanity: the in-chain proxy was enabled, so the run did resolve a chain.
+    let (pino_enabled, _) = pino_settings(&cfg);
+    assert!(pino_enabled, "--proxies pino must persist pino as enabled");
+}

@@ -62,6 +62,9 @@ pub enum Command {
         #[arg(long = "no-save", overrides_with = "save")]
         no_save: bool,
 
+        #[command(flatten)]
+        settings: RunSettingsArgs,
+
         /// The agent and its arguments, after `--`.
         #[arg(last = true, value_name = "AGENT_ARGV")]
         agent_argv: Vec<String>,
@@ -164,9 +167,9 @@ impl ProxyArgs {
         !self.pino.no_strip_ansi
     }
 
-    /// Resolved `compression`: default false; `--compression` on, `--no-compression` off.
+    /// Resolved `compression`: default TRUE; `--no-compression` turns it off.
     pub fn compression(&self) -> bool {
-        self.headroom.compression && !self.headroom.no_compression
+        !self.headroom.no_compression
     }
 }
 
@@ -255,10 +258,10 @@ pub struct PinoArgs {
 /// finding); the resolved value is read via [`ProxyArgs::compression`].
 #[derive(Args, Debug)]
 pub struct HeadroomArgs {
-    /// Enable context compression. Presence flag (default off).
+    /// Enable context compression. Presence flag (redundant with the default on).
     #[arg(long, overrides_with = "no_compression")]
     pub compression: bool,
-    /// Disable compression (negates `--compression`; explicit off is the default).
+    /// Disable compression (negates `--compression`; compression is on by default).
     #[arg(long = "no-compression", overrides_with = "compression")]
     pub no_compression: bool,
 }
@@ -279,6 +282,89 @@ impl From<CacheTtlArg> for CacheTtl {
         match a {
             CacheTtlArg::FiveMin => CacheTtl::FiveMin,
             CacheTtlArg::OneHour => CacheTtl::OneHour,
+        }
+    }
+}
+
+/// Per-proxy setting overrides for `run`, namespaced by proxy id. Each flag is
+/// optional; absent ⇒ no override for that field. Booleans are `--x` / `--no-x`
+/// pairs folded to `Option<bool>` (None when neither is given). The resolved
+/// [`Overrides`](crate::config::overrides::Overrides) is merged onto the loaded
+/// config before chain resolution / picker seeding / save.
+#[derive(Args, Debug, Default)]
+pub struct RunSettingsArgs {
+    #[arg(long = "pino-auto-cache", overrides_with = "pino_no_auto_cache")]
+    pub pino_auto_cache: bool,
+    #[arg(long = "pino-no-auto-cache", overrides_with = "pino_auto_cache")]
+    pub pino_no_auto_cache: bool,
+    #[arg(long = "pino-main-ttl", value_name = "TTL", value_enum)]
+    pub pino_main_ttl: Option<CacheTtlArg>,
+    #[arg(long = "pino-sub-ttl", value_name = "TTL", value_enum)]
+    pub pino_sub_ttl: Option<CacheTtlArg>,
+    #[arg(long = "pino-drop-tools", value_delimiter = ',', value_name = "CSV")]
+    pub pino_drop_tools: Option<Vec<String>>,
+    #[arg(long = "pino-strip-ansi", overrides_with = "pino_no_strip_ansi")]
+    pub pino_strip_ansi: bool,
+    #[arg(long = "pino-no-strip-ansi", overrides_with = "pino_strip_ansi")]
+    pub pino_no_strip_ansi: bool,
+    #[arg(long = "pino-model-override", value_name = "MODEL")]
+    pub pino_model_override: Option<String>,
+    #[arg(
+        long = "headroom-compression",
+        overrides_with = "headroom_no_compression"
+    )]
+    pub headroom_compression: bool,
+    #[arg(
+        long = "headroom-no-compression",
+        overrides_with = "headroom_compression"
+    )]
+    pub headroom_no_compression: bool,
+    #[arg(long = "central-port", value_name = "PORT")]
+    pub central_port: Option<u16>,
+    #[arg(long = "central-pinned-version", value_name = "VERSION")]
+    pub central_pinned_version: Option<String>,
+}
+
+impl RunSettingsArgs {
+    /// Fold a `--x` / `--no-x` presence-flag pair into `Option<bool>`: `Some(true)`
+    /// if the positive flag won, `Some(false)` if the negation did, `None` if
+    /// neither was given (clap `overrides_with` makes the last-specified flag win).
+    fn tri(pos: bool, neg: bool) -> Option<bool> {
+        if pos {
+            Some(true)
+        } else if neg {
+            Some(false)
+        } else {
+            None
+        }
+    }
+
+    /// Project the parsed flags into the partial [`Overrides`]. Absent flags become
+    /// `None`; `--pino-drop-tools` filters empty entries (a bare empty value is an
+    /// explicit clear ⇒ `Some(vec![])`).
+    pub fn to_overrides(&self) -> crate::config::overrides::Overrides {
+        use crate::config::overrides::{
+            CentralOverride, HeadroomOverride, Overrides, PinoOverride,
+        };
+        Overrides {
+            pino: PinoOverride {
+                auto_cache: Self::tri(self.pino_auto_cache, self.pino_no_auto_cache),
+                main_ttl: self.pino_main_ttl.map(Into::into),
+                sub_ttl: self.pino_sub_ttl.map(Into::into),
+                drop_tools: self
+                    .pino_drop_tools
+                    .as_ref()
+                    .map(|v| v.iter().filter(|s| !s.is_empty()).cloned().collect()),
+                strip_ansi: Self::tri(self.pino_strip_ansi, self.pino_no_strip_ansi),
+                model_override: self.pino_model_override.clone(),
+            },
+            headroom: HeadroomOverride {
+                compression: Self::tri(self.headroom_compression, self.headroom_no_compression),
+            },
+            central: CentralOverride {
+                port: self.central_port,
+                pinned_version: self.central_pinned_version.clone(),
+            },
         }
     }
 }
@@ -357,9 +443,16 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
             interactive,
             save,
             no_save: _no_save,
+            settings,
             agent_argv,
         } => {
+            // Load the base config, then merge the `run` per-proxy setting flags
+            // onto it. The overridden config is the single base for chain
+            // resolution, picker seeding, and `--save`, so a `--<proxy>-<setting>`
+            // flag is honored on every path (spec §override precedence).
             let config = crate::config::Config::load_or_create()?;
+            let overrides = settings.to_overrides();
+            let config = config.with_overrides(&overrides);
 
             // Resolve the chain from CLI > env > file (M2 precedence) FIRST, so
             // `--proxies` / `POVERTY_PROXY_CHAIN` are honored on EVERY path,
@@ -383,13 +476,16 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
             let resolved = config.resolve_chain(cli_names.as_deref(), env_chain.as_deref())?;
 
             // The interactive picker is SEEDED from that resolved chain (spec
-            // §5.10), letting the user adjust it; its confirmed chain overrides.
-            // The picker is synchronous (crossterm blocking reads), so it runs
-            // before the Tokio runtime is built. Without `--interactive`, the
-            // resolved chain is used as-is.
-            let chain: Vec<crate::config::ResolvedProxy> = if interactive {
+            // §5.10), letting the user adjust it; its confirmed FULL STATE (the
+            // complete ordered proxy list, settings included) drives both the run
+            // chain and `--save`. The picker is synchronous (crossterm blocking
+            // reads), so it runs before the Tokio runtime is built. Without
+            // `--interactive`, `entries_for_chain` produces the same full-state
+            // list from the resolved chain (the single ordering authority, so the
+            // two paths cannot diverge).
+            let entries: Vec<crate::config::ProxyEntry> = if interactive {
                 match crate::tui::run_picker(&config, &resolved)? {
-                    crate::tui::reducer::TuiOutcome::Run(picked) => picked,
+                    crate::tui::reducer::TuiOutcome::Run(entries) => entries,
                     crate::tui::reducer::TuiOutcome::Cancel => {
                         println!("cancelled");
                         return Ok(());
@@ -401,14 +497,23 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
                     }
                 }
             } else {
-                resolved
+                config.entries_for_chain(&resolved)
             };
 
+            // The run chain is the enabled members, in order, as resolved proxies.
+            let chain: Vec<crate::config::ResolvedProxy> = entries
+                .iter()
+                .filter(|e| e.enabled)
+                .map(|e| crate::config::ResolvedProxy {
+                    name: e.name,
+                    settings: e.settings.clone(),
+                })
+                .collect();
+
             if save {
-                // --save persists the resolved order/enabled-set via M2's
-                // canonical helper (R22/R23i): `Config::save_resolved_chain(&self,
-                // chain: &[ResolvedProxy]) -> anyhow::Result<()>` (atomic write).
-                config.save_resolved_chain(&chain)?;
+                // --save persists the complete ordered state (every enabled flag,
+                // order, and per-proxy setting) atomically.
+                config.save_full_state(entries.clone())?;
             }
 
             // `dispatch` is synchronous; `run_command` is async (R5: its blocking

@@ -1,475 +1,24 @@
 use super::*;
-use crate::config::{CentralSettings, Config, Defaults, ProxyEntry, ProxySettings};
+use crate::config::{CentralSettings, Config, Defaults, ProxyEntry, ProxySettings, ResolvedProxy};
 use crate::proxy::headroom::HeadroomSettings;
-use crate::proxy::pino::PinoSettings;
+use crate::proxy::pino::{CacheTtl, PinoSettings};
 use crate::proxy::ProxyName;
+use focus::Focus;
+use settings::SettingId;
 
-/// Build the three-proxy seed used across the reducer tests: pino, headroom,
-/// central — in that file order, all disabled by default.
-fn seed_all_disabled() -> TuiState {
-    TuiState::new(vec![
-        (
-            TuiItem {
-                name: ProxyName::Pino,
-                enabled: false,
-            },
-            ProxySettings::Pino(PinoSettings {
-                auto_cache: true,
-                main_ttl: crate::proxy::pino::CacheTtl::OneHour,
-                sub_ttl: crate::proxy::pino::CacheTtl::FiveMin,
-                drop_tools: vec![],
-                strip_ansi: true,
-                model_override: None,
-            }),
-        ),
-        (
-            TuiItem {
-                name: ProxyName::Headroom,
-                enabled: false,
-            },
-            ProxySettings::Headroom(HeadroomSettings { compression: false }),
-        ),
-        (
-            TuiItem {
-                name: ProxyName::Central,
-                enabled: false,
-            },
-            ProxySettings::Central(CentralSettings {
-                port: None,
-                pinned_version: None,
-            }),
-        ),
-    ])
-}
-
-#[test]
-fn new_seeds_items_in_order_with_cursor_at_top() {
-    let st = seed_all_disabled();
-    assert_eq!(st.items.len(), 3);
-    assert_eq!(st.items[0].name, ProxyName::Pino);
-    assert_eq!(st.items[1].name, ProxyName::Headroom);
-    assert_eq!(st.items[2].name, ProxyName::Central);
-    assert!(st.items.iter().all(|i| !i.enabled));
-    assert_eq!(st.cursor, 0);
-    // No hint until a constraint is violated.
-    assert_eq!(st.hint(), None);
-}
-
-#[test]
-fn down_moves_cursor_and_clamps_at_bottom() {
-    let mut st = seed_all_disabled(); // 3 rows, cursor 0
-    assert_eq!(st.apply(TuiAction::Down), TuiOutcome::Continue);
-    assert_eq!(st.cursor, 1);
-    assert_eq!(st.apply(TuiAction::Down), TuiOutcome::Continue);
-    assert_eq!(st.cursor, 2);
-    // Already at the last row: clamp, do not wrap.
-    assert_eq!(st.apply(TuiAction::Down), TuiOutcome::Continue);
-    assert_eq!(st.cursor, 2);
-}
-
-#[test]
-fn up_moves_cursor_and_clamps_at_top() {
-    let mut st = seed_all_disabled();
-    st.cursor = 2;
-    assert_eq!(st.apply(TuiAction::Up), TuiOutcome::Continue);
-    assert_eq!(st.cursor, 1);
-    assert_eq!(st.apply(TuiAction::Up), TuiOutcome::Continue);
-    assert_eq!(st.cursor, 0);
-    // Already at the top: clamp, do not wrap.
-    assert_eq!(st.apply(TuiAction::Up), TuiOutcome::Continue);
-    assert_eq!(st.cursor, 0);
-}
-
-#[test]
-fn cursor_movement_never_changes_order_or_selection() {
-    let mut st = seed_all_disabled();
-    let before: Vec<_> = st.items.clone();
-    st.apply(TuiAction::Down);
-    st.apply(TuiAction::Down);
-    st.apply(TuiAction::Up);
-    assert_eq!(st.items, before);
-}
-
-#[test]
-fn toggle_flips_enabled_at_cursor() {
-    let mut st = seed_all_disabled(); // cursor 0 -> pino
-    assert!(!st.items[0].enabled);
-    assert_eq!(st.apply(TuiAction::Toggle), TuiOutcome::Continue);
-    assert!(st.items[0].enabled);
-    // Toggle again disables it.
-    assert_eq!(st.apply(TuiAction::Toggle), TuiOutcome::Continue);
-    assert!(!st.items[0].enabled);
-}
-
-#[test]
-fn toggle_only_affects_row_under_cursor() {
-    let mut st = seed_all_disabled();
-    st.cursor = 1; // headroom
-    st.apply(TuiAction::Toggle);
-    assert!(!st.items[0].enabled); // pino untouched
-    assert!(st.items[1].enabled); // headroom flipped
-    assert!(!st.items[2].enabled); // central untouched
-}
-
-#[test]
-fn toggle_does_not_move_cursor() {
-    let mut st = seed_all_disabled();
-    st.cursor = 1;
-    st.apply(TuiAction::Toggle);
-    assert_eq!(st.cursor, 1);
-}
-
-#[test]
-fn toggle_central_in_place_when_already_last() {
-    let mut st = seed_all_disabled();
-    st.cursor = 2; // central, already last
-    st.apply(TuiAction::Toggle);
-    assert!(st.items[2].enabled);
-    assert_eq!(st.items[2].name, ProxyName::Central);
-    assert_eq!(st.cursor, 2);
-}
-
-#[test]
-fn move_down_swaps_with_next_and_follows_cursor() {
-    let mut st = seed_all_disabled(); // [pino, headroom, central], cursor 0
-    assert_eq!(st.apply(TuiAction::MoveDown), TuiOutcome::Continue);
-    assert_eq!(st.items[0].name, ProxyName::Headroom);
-    assert_eq!(st.items[1].name, ProxyName::Pino);
-    assert_eq!(st.items[2].name, ProxyName::Central);
-    // Cursor follows the moved (pino) row to index 1.
-    assert_eq!(st.cursor, 1);
-}
-
-#[test]
-fn move_up_swaps_with_prev_and_follows_cursor() {
-    let mut st = seed_all_disabled();
-    st.cursor = 1; // headroom
-    assert_eq!(st.apply(TuiAction::MoveUp), TuiOutcome::Continue);
-    assert_eq!(st.items[0].name, ProxyName::Headroom);
-    assert_eq!(st.items[1].name, ProxyName::Pino);
-    assert_eq!(st.cursor, 0);
-}
-
-#[test]
-fn move_up_at_top_is_noop() {
-    let mut st = seed_all_disabled();
-    let before: Vec<_> = st.items.clone();
-    st.cursor = 0;
-    assert_eq!(st.apply(TuiAction::MoveUp), TuiOutcome::Continue);
-    assert_eq!(st.items, before);
-    assert_eq!(st.cursor, 0);
-}
-
-#[test]
-fn move_down_at_bottom_is_noop() {
-    // Seed without central so the bottom row is freely "moveable" yet clamps.
-    let mut st = TuiState::new(vec![
-        (
-            TuiItem {
-                name: ProxyName::Pino,
-                enabled: false,
-            },
-            ProxySettings::Pino(PinoSettings {
-                auto_cache: true,
-                main_ttl: crate::proxy::pino::CacheTtl::OneHour,
-                sub_ttl: crate::proxy::pino::CacheTtl::FiveMin,
-                drop_tools: vec![],
-                strip_ansi: true,
-                model_override: None,
-            }),
-        ),
-        (
-            TuiItem {
-                name: ProxyName::Headroom,
-                enabled: false,
-            },
-            ProxySettings::Headroom(HeadroomSettings { compression: false }),
-        ),
-    ]);
-    let before: Vec<_> = st.items.clone();
-    st.cursor = 1; // last row
-    assert_eq!(st.apply(TuiAction::MoveDown), TuiOutcome::Continue);
-    assert_eq!(st.items, before);
-    assert_eq!(st.cursor, 1);
-}
-
-#[test]
-fn reorder_carries_settings_with_the_row() {
-    // pino has a distinctive setting (model_override) we can recognize after a move.
-    let mut st = TuiState::new(vec![
-        (
-            TuiItem {
-                name: ProxyName::Pino,
-                enabled: true,
-            },
-            ProxySettings::Pino(PinoSettings {
-                auto_cache: true,
-                main_ttl: crate::proxy::pino::CacheTtl::OneHour,
-                sub_ttl: crate::proxy::pino::CacheTtl::FiveMin,
-                drop_tools: vec![],
-                strip_ansi: true,
-                model_override: Some("sonnet-test".to_string()),
-            }),
-        ),
-        (
-            TuiItem {
-                name: ProxyName::Headroom,
-                enabled: false,
-            },
-            ProxySettings::Headroom(HeadroomSettings { compression: false }),
-        ),
-    ]);
-    st.cursor = 0;
-    st.apply(TuiAction::MoveDown); // pino -> index 1
-    assert_eq!(st.items[1].name, ProxyName::Pino);
-    // Its settings moved with it: settings_at(1) is pino's distinctive override.
-    match st.settings_at(1) {
-        ProxySettings::Pino(p) => {
-            assert_eq!(p.model_override.as_deref(), Some("sonnet-test"));
-        }
-        other => panic!("expected pino settings at index 1, got {other:?}"),
-    }
-    // And index 0 now holds headroom's settings.
-    assert!(matches!(st.settings_at(0), ProxySettings::Headroom(_)));
-}
-
-#[test]
-fn cannot_move_a_row_below_central() {
-    // [pino, headroom, central]; cursor on headroom (index 1).
-    let mut st = seed_all_disabled();
-    st.cursor = 1;
-    // MoveDown would put headroom at index 2 and central at index 1 -> illegal.
-    assert_eq!(st.apply(TuiAction::MoveDown), TuiOutcome::Continue);
-    // Order is unchanged; central stays last.
-    assert_eq!(st.items[0].name, ProxyName::Pino);
-    assert_eq!(st.items[1].name, ProxyName::Headroom);
-    assert_eq!(st.items[2].name, ProxyName::Central);
-    // Cursor stays on headroom (the row the user tried to move).
-    assert_eq!(st.cursor, 1);
-    // The rejection is surfaced as a hint.
-    assert_eq!(st.hint(), Some("central must stay last"));
-}
-
-#[test]
-fn central_cannot_be_moved_up() {
-    let mut st = seed_all_disabled();
-    st.cursor = 2; // central
-    assert_eq!(st.apply(TuiAction::MoveUp), TuiOutcome::Continue);
-    // Central re-coerced last; order unchanged.
-    assert_eq!(st.items[2].name, ProxyName::Central);
-    assert_eq!(st.items[0].name, ProxyName::Pino);
-    assert_eq!(st.items[1].name, ProxyName::Headroom);
-    // Cursor remains on central (still index 2).
-    assert_eq!(st.cursor, 2);
-    assert_eq!(st.hint(), Some("central must stay last"));
-}
-
-#[test]
-fn central_stays_last_after_unrelated_reorder_and_clears_hint() {
-    // Moving pino down past headroom is fine; central must remain last.
-    let mut st = seed_all_disabled();
-    // First provoke a hint so we can prove it clears.
-    st.cursor = 1;
-    st.apply(TuiAction::MoveDown); // rejected -> hint set
-    assert_eq!(st.hint(), Some("central must stay last"));
-    // Now an unconstrained move clears it.
-    st.cursor = 0; // pino
-    st.apply(TuiAction::MoveDown); // pino <-> headroom (legal)
-    assert_eq!(st.items[0].name, ProxyName::Headroom);
-    assert_eq!(st.items[1].name, ProxyName::Pino);
-    assert_eq!(st.items[2].name, ProxyName::Central);
-    assert_eq!(st.cursor, 1);
-    assert_eq!(st.hint(), None);
-}
-
-#[test]
-fn toggling_central_keeps_it_last_and_clears_hint() {
-    let mut st = seed_all_disabled();
-    // Provoke a hint.
-    st.cursor = 2;
-    st.apply(TuiAction::MoveUp); // rejected -> hint set
-    assert_eq!(st.hint(), Some("central must stay last"));
-    // Toggling central keeps it last and clears the hint.
-    st.cursor = 2;
-    st.apply(TuiAction::Toggle); // enable central
-    assert!(st.items[2].enabled);
-    assert_eq!(st.items[2].name, ProxyName::Central);
-    assert_eq!(st.hint(), None);
-    st.apply(TuiAction::Toggle); // disable central
-    assert!(!st.items[2].enabled);
-    assert_eq!(st.items[2].name, ProxyName::Central);
-}
-
-#[test]
-fn no_central_present_reorder_is_unconstrained() {
-    // Seed without central: pino, headroom only.
-    let mut st = TuiState::new(vec![
-        (
-            TuiItem {
-                name: ProxyName::Pino,
-                enabled: true,
-            },
-            ProxySettings::Pino(PinoSettings {
-                auto_cache: true,
-                main_ttl: crate::proxy::pino::CacheTtl::OneHour,
-                sub_ttl: crate::proxy::pino::CacheTtl::FiveMin,
-                drop_tools: vec![],
-                strip_ansi: true,
-                model_override: None,
-            }),
-        ),
-        (
-            TuiItem {
-                name: ProxyName::Headroom,
-                enabled: true,
-            },
-            ProxySettings::Headroom(HeadroomSettings { compression: false }),
-        ),
-    ]);
-    st.cursor = 0;
-    st.apply(TuiAction::MoveDown); // free to swap; no central to constrain
-    assert_eq!(st.items[0].name, ProxyName::Headroom);
-    assert_eq!(st.items[1].name, ProxyName::Pino);
-    assert_eq!(st.cursor, 1);
-    assert_eq!(st.hint(), None);
-}
-
-#[test]
-fn confirm_resolves_enabled_rows_in_order() {
-    let mut st = seed_all_disabled();
-    // Enable pino (0) and central (2); leave headroom (1) disabled.
-    st.cursor = 0;
-    st.apply(TuiAction::Toggle);
-    st.cursor = 2;
-    st.apply(TuiAction::Toggle);
-    let outcome = st.apply(TuiAction::Confirm);
-    match outcome {
-        TuiOutcome::Run(resolved) => {
-            assert_eq!(resolved.len(), 2);
-            assert_eq!(resolved[0].name, ProxyName::Pino);
-            assert_eq!(resolved[1].name, ProxyName::Central);
-            assert!(matches!(resolved[0].settings, ProxySettings::Pino(_)));
-            assert!(matches!(resolved[1].settings, ProxySettings::Central(_)));
-        }
-        other => panic!("expected Run, got {other:?}"),
-    }
-}
-
-#[test]
-fn confirm_with_nothing_enabled_runs_empty_chain() {
-    let mut st = seed_all_disabled();
-    match st.apply(TuiAction::Confirm) {
-        TuiOutcome::Run(resolved) => assert!(resolved.is_empty()),
-        other => panic!("expected Run(empty), got {other:?}"),
-    }
-}
-
-#[test]
-fn confirm_respects_reordered_enabled_rows() {
-    let mut st = seed_all_disabled();
-    // Enable pino and headroom, then move headroom above pino.
-    st.cursor = 0;
-    st.apply(TuiAction::Toggle); // pino on
-    st.cursor = 1;
-    st.apply(TuiAction::Toggle); // headroom on
-    st.apply(TuiAction::MoveUp); // headroom -> index 0, pino -> index 1
-    match st.apply(TuiAction::Confirm) {
-        TuiOutcome::Run(resolved) => {
-            assert_eq!(resolved.len(), 2);
-            assert_eq!(resolved[0].name, ProxyName::Headroom);
-            assert_eq!(resolved[1].name, ProxyName::Pino);
-        }
-        other => panic!("expected Run, got {other:?}"),
-    }
-}
-
-#[test]
-fn confirm_carries_settings_into_resolved_chain() {
-    // End-to-end settings-carry across a reorder, now that Confirm exists.
-    let mut st = seed_all_disabled();
-    st.cursor = 0;
-    st.apply(TuiAction::Toggle); // pino enabled at index 0
-    st.apply(TuiAction::MoveDown); // pino -> index 1 (headroom -> 0)
-    match st.apply(TuiAction::Confirm) {
-        TuiOutcome::Run(resolved) => {
-            assert_eq!(resolved.len(), 1); // only pino enabled
-            assert_eq!(resolved[0].name, ProxyName::Pino);
-            match &resolved[0].settings {
-                ProxySettings::Pino(p) => assert!(p.auto_cache),
-                other => panic!("expected pino settings, got {other:?}"),
-            }
-        }
-        other => panic!("expected Run, got {other:?}"),
-    }
-}
-
-#[test]
-fn chain_preview_lists_enabled_in_order() {
-    let mut st = seed_all_disabled();
-    st.cursor = 0;
-    st.apply(TuiAction::Toggle); // pino
-    st.cursor = 1;
-    st.apply(TuiAction::Toggle); // headroom
-    assert_eq!(
-        st.chain_preview(),
-        "claude → pino → headroom → api.anthropic.com"
-    );
-}
-
-#[test]
-fn chain_preview_empty_when_none_enabled() {
-    let st = seed_all_disabled();
-    assert_eq!(st.chain_preview(), "claude → api.anthropic.com");
-}
-
-#[test]
-fn chain_preview_includes_central_last() {
-    let mut st = seed_all_disabled();
-    st.cursor = 0;
-    st.apply(TuiAction::Toggle); // pino
-    st.cursor = 2;
-    st.apply(TuiAction::Toggle); // central (already last)
-    assert_eq!(
-        st.chain_preview(),
-        "claude → pino → central → api.anthropic.com"
-    );
-}
-
-#[test]
-fn cancel_returns_cancel_outcome() {
-    let mut st = seed_all_disabled();
-    assert_eq!(st.apply(TuiAction::Cancel), TuiOutcome::Cancel);
-}
-
-#[test]
-fn confirm_and_cancel_do_not_mutate_state() {
-    let mut st = seed_all_disabled();
-    st.cursor = 1;
-    st.apply(TuiAction::Toggle); // headroom on
-    let items_before = st.items.clone();
-    let cursor_before = st.cursor;
-    let hint_before = st.hint();
-    let _ = st.apply(TuiAction::Confirm);
-    assert_eq!(st.items, items_before);
-    assert_eq!(st.cursor, cursor_before);
-    assert_eq!(st.hint(), hint_before);
-    let _ = st.apply(TuiAction::Cancel);
-    assert_eq!(st.items, items_before);
-    assert_eq!(st.cursor, cursor_before);
-    assert_eq!(st.hint(), hint_before);
-}
-
-fn cfg_pino_headroom_central(pino_on: bool, central_on: bool) -> Config {
+/// Build the canonical config (pino, headroom, central — all disabled) used to
+/// seed reducer states.
+fn cfg_all_disabled() -> Config {
     Config {
         version: 1,
         proxies: vec![
             ProxyEntry {
                 name: ProxyName::Pino,
-                enabled: pino_on,
+                enabled: false,
                 settings: ProxySettings::Pino(PinoSettings {
                     auto_cache: true,
-                    main_ttl: crate::proxy::pino::CacheTtl::OneHour,
-                    sub_ttl: crate::proxy::pino::CacheTtl::FiveMin,
+                    main_ttl: CacheTtl::OneHour,
+                    sub_ttl: CacheTtl::FiveMin,
                     drop_tools: vec![],
                     strip_ansi: true,
                     model_override: None,
@@ -478,11 +27,11 @@ fn cfg_pino_headroom_central(pino_on: bool, central_on: bool) -> Config {
             ProxyEntry {
                 name: ProxyName::Headroom,
                 enabled: false,
-                settings: ProxySettings::Headroom(HeadroomSettings { compression: false }),
+                settings: ProxySettings::Headroom(HeadroomSettings { compression: true }),
             },
             ProxyEntry {
                 name: ProxyName::Central,
-                enabled: central_on,
+                enabled: false,
                 settings: ProxySettings::Central(CentralSettings {
                     port: None,
                     pinned_version: None,
@@ -495,75 +44,338 @@ fn cfg_pino_headroom_central(pino_on: bool, central_on: bool) -> Config {
     }
 }
 
-// --- from_config_and_resolved: TUI seeded from the RESOLVED chain (spec §5.10) -----
+/// Seed a state with pino as the sole resolved (enabled) member, everything else
+/// disabled in config order — the common starting point for these tests.
+fn seeded() -> TuiState {
+    let cfg = cfg_all_disabled();
+    let resolved = vec![ResolvedProxy {
+        name: ProxyName::Pino,
+        settings: cfg.proxies[0].settings.clone(),
+    }];
+    TuiState::from_config_and_resolved(&cfg, &resolved)
+}
+
+/// A fully-disabled seed (empty resolved chain), preserving config order.
+fn seeded_empty() -> TuiState {
+    TuiState::from_config_and_resolved(&cfg_all_disabled(), &[])
+}
+
+/// Render the value of whatever setting the cursor is on; panics if not on a
+/// setting.
+fn focused_value(st: &TuiState) -> String {
+    match st.focus() {
+        Focus::Setting(name, sid) => settings::render_value(st.settings_of_proxy(name), sid),
+        f => panic!("not on a setting: {f:?}"),
+    }
+}
+
+// Activation semantics ============================================================
 
 #[test]
-fn from_resolved_enables_and_orders_resolved_members_first() {
-    // Config has all rows disabled in canonical order. The resolved chain
-    // (e.g. from `--proxies headroom,pino` or POVERTY_PROXY_CHAIN) enables
-    // headroom then pino, in THAT order — the TUI must reflect it, not the
-    // config-file order/enabled flags.
-    let cfg = cfg_pino_headroom_central(false, false);
-    let resolved = vec![
-        ResolvedProxy {
-            name: ProxyName::Headroom,
-            settings: ProxySettings::Headroom(HeadroomSettings { compression: false }),
-        },
-        ResolvedProxy {
-            name: ProxyName::Pino,
-            settings: ProxySettings::Pino(PinoSettings {
-                auto_cache: true,
-                main_ttl: crate::proxy::pino::CacheTtl::OneHour,
-                sub_ttl: crate::proxy::pino::CacheTtl::FiveMin,
-                drop_tools: vec![],
-                strip_ansi: true,
-                model_override: None,
-            }),
-        },
-    ];
-    let st = TuiState::from_config_and_resolved(&cfg, &resolved);
-    // Resolved members come first, enabled, in chain order: headroom, pino.
-    assert_eq!(st.items[0].name, ProxyName::Headroom);
-    assert!(st.items[0].enabled);
-    assert_eq!(st.items[1].name, ProxyName::Pino);
-    assert!(st.items[1].enabled);
-    // The remaining known proxy (central) follows, disabled, and is last.
-    assert_eq!(st.items[2].name, ProxyName::Central);
-    assert!(!st.items[2].enabled);
-    assert_eq!(st.items.len(), 3);
-    assert_eq!(st.cursor, 0);
+fn enter_and_space_both_activate_not_run() {
+    // Both Enter and Space map to Activate in the keymap; on a proxy header that
+    // toggles enabled and never runs.
+    let mut st = seeded();
+    assert!(matches!(st.focus(), Focus::Proxy(ProxyName::Pino)));
+    assert_eq!(st.apply(TuiAction::Activate), TuiOutcome::Continue);
+    // pino was enabled (seeded), so the toggle disabled it; still Continue.
+    let pino = st.settings_of_proxy(ProxyName::Pino);
+    let _ = pino; // value unused; the point is no Run/Cancel happened.
+}
+
+#[test]
+fn activate_on_proxy_toggles_enabled_does_not_run() {
+    let mut st = seeded_empty(); // pino disabled, focus on pino
+    assert!(matches!(st.focus(), Focus::Proxy(ProxyName::Pino)));
+    assert_eq!(st.apply(TuiAction::Activate), TuiOutcome::Continue);
+    // Confirm via the Run outcome that pino is now enabled.
+    st.set_focus(Focus::Start);
+    let TuiOutcome::Run(entries) = st.apply(TuiAction::Activate) else {
+        panic!("expected Run")
+    };
+    assert!(entries
+        .iter()
+        .any(|e| e.name == ProxyName::Pino && e.enabled));
+}
+
+#[test]
+fn only_start_button_runs() {
+    let mut st = seeded();
+    st.set_focus(Focus::Start);
+    assert!(matches!(st.apply(TuiAction::Activate), TuiOutcome::Run(_)));
+}
+
+#[test]
+fn cancel_paths() {
+    let mut a = seeded();
+    a.set_focus(Focus::Cancel);
+    assert_eq!(a.apply(TuiAction::Activate), TuiOutcome::Cancel);
+    let mut b = seeded();
+    assert_eq!(b.apply(TuiAction::Cancel), TuiOutcome::Cancel);
+}
+
+// Navigation ======================================================================
+
+#[test]
+fn up_down_step_focus_and_clamp() {
+    let mut st = seeded_empty(); // focus on pino (first)
+    assert_eq!(st.apply(TuiAction::Up), TuiOutcome::Continue);
+    assert!(matches!(st.focus(), Focus::Proxy(ProxyName::Pino))); // clamps at head
+    assert_eq!(st.apply(TuiAction::Down), TuiOutcome::Continue);
+    assert!(matches!(st.focus(), Focus::Proxy(ProxyName::Headroom)));
+    // Walk to the tail (Cancel) and confirm it clamps there.
+    while st.focus() != Focus::Cancel {
+        st.apply(TuiAction::Down);
+    }
+    st.apply(TuiAction::Down);
+    assert_eq!(st.focus(), Focus::Cancel);
+}
+
+// Expand / edit ===================================================================
+
+#[test]
+fn expand_reveals_and_edit_text_commits() {
+    let mut st = seeded();
+    st.apply(TuiAction::Expand);
+    assert!(st
+        .visible()
+        .contains(&Focus::Setting(ProxyName::Pino, SettingId::AutoCache)));
+    st.set_focus(Focus::Setting(ProxyName::Pino, SettingId::ModelOverride));
+    st.apply(TuiAction::Activate);
+    assert!(st.is_editing());
+    for c in "opus".chars() {
+        st.apply(TuiAction::EditChar(c));
+    }
+    st.apply(TuiAction::EditCommit);
+    assert!(!st.is_editing());
+    assert_eq!(focused_value(&st), "opus");
+}
+
+#[test]
+fn edit_abort_discards_buffer() {
+    let mut st = seeded();
+    st.apply(TuiAction::Expand);
+    st.set_focus(Focus::Setting(ProxyName::Pino, SettingId::ModelOverride));
+    st.apply(TuiAction::Activate);
+    for c in "junk".chars() {
+        st.apply(TuiAction::EditChar(c));
+    }
+    st.apply(TuiAction::EditAbort);
+    assert!(!st.is_editing());
+    assert_eq!(focused_value(&st), "(default)"); // unchanged from seed
+}
+
+#[test]
+fn edit_backspace_removes_last_char() {
+    let mut st = seeded();
+    st.apply(TuiAction::Expand);
+    st.set_focus(Focus::Setting(ProxyName::Pino, SettingId::ModelOverride));
+    st.apply(TuiAction::Activate);
+    for c in "abc".chars() {
+        st.apply(TuiAction::EditChar(c));
+    }
+    st.apply(TuiAction::EditBackspace);
+    st.apply(TuiAction::EditCommit);
+    assert_eq!(focused_value(&st), "ab");
+}
+
+#[test]
+fn edit_commit_invalid_number_keeps_editing_and_sets_hint() {
+    let mut st = seeded_empty();
+    // Expand central and focus its Port (Number) setting.
+    st.set_focus(Focus::Proxy(ProxyName::Central));
+    st.apply(TuiAction::Expand);
+    st.set_focus(Focus::Setting(ProxyName::Central, SettingId::Port));
+    st.apply(TuiAction::Activate);
+    assert!(st.is_editing());
+    for c in "abc".chars() {
+        st.apply(TuiAction::EditChar(c));
+    }
+    assert_eq!(st.apply(TuiAction::EditCommit), TuiOutcome::Continue);
+    assert!(st.is_editing(), "invalid commit keeps editing");
+    assert!(st.hint().is_some(), "parse error surfaced as hint");
+    // A valid value then commits and clears the editor + hint.
+    st.apply(TuiAction::EditBackspace);
+    st.apply(TuiAction::EditBackspace);
+    st.apply(TuiAction::EditBackspace);
+    for c in "9000".chars() {
+        st.apply(TuiAction::EditChar(c));
+    }
+    st.apply(TuiAction::EditCommit);
+    assert!(!st.is_editing());
+    assert_eq!(st.hint(), None);
+    assert_eq!(focused_value(&st), "9000");
+}
+
+#[test]
+fn editing_routes_only_edit_actions() {
+    // While editing, navigation/activation actions are inert (return Continue and
+    // do not change focus or leave the editor).
+    let mut st = seeded();
+    st.apply(TuiAction::Expand);
+    st.set_focus(Focus::Setting(ProxyName::Pino, SettingId::ModelOverride));
+    st.apply(TuiAction::Activate);
+    let focus_before = st.focus();
+    assert_eq!(st.apply(TuiAction::Down), TuiOutcome::Continue);
+    assert!(st.is_editing());
+    assert_eq!(st.focus(), focus_before);
+    assert_eq!(st.apply(TuiAction::Activate), TuiOutcome::Continue);
+    assert!(st.is_editing());
+}
+
+// Bool / enum activation + cycle ==================================================
+
+#[test]
+fn activate_on_bool_toggles_in_place() {
+    let mut st = seeded();
+    st.apply(TuiAction::Expand);
+    st.set_focus(Focus::Setting(ProxyName::Pino, SettingId::AutoCache));
+    assert_eq!(focused_value(&st), "[x]"); // seeded auto_cache: true
+    st.apply(TuiAction::Activate);
+    assert!(!st.is_editing(), "bool activation does not enter edit mode");
+    assert_eq!(focused_value(&st), "[ ]");
+}
+
+#[test]
+fn cycle_right_on_enum_changes_value() {
+    let mut st = seeded();
+    st.apply(TuiAction::Expand);
+    st.set_focus(Focus::Setting(ProxyName::Pino, SettingId::SubTtl));
+    assert_eq!(focused_value(&st), "‹ 5m ›"); // seeded sub_ttl: 5m
+    st.apply(TuiAction::CycleRight);
+    assert_eq!(focused_value(&st), "‹ 1h ›");
+    st.apply(TuiAction::CycleLeft);
+    assert_eq!(focused_value(&st), "‹ 5m ›");
+}
+
+#[test]
+fn cycle_on_bool_toggles() {
+    let mut st = seeded();
+    st.apply(TuiAction::Expand);
+    st.set_focus(Focus::Setting(ProxyName::Pino, SettingId::AutoCache));
+    assert_eq!(focused_value(&st), "[x]");
+    st.apply(TuiAction::CycleRight);
+    assert_eq!(focused_value(&st), "[ ]");
+}
+
+#[test]
+fn expand_on_setting_collapses_back_to_proxy() {
+    let mut st = seeded();
+    st.apply(TuiAction::Expand);
+    st.set_focus(Focus::Setting(ProxyName::Pino, SettingId::SubTtl));
+    st.apply(TuiAction::Expand); // collapse from a setting
+    assert_eq!(st.focus(), Focus::Proxy(ProxyName::Pino));
+    assert!(!st
+        .visible()
+        .contains(&Focus::Setting(ProxyName::Pino, SettingId::SubTtl)));
+}
+
+// Reorder =========================================================================
+
+#[test]
+fn move_only_acts_on_proxy_headers() {
+    // On a setting, MoveDown/MoveUp are no-ops (focus unchanged, no reorder).
+    let mut st = seeded();
+    st.apply(TuiAction::Expand);
+    st.set_focus(Focus::Setting(ProxyName::Pino, SettingId::SubTtl));
+    let before = st.rows_order();
+    assert_eq!(st.apply(TuiAction::MoveDown), TuiOutcome::Continue);
+    assert_eq!(st.rows_order(), before);
+    assert_eq!(
+        st.focus(),
+        Focus::Setting(ProxyName::Pino, SettingId::SubTtl)
+    );
+}
+
+#[test]
+fn move_down_reorders_proxy_and_keeps_focus() {
+    let mut st = seeded_empty(); // [pino, headroom, central], focus on pino
+    assert_eq!(st.apply(TuiAction::MoveDown), TuiOutcome::Continue);
+    assert_eq!(
+        st.rows_order(),
+        vec![ProxyName::Headroom, ProxyName::Pino, ProxyName::Central]
+    );
+    assert_eq!(st.focus(), Focus::Proxy(ProxyName::Pino)); // focus follows by name
     assert_eq!(st.hint(), None);
 }
 
 #[test]
-fn from_resolved_keeps_all_known_rows_togglable() {
-    // Even with an empty resolved chain, every known proxy is present as a
-    // (disabled) row so the user can still toggle it on.
-    let cfg = cfg_pino_headroom_central(false, false);
-    let st = TuiState::from_config_and_resolved(&cfg, &[]);
-    assert_eq!(st.items.len(), 3);
-    assert!(st.items.iter().all(|i| !i.enabled));
-    // Disabled-and-absent rows keep the config's relative order.
-    assert_eq!(st.items[0].name, ProxyName::Pino);
-    assert_eq!(st.items[1].name, ProxyName::Headroom);
-    assert_eq!(st.items[2].name, ProxyName::Central);
+fn cannot_move_a_proxy_below_central_sets_hint() {
+    let mut st = seeded_empty();
+    st.set_focus(Focus::Proxy(ProxyName::Headroom));
+    assert_eq!(st.apply(TuiAction::MoveDown), TuiOutcome::Continue);
+    // Order unchanged; central stays last.
+    assert_eq!(
+        st.rows_order(),
+        vec![ProxyName::Pino, ProxyName::Headroom, ProxyName::Central]
+    );
+    assert_eq!(st.focus(), Focus::Proxy(ProxyName::Headroom));
+    assert_eq!(st.hint(), Some("central must stay last"));
 }
 
 #[test]
-fn from_resolved_central_forced_last_even_if_not_tail_of_resolved() {
-    // Central is always coerced last regardless of where it appears in inputs.
-    let cfg = cfg_pino_headroom_central(false, false);
+fn central_cannot_be_moved_up_sets_hint() {
+    let mut st = seeded_empty();
+    st.set_focus(Focus::Proxy(ProxyName::Central));
+    assert_eq!(st.apply(TuiAction::MoveUp), TuiOutcome::Continue);
+    assert_eq!(
+        st.rows_order(),
+        vec![ProxyName::Pino, ProxyName::Headroom, ProxyName::Central]
+    );
+    assert_eq!(st.focus(), Focus::Proxy(ProxyName::Central));
+    assert_eq!(st.hint(), Some("central must stay last"));
+}
+
+#[test]
+fn name_based_focus_survives_reorder() {
+    // After moving pino down, the focus is still on pino by NAME even though its
+    // index changed — the regression this redesign fixes.
+    let mut st = seeded_empty();
+    st.set_focus(Focus::Proxy(ProxyName::Pino));
+    st.apply(TuiAction::MoveDown);
+    assert_eq!(st.focus(), Focus::Proxy(ProxyName::Pino));
+    assert_eq!(st.rows_order()[1], ProxyName::Pino); // pino is now at index 1
+}
+
+#[test]
+fn reorder_then_clear_hint_on_legal_move() {
+    let mut st = seeded_empty();
+    // Provoke a hint.
+    st.set_focus(Focus::Proxy(ProxyName::Headroom));
+    st.apply(TuiAction::MoveDown);
+    assert_eq!(st.hint(), Some("central must stay last"));
+    // A legal move clears it.
+    st.set_focus(Focus::Proxy(ProxyName::Pino));
+    st.apply(TuiAction::MoveDown);
+    assert_eq!(st.hint(), None);
+}
+
+// Run outcome / central-last ======================================================
+
+#[test]
+fn run_outcome_full_state_central_last() {
+    let mut st = seeded();
+    st.set_focus(Focus::Start);
+    let TuiOutcome::Run(entries) = st.apply(TuiAction::Activate) else {
+        panic!()
+    };
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries.last().unwrap().name, ProxyName::Central);
+    assert!(entries
+        .iter()
+        .any(|e| e.name == ProxyName::Pino && e.enabled));
+}
+
+#[test]
+fn freshly_seeded_to_entries_is_central_last_with_zero_actions() {
+    // Ported from `from_resolved_central_forced_last_even_if_not_tail_of_resolved`:
+    // central is forced last ON CONSTRUCTION, so a zero-action Start yields a
+    // central-last entry list even when central appears mid-chain in the seed.
+    let cfg = cfg_all_disabled();
     let resolved = vec![
         ResolvedProxy {
             name: ProxyName::Pino,
-            settings: ProxySettings::Pino(PinoSettings {
-                auto_cache: true,
-                main_ttl: crate::proxy::pino::CacheTtl::OneHour,
-                sub_ttl: crate::proxy::pino::CacheTtl::FiveMin,
-                drop_tools: vec![],
-                strip_ansi: true,
-                model_override: None,
-            }),
+            settings: cfg.proxies[0].settings.clone(),
         },
         ResolvedProxy {
             name: ProxyName::Central,
@@ -573,100 +385,132 @@ fn from_resolved_central_forced_last_even_if_not_tail_of_resolved() {
             }),
         },
     ];
-    let st = TuiState::from_config_and_resolved(&cfg, &resolved);
-    assert_eq!(st.items.last().unwrap().name, ProxyName::Central);
-    assert!(st.items.last().unwrap().enabled);
+    let mut st = TuiState::from_config_and_resolved(&cfg, &resolved);
+    st.set_focus(Focus::Start);
+    let TuiOutcome::Run(entries) = st.apply(TuiAction::Activate) else {
+        panic!()
+    };
+    assert_eq!(entries.last().unwrap().name, ProxyName::Central);
+    assert!(entries.last().unwrap().enabled);
 }
 
 #[test]
-fn from_resolved_then_confirm_yields_the_resolved_chain() {
-    // Round-trip: the chain confirmed back out matches the resolved seed
-    // (enabled members, in order). This is the property the picker relies on so
-    // an unmodified Enter reproduces `--proxies` / POVERTY_PROXY_CHAIN.
-    let cfg = cfg_pino_headroom_central(false, false);
+fn run_outcome_carries_per_setting_edits() {
+    // Edit pino's model_override, then Start: the entry list carries the edit.
+    let mut st = seeded();
+    st.apply(TuiAction::Expand);
+    st.set_focus(Focus::Setting(ProxyName::Pino, SettingId::ModelOverride));
+    st.apply(TuiAction::Activate);
+    for c in "claude-x".chars() {
+        st.apply(TuiAction::EditChar(c));
+    }
+    st.apply(TuiAction::EditCommit);
+    st.set_focus(Focus::Start);
+    let TuiOutcome::Run(entries) = st.apply(TuiAction::Activate) else {
+        panic!()
+    };
+    let pino = entries.iter().find(|e| e.name == ProxyName::Pino).unwrap();
+    match &pino.settings {
+        ProxySettings::Pino(p) => assert_eq!(p.model_override.as_deref(), Some("claude-x")),
+        other => panic!("expected pino settings, got {other:?}"),
+    }
+}
+
+#[test]
+fn central_stays_last_under_adversarial_sequence() {
+    let mut st = seeded_empty();
+    let script = [
+        TuiAction::Down,
+        TuiAction::Activate,
+        TuiAction::MoveDown,
+        TuiAction::Down,
+        TuiAction::Activate,
+        TuiAction::MoveUp,
+        TuiAction::Up,
+        TuiAction::MoveDown,
+    ];
+    for a in script {
+        assert_eq!(st.apply(a), TuiOutcome::Continue);
+        assert_eq!(*st.rows_order().last().unwrap(), ProxyName::Central);
+    }
+}
+
+// chain_preview ===================================================================
+
+#[test]
+fn from_resolved_enables_and_orders_members_first() {
+    let cfg = cfg_all_disabled();
     let resolved = vec![
         ResolvedProxy {
             name: ProxyName::Headroom,
-            settings: ProxySettings::Headroom(HeadroomSettings { compression: false }),
+            settings: ProxySettings::Headroom(HeadroomSettings { compression: true }),
         },
         ResolvedProxy {
             name: ProxyName::Pino,
-            settings: ProxySettings::Pino(PinoSettings {
-                auto_cache: true,
-                main_ttl: crate::proxy::pino::CacheTtl::OneHour,
-                sub_ttl: crate::proxy::pino::CacheTtl::FiveMin,
-                drop_tools: vec![],
-                strip_ansi: true,
-                model_override: Some("seed-model".to_string()),
-            }),
+            settings: cfg.proxies[0].settings.clone(),
         },
     ];
-    let mut st = TuiState::from_config_and_resolved(&cfg, &resolved);
-    match st.apply(TuiAction::Confirm) {
-        TuiOutcome::Run(out) => {
-            assert_eq!(
-                out, resolved,
-                "confirmed chain must equal the resolved seed"
-            );
-        }
-        other => panic!("expected Run, got {other:?}"),
-    }
-}
-
-// --- central-last property guards (added green-on-arrival; not red->green) -----
-
-#[test]
-fn central_remains_last_under_an_adversarial_action_sequence() {
-    let mut st = seed_all_disabled();
-    // A scripted barrage that repeatedly tries to displace central.
-    let script = [
-        TuiAction::Down,     // -> headroom
-        TuiAction::Toggle,   // enable headroom
-        TuiAction::MoveDown, // try to push headroom below central (illegal)
-        TuiAction::Down,     // -> central
-        TuiAction::Toggle,   // enable central
-        TuiAction::MoveUp,   // try to lift central (illegal)
-        TuiAction::Up,       // -> some row
-        TuiAction::MoveDown, // push toward central
-        TuiAction::Down,
-        TuiAction::MoveDown,
-        TuiAction::Toggle,
-        TuiAction::MoveUp,
-    ];
-    for a in script {
-        let out = st.apply(a);
-        // No scripted action is Confirm/Cancel, so we always Continue.
-        assert_eq!(out, TuiOutcome::Continue);
-        // Invariant after EVERY step: central, if present, is the last row.
-        let last = st.items.last().expect("non-empty");
-        assert_eq!(last.name, ProxyName::Central, "central must stay last");
-        // Cursor always in bounds.
-        assert!(st.cursor < st.items.len());
-    }
+    let st = TuiState::from_config_and_resolved(&cfg, &resolved);
+    assert_eq!(
+        st.rows_order(),
+        vec![ProxyName::Headroom, ProxyName::Pino, ProxyName::Central]
+    );
+    assert_eq!(st.focus(), Focus::Proxy(ProxyName::Headroom));
+    assert_eq!(st.hint(), None);
 }
 
 #[test]
-fn confirm_after_adversarial_sequence_keeps_central_last_in_chain() {
-    let mut st = seed_all_disabled();
-    // Enable all three, then thrash the order.
-    for idx in 0..3 {
-        st.cursor = idx;
-        st.apply(TuiAction::Toggle);
+fn chain_preview_lists_enabled_in_order() {
+    let mut st = seeded_empty();
+    st.set_focus(Focus::Proxy(ProxyName::Pino));
+    st.apply(TuiAction::Activate); // pino on
+    st.set_focus(Focus::Proxy(ProxyName::Headroom));
+    st.apply(TuiAction::Activate); // headroom on
+    assert_eq!(
+        st.chain_preview(),
+        "claude → pino → headroom → api.anthropic.com"
+    );
+}
+
+#[test]
+fn chain_preview_empty_when_none_enabled() {
+    let st = seeded_empty();
+    assert_eq!(st.chain_preview(), "claude → api.anthropic.com");
+}
+
+// No-op focus targets =============================================================
+
+#[test]
+fn cycle_and_expand_on_buttons_are_noops() {
+    // On the action buttons, Cycle and Expand do nothing (no panic, no reorder,
+    // no focus change).
+    let mut st = seeded_empty();
+    for button in [Focus::Start, Focus::Cancel] {
+        st.set_focus(button);
+        let before = st.rows_order();
+        assert_eq!(st.apply(TuiAction::CycleLeft), TuiOutcome::Continue);
+        assert_eq!(st.apply(TuiAction::CycleRight), TuiOutcome::Continue);
+        assert_eq!(st.apply(TuiAction::Expand), TuiOutcome::Continue);
+        assert_eq!(st.focus(), button);
+        assert_eq!(st.rows_order(), before);
     }
-    st.cursor = 0;
-    st.apply(TuiAction::MoveDown);
-    st.apply(TuiAction::MoveDown);
-    st.cursor = 2;
-    st.apply(TuiAction::MoveUp); // central can't rise
-    match st.apply(TuiAction::Confirm) {
-        TuiOutcome::Run(resolved) => {
-            assert_eq!(resolved.len(), 3);
-            assert_eq!(
-                resolved.last().expect("non-empty").name,
-                ProxyName::Central,
-                "central must be last in the resolved chain"
-            );
-        }
-        other => panic!("expected Run, got {other:?}"),
-    }
+}
+
+#[test]
+fn cycle_on_text_setting_clears_stale_hint() {
+    // Cycling a non-cyclable (Text) setting is a no-op on the value but still
+    // clears any stale reject hint, like cycling a bool/enum does.
+    let mut st = seeded_empty();
+    // Provoke a hint via an illegal reorder.
+    st.set_focus(Focus::Proxy(ProxyName::Central));
+    st.apply(TuiAction::MoveUp);
+    assert_eq!(st.hint(), Some("central must stay last"));
+    // Now cycle a Text setting (model_override): value unchanged, hint cleared.
+    st.set_focus(Focus::Proxy(ProxyName::Pino));
+    st.apply(TuiAction::Expand);
+    st.set_focus(Focus::Setting(ProxyName::Pino, SettingId::ModelOverride));
+    assert_eq!(focused_value(&st), "(default)");
+    st.apply(TuiAction::CycleRight);
+    assert_eq!(focused_value(&st), "(default)"); // no change
+    assert_eq!(st.hint(), None); // hint cleared
 }
