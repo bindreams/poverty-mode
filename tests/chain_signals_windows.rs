@@ -20,7 +20,7 @@ fn pid_alive(pid: u32) -> bool {
 #[tokio::test(flavor = "multi_thread")]
 async fn windows_ctrlc_backstop_reaps_a_non_cooperative_agent() {
     let exe = env!("CARGO_BIN_EXE_poverty-mode");
-    // A long sleeper that ignores Ctrl-C (the hidden __sleep helper just sleeps).
+    // A long-lived process that ignores Ctrl-C (the hidden __sleep helper parks forever).
     let mut child = tokio::process::Command::new(exe)
         .arg("__sleep")
         .spawn()
