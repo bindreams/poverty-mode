@@ -597,8 +597,11 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
         }
         Command::Sleep => {
             crate::orchestrator::teardown::spawn_death_watcher_from_env();
-            std::thread::sleep(std::time::Duration::from_secs(3600));
-            Ok(())
+            // Park forever: the death-watcher spawned above terminates this child
+            // when its parent dies. No arbitrary sleep bound (CONTRIBUTING.md).
+            loop {
+                std::thread::park();
+            }
         }
         Command::Post { url } => {
             // `reqwest::blocking` MUST NOT run on a runtime thread (R5), so the
@@ -657,8 +660,13 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
                     libc::sigaction(libc::SIGTERM, &sa, std::ptr::null_mut());
                 }
             }
-            std::thread::sleep(std::time::Duration::from_secs(3600));
-            Ok(())
+            // Park forever. On unix the SIGTERM handler installed above exits the
+            // process via libc::_exit(42); on Windows no handler is installed, so
+            // (like __sleep) the helper relies purely on its parent killing it. No
+            // arbitrary sleep bound (CONTRIBUTING.md).
+            loop {
+                std::thread::park();
+            }
         }
         Command::PrintEnv { name } => {
             print!("{}", std::env::var(&name).unwrap_or_default());

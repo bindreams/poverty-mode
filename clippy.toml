@@ -1,0 +1,17 @@
+# Disallowed methods enforce the "no time-based synchronization" rule from
+# CONTRIBUTING.md. Readiness is a blocking READY-line read + health probe;
+# shutdown drains in-flight work. The only sanctioned numeric timeout is a
+# human-surfaced failure bound on an external event (`tokio::time::timeout`
+# around `READINESS_DEADLINE` in src/orchestrator.rs) — that is NOT banned.
+
+[[disallowed-methods]]
+path = "std::thread::sleep"
+reason = "No time-based synchronization (CONTRIBUTING.md). To keep a foreground process alive until it is killed/signalled, use `loop { std::thread::park() }`; to await readiness/shutdown, await the real event."
+
+[[disallowed-methods]]
+path = "tokio::time::sleep"
+reason = "No time-based synchronization (CONTRIBUTING.md). Await the real readiness/shutdown signal; bound an external event with `tokio::time::timeout`, never a sleep."
+
+[[disallowed-methods]]
+path = "tokio::time::sleep_until"
+reason = "No time-based synchronization (CONTRIBUTING.md). Await the real readiness/shutdown signal; bound an external event with `tokio::time::timeout`, never a sleep."
