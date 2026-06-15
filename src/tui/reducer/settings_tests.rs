@@ -74,20 +74,13 @@ fn render_defaults_for_text_and_list() {
 fn edit_buffer_and_commit_text() {
     let mut s = pino();
     assert_eq!(SettingId::ModelOverride.edit_buffer(&s), "");
-    SettingId::ModelOverride
-        .commit_edit(&mut s, "claude-opus-4-8")
-        .unwrap();
-    assert_eq!(
-        render_value(&s, SettingId::ModelOverride),
-        "claude-opus-4-8"
-    );
+    SettingId::ModelOverride.commit_edit(&mut s, "claude-opus-4-8").unwrap();
+    assert_eq!(render_value(&s, SettingId::ModelOverride), "claude-opus-4-8");
 }
 #[test]
 fn commit_list_splits_csv_and_drops_empties() {
     let mut s = pino();
-    SettingId::DropTools
-        .commit_edit(&mut s, "Bash, ,Edit,")
-        .unwrap();
+    SettingId::DropTools.commit_edit(&mut s, "Bash, ,Edit,").unwrap();
     assert_eq!(render_value(&s, SettingId::DropTools), "Bash,Edit");
 }
 #[test]
@@ -109,8 +102,7 @@ fn describe_reflects_key_settings() {
     let d = describe(ProxyName::Pino, &s);
     assert!(d.contains("1h/5m")); // main_ttl/sub_ttl
     assert!(d.to_lowercase().contains("cache")); // auto_cache on
-    let hr_on =
-        ProxySettings::Headroom(crate::proxy::headroom::HeadroomSettings { compression: true });
+    let hr_on = ProxySettings::Headroom(crate::proxy::headroom::HeadroomSettings { compression: true });
     assert!(describe(ProxyName::Headroom, &hr_on)
         .to_lowercase()
         .contains("compression"));

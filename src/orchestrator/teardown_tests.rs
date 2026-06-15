@@ -109,10 +109,7 @@ async fn group_spawn_exposes_pid_and_stdout() {
         .spawn(&exe(), &["__sleep".to_string()], &[])
         .expect("spawn into group");
     assert!(spawned.pid > 0, "must report a real child pid");
-    assert!(
-        spawned.stdout.is_some(),
-        "stdout must be piped for READY read"
-    );
+    assert!(spawned.stdout.is_some(), "stdout must be piped for READY read");
     group.kill_all().expect("kill group");
     group.wait_all_exited().await.expect("await group exit");
 }
@@ -154,16 +151,10 @@ fn os_reaps_grouped_child_when_parent_is_killed_without_cleanup() {
         .trim()
         .parse()
         .expect("pid parses");
-    let ready = lines
-        .next()
-        .expect("holder printed ready")
-        .expect("read ready");
+    let ready = lines.next().expect("holder printed ready").expect("read ready");
     assert_eq!(ready.trim(), "HOLDER_READY");
 
-    assert!(
-        pid_alive(child_pid),
-        "grouped child alive while holder lives"
-    );
+    assert!(pid_alive(child_pid), "grouped child alive while holder lives");
 
     // Kill the HOLDER outright. No Drop/kill_all runs inside it.
     kill_pid(holder.id());
@@ -213,9 +204,7 @@ fn parse_terminated_pid(msg: &str) -> u32 {
     let marker = "pid ";
     let start = msg.find(marker).expect("error must report the pid") + marker.len();
     let rest = &msg[start..];
-    let end = rest
-        .find(|c: char| !c.is_ascii_digit())
-        .unwrap_or(rest.len());
+    let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
     rest[..end].parse().expect("pid parses")
 }
 
@@ -247,16 +236,10 @@ fn death_pipe_alone_reaps_grouped_child_when_pdeathsig_disabled() {
         .trim()
         .parse()
         .expect("pid parses");
-    let ready = lines
-        .next()
-        .expect("holder printed ready")
-        .expect("read ready");
+    let ready = lines.next().expect("holder printed ready").expect("read ready");
     assert_eq!(ready.trim(), "HOLDER_READY");
 
-    assert!(
-        pid_alive(child_pid),
-        "grouped child alive while holder lives"
-    );
+    assert!(pid_alive(child_pid), "grouped child alive while holder lives");
 
     // Kill the HOLDER outright. With PDEATHSIG disabled, only the death-pipe EOF
     // watcher can reap the child — proving the macOS backstop actually works.

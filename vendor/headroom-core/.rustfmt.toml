@@ -1,0 +1,6 @@
+# Pin vendored headroom-core to its upstream rustfmt width. The repo-root
+# .rustfmt.toml sets max_width = 120 for poverty-mode's own code; without this
+# nested override, `cargo fmt --all` (which formats path-dependency crates)
+# would reformat vendored sources to 120 and diverge from upstream. Keeps
+# `cargo fmt --all --check` green with zero vendor changes. Do not remove.
+max_width = 100

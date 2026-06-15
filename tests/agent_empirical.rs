@@ -59,10 +59,7 @@ async fn process_env_vs_settings_block_precedence() {
         &settings_url,
         &[
             ("ENABLE_TOOL_SEARCH".to_string(), "true".to_string()),
-            (
-                "ANTHROPIC_AUTH_TOKEN".to_string(),
-                "empirical-dummy".to_string(),
-            ),
+            ("ANTHROPIC_AUTH_TOKEN".to_string(), "empirical-dummy".to_string()),
         ],
     );
     cmd.env("ANTHROPIC_BASE_URL", proc_url.as_str());
@@ -162,18 +159,11 @@ async fn subagent_inherits_chain_endpoint() {
         // `--settings <json>` between it and the user flags (argv[1..]). Omitting
         // the program here would resolve program="--print" and spawn a nonexistent
         // `--print` binary, never reaching the inheritance assertions below.
-        &[
-            "claude".to_string(),
-            "--print".to_string(),
-            prompt.to_string(),
-        ],
+        &["claude".to_string(), "--print".to_string(), prompt.to_string()],
         &base,
         &[
             ("ENABLE_TOOL_SEARCH".to_string(), "true".to_string()),
-            (
-                "ANTHROPIC_AUTH_TOKEN".to_string(),
-                "empirical-dummy".to_string(),
-            ),
+            ("ANTHROPIC_AUTH_TOKEN".to_string(), "empirical-dummy".to_string()),
         ],
     );
     cmd.kill_on_drop(true);
@@ -237,10 +227,7 @@ async fn subagent_inherits_chain_endpoint() {
 #[test]
 fn empirical_gates_doc_has_required_sections() {
     let doc = include_str!("EMPIRICAL_GATES.md");
-    assert!(
-        doc.contains("--ignored"),
-        "must document the opt-in run flag"
-    );
+    assert!(doc.contains("--ignored"), "must document the opt-in run flag");
     assert!(doc.contains("agent_empirical"), "must name the test target");
     assert!(
         doc.contains("not run in normal CI") || doc.contains("not part of normal CI"),

@@ -64,9 +64,11 @@ fn doctor_runs_and_exits_zero_when_no_settings_conflicts() {
     let home = TempDir::new().unwrap();
     // Empty HOME -> no ~/.claude/settings.json -> no base-url conflict. On the five
     // supported CI targets there are no Error-severity toolchain findings, so exit 0.
-    pm(&home).arg("doctor").assert().success().stdout(
-        predicate::str::contains("no problems detected").or(predicate::str::contains("WARN")),
-    );
+    pm(&home)
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no problems detected").or(predicate::str::contains("WARN")));
 }
 
 #[test]

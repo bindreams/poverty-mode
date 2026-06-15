@@ -10,8 +10,7 @@ async fn download_verify_extract_fetches_and_unpacks() {
     let archive = make_tar_gz_fixture("bin/jbcentral", b"hello-from-stub");
     let sum = sha256_hex(&archive);
     let port = serve_bytes(archive).await;
-    let url =
-        format!("http://127.0.0.1:{port}/jbcentral/1.0.0/jbcentral_1.0.0_linux_x86_64.tar.gz");
+    let url = format!("http://127.0.0.1:{port}/jbcentral/1.0.0/jbcentral_1.0.0_linux_x86_64.tar.gz");
 
     let tmp = tempfile::tempdir().unwrap();
     let dest = tmp.path().join("jbcentral").join("1.0.0");
@@ -46,8 +45,5 @@ async fn download_verify_extract_rejects_bad_checksum() {
     .unwrap();
 
     assert!(res.is_err(), "bad checksum must fail");
-    assert!(
-        !dest.exists(),
-        "dest must not be created on checksum failure"
-    );
+    assert!(!dest.exists(), "dest must not be created on checksum failure");
 }

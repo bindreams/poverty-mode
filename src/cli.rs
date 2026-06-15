@@ -38,13 +38,7 @@ pub struct Cli {
     /// Hidden, accepted-and-(mostly-)ignored: mirrors codex's `-c key=value`
     /// config overrides so the in-repo `__codexpost` stub agent tolerates the belt
     /// `CodexAgent` injects. Repeatable. Only `__codexpost` reads it.
-    #[arg(
-        short = 'c',
-        long = "config",
-        global = true,
-        hide = true,
-        value_name = "KV"
-    )]
+    #[arg(short = 'c', long = "config", global = true, hide = true, value_name = "KV")]
     pub config: Vec<String>,
 
     #[command(subcommand)]
@@ -204,9 +198,7 @@ fn parse_first_party_proxy(s: &str) -> Result<ProxyName, String> {
     match s {
         "pino" => Ok(ProxyName::Pino),
         "headroom" => Ok(ProxyName::Headroom),
-        other => Err(format!(
-            "invalid proxy {other:?} (expected one of: pino, headroom)"
-        )),
+        other => Err(format!("invalid proxy {other:?} (expected one of: pino, headroom)")),
     }
 }
 
@@ -333,15 +325,9 @@ pub struct RunSettingsArgs {
     pub pino_no_strip_ansi: bool,
     #[arg(long = "pino-model-override", value_name = "MODEL")]
     pub pino_model_override: Option<String>,
-    #[arg(
-        long = "headroom-compression",
-        overrides_with = "headroom_no_compression"
-    )]
+    #[arg(long = "headroom-compression", overrides_with = "headroom_no_compression")]
     pub headroom_compression: bool,
-    #[arg(
-        long = "headroom-no-compression",
-        overrides_with = "headroom_compression"
-    )]
+    #[arg(long = "headroom-no-compression", overrides_with = "headroom_compression")]
     pub headroom_no_compression: bool,
     #[arg(long = "central-port", value_name = "PORT")]
     pub central_port: Option<u16>,
@@ -367,9 +353,7 @@ impl RunSettingsArgs {
     /// `None`; `--pino-drop-tools` filters empty entries (a bare empty value is an
     /// explicit clear ⇒ `Some(vec![])`).
     pub fn to_overrides(&self) -> crate::config::overrides::Overrides {
-        use crate::config::overrides::{
-            CentralOverride, HeadroomOverride, Overrides, PinoOverride,
-        };
+        use crate::config::overrides::{CentralOverride, HeadroomOverride, Overrides, PinoOverride};
         Overrides {
             pino: PinoOverride {
                 auto_cache: Self::tri(self.pino_auto_cache, self.pino_no_auto_cache),
@@ -422,13 +406,7 @@ pub fn transform_from_proxy_args(args: &ProxyArgs) -> TransformKind {
             auto_cache: args.auto_cache(),
             main_ttl: args.pino.main_ttl.into(),
             sub_ttl: args.pino.sub_ttl.into(),
-            drop_tools: args
-                .pino
-                .drop_tools
-                .iter()
-                .filter(|s| !s.is_empty())
-                .cloned()
-                .collect(),
+            drop_tools: args.pino.drop_tools.iter().filter(|s| !s.is_empty()).cloned().collect(),
             strip_ansi: args.strip_ansi(),
             model_override: args.pino.model_override.clone(),
         }),
@@ -549,9 +527,7 @@ pub fn dispatch(cli: Cli, run_id: Option<String>) -> anyhow::Result<()> {
             // probes are dispatched off the executor via `spawn_blocking`). Drive
             // it on a fresh multi-thread runtime, mirroring the `proxy` arm.
             let run_id = run_id.unwrap_or_else(crate::paths::new_session_name);
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()?;
+            let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
             let status = rt.block_on(crate::orchestrator::run_command(
                 &run_id,
                 chain,
@@ -575,9 +551,7 @@ pub fn dispatch(cli: Cli, run_id: Option<String>) -> anyhow::Result<()> {
             // `PM_DEATH_PIPE_FD` is set), so standalone `proxy` debugging is unaffected.
             crate::orchestrator::teardown::spawn_death_watcher_from_env();
             let cfg = engine_config_from_proxy_args(&args);
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()?;
+            let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
             rt.block_on(proxy::run_proxy(cfg))
         }
         Command::Central { action } => dispatch_central(action),
@@ -587,9 +561,7 @@ pub fn dispatch(cli: Cli, run_id: Option<String>) -> anyhow::Result<()> {
             // central health/`jbcentral status` probes run off the executor via
             // `spawn_blocking`). Drive it on a fresh multi-thread runtime, mirroring
             // the `run`/`proxy` arms (R23g: MODIFY the M3 NotImplemented arm).
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()?;
+            let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
             rt.block_on(crate::status::run_status())
         }
         Command::Doctor => {
@@ -619,9 +591,7 @@ pub fn dispatch(cli: Cli, run_id: Option<String>) -> anyhow::Result<()> {
             // the runtime nor `Drop`/`kill_all` ever reaps the child. The OS must
             // reap it purely because THIS holder dies (Unix: death-pipe write end
             // close + PR_SET_PDEATHSIG; Windows: job handle close).
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
             rt.block_on(async {
                 let mut group = ProxyGroup::new()?;
                 let spawned = group.spawn(&exe, &["__sleep".to_string()], &[])?;
@@ -639,16 +609,17 @@ pub fn dispatch(cli: Cli, run_id: Option<String>) -> anyhow::Result<()> {
         }
         Command::Sleep => {
             crate::orchestrator::teardown::spawn_death_watcher_from_env();
-            std::thread::sleep(std::time::Duration::from_secs(3600));
-            Ok(())
+            // Park forever: the death-watcher spawned above terminates this child
+            // when its parent dies. No arbitrary sleep bound (CONTRIBUTING.md).
+            loop {
+                std::thread::park();
+            }
         }
         Command::Post { url } => {
             // `reqwest::blocking` MUST NOT run on a runtime thread (R5), so the
             // send happens on a blocking-pool thread via `spawn_blocking`. The
             // surrounding runtime exists only to drive that join.
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()?;
+            let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
             rt.block_on(async move {
                 let resp = tokio::task::spawn_blocking(move || {
                     reqwest::blocking::Client::builder()
@@ -673,13 +644,12 @@ pub fn dispatch(cli: Cli, run_id: Option<String>) -> anyhow::Result<()> {
         }
         Command::SigWait { marker } => {
             use std::io::Write as _;
-            {
-                let mut f = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&marker)?;
-                writeln!(f, "STARTED")?;
-            }
+            // Install the SIGTERM handler BEFORE announcing readiness. The test driver
+            // raises SIGTERM the instant it observes "STARTED", so writing STARTED first
+            // races the sigaction below: a forwarded SIGTERM landing in that window kills
+            // the process by SIGTERM's default action (no handler yet) and the "SIGTERM"
+            // line is never written — a flake observed on macOS CI. Install-then-announce
+            // makes STARTED-visible a happens-before for the installed handler.
             #[cfg(unix)]
             {
                 // Install a SIGTERM handler (sync; std-only via signal-hook is not
@@ -688,11 +658,7 @@ pub fn dispatch(cli: Cli, run_id: Option<String>) -> anyhow::Result<()> {
                 let _ = MARKER.set(marker.clone());
                 extern "C" fn on_term(_sig: libc::c_int) {
                     if let Some(m) = MARKER.get() {
-                        if let Ok(mut f) = std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open(m)
-                        {
+                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(m) {
                             use std::io::Write as _;
                             let _ = writeln!(f, "SIGTERM");
                         }
@@ -708,8 +674,17 @@ pub fn dispatch(cli: Cli, run_id: Option<String>) -> anyhow::Result<()> {
                     libc::sigaction(libc::SIGTERM, &sa, std::ptr::null_mut());
                 }
             }
-            std::thread::sleep(std::time::Duration::from_secs(3600));
-            Ok(())
+            {
+                let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&marker)?;
+                writeln!(f, "STARTED")?;
+            }
+            // Park forever. On unix the SIGTERM handler installed above exits the
+            // process via libc::_exit(42); on Windows no handler is installed, so
+            // (like __sleep) the helper relies purely on its parent killing it. No
+            // arbitrary sleep bound (CONTRIBUTING.md).
+            loop {
+                std::thread::park();
+            }
         }
         Command::PrintEnv { name } => {
             print!("{}", std::env::var(&name).unwrap_or_default());
@@ -718,21 +693,13 @@ pub fn dispatch(cli: Cli, run_id: Option<String>) -> anyhow::Result<()> {
             Ok(())
         }
         Command::CodexPost => {
-            let prefix = format!(
-                "model_providers.{}.base_url=",
-                crate::agent::codex::PROVIDER
-            );
+            let prefix = format!("model_providers.{}.base_url=", crate::agent::codex::PROVIDER);
             let base = config_overrides
                 .iter()
-                .find_map(|kv| {
-                    kv.strip_prefix(&prefix)
-                        .map(|v| v.trim_matches('"').to_string())
-                })
+                .find_map(|kv| kv.strip_prefix(&prefix).map(|v| v.trim_matches('"').to_string()))
                 .ok_or_else(|| anyhow::anyhow!("__codexpost: no base_url override in -c flags"))?;
             let target = format!("{}/responses", base.trim_end_matches('/'));
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()?;
+            let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
             rt.block_on(async move {
                 let resp = tokio::task::spawn_blocking(move || {
                     reqwest::blocking::Client::builder()
@@ -781,8 +748,7 @@ fn dispatch_central(action: CentralAction) -> anyhow::Result<()> {
             let versions = crate::status::central_versions(&cache)?;
             let running_port = central_running_port(&versions);
             let login = match crate::status::newest_central_binary(&cache)? {
-                Some(bin) => central::run_status_classified(&bin)
-                    .unwrap_or(central::CentralLoginState::Unknown),
+                Some(bin) => central::run_status_classified(&bin).unwrap_or(central::CentralLoginState::Unknown),
                 None => central::CentralLoginState::Unknown,
             };
             let status = central::CentralCommandStatus {

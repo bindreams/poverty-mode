@@ -102,14 +102,9 @@ async fn engine_forwards_headroom_cache_hot_zone_byte_for_byte() {
     let sent = noncanonical_hotzone_bytes();
     // Sanity: the cache-hot byte-forms really are non-canonical, so a transform
     // that round-trips through serde_json::Value would corrupt them.
-    let canonical = serde_json::to_vec(
-        &serde_json::from_slice::<serde_json::Value>(&sent).expect("fixture valid"),
-    )
-    .unwrap();
-    assert_ne!(
-        sent, canonical,
-        "fixture must use non-canonical cache-hot byte-forms"
-    );
+    let canonical =
+        serde_json::to_vec(&serde_json::from_slice::<serde_json::Value>(&sent).expect("fixture valid")).unwrap();
+    assert_ne!(sent, canonical, "fixture must use non-canonical cache-hot byte-forms");
     let sent_len = sent.len();
 
     let resp = client
@@ -144,11 +139,7 @@ async fn engine_forwards_headroom_cache_hot_zone_byte_for_byte() {
     );
 
     shutdown.notify_one();
-    bound
-        .handle
-        .await
-        .expect("engine task joins")
-        .expect("engine ok");
+    bound.handle.await.expect("engine task joins").expect("engine ok");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -208,10 +199,7 @@ async fn engine_compresses_headroom_body_end_to_end() {
     // The forwarded body is still valid JSON in the Anthropic shape.
     let received_json: serde_json::Value =
         serde_json::from_slice(&received.body).expect("forwarded body is valid JSON");
-    assert_eq!(
-        received_json["messages"][0]["content"][0]["type"],
-        json!("tool_result")
-    );
+    assert_eq!(received_json["messages"][0]["content"][0]["type"], json!("tool_result"));
 
     // (2) Sub-512B body -> NoChange -> the upstream receives a byte-equal body,
     //     proving the offloaded transform is byte-faithful when nothing shrinks.
@@ -226,18 +214,11 @@ async fn engine_compresses_headroom_body_end_to_end() {
         .expect("proxied tiny request succeeds");
     assert!(resp.status().is_success());
     let received = stub.last().expect("stub captured the tiny request");
-    assert_eq!(
-        received.body, tiny_bytes,
-        "NoChange body must arrive byte-equal"
-    );
+    assert_eq!(received.body, tiny_bytes, "NoChange body must arrive byte-equal");
 
     // `notify_one` (not `notify_waiters`) stores a permit even if the serve task
     // has not yet re-registered on the shutdown future, so the drain cannot be
     // lost to a wake/register ordering.
     shutdown.notify_one();
-    bound
-        .handle
-        .await
-        .expect("engine task joins")
-        .expect("engine ok");
+    bound.handle.await.expect("engine task joins").expect("engine ok");
 }

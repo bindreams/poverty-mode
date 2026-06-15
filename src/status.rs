@@ -93,11 +93,7 @@ pub fn enumerate_runs(runs_root: &Path) -> Result<Vec<RunRecord>> {
         }
         proxies.sort_by(|a, b| (a.name.as_str(), a.port).cmp(&(b.name.as_str(), b.port)));
 
-        runs.push(RunRecord {
-            run_id,
-            dir,
-            proxies,
-        });
+        runs.push(RunRecord { run_id, dir, proxies });
     }
 
     runs.sort_by(|a, b| crate::paths::run_ulid(&a.run_id).cmp(&crate::paths::run_ulid(&b.run_id)));
@@ -198,11 +194,7 @@ pub(crate) fn central_versions(cache_dir: &Path) -> Result<Vec<String>> {
 }
 
 /// Assemble a full status report from explicit inputs (pure; no process spawning).
-pub fn build_status_report(
-    cache_dir: &Path,
-    runs_root: &Path,
-    probe: &CentralProbe,
-) -> Result<StatusReport> {
+pub fn build_status_report(cache_dir: &Path, runs_root: &Path, probe: &CentralProbe) -> Result<StatusReport> {
     let versions = central_versions(cache_dir)?;
     let install = if versions.is_empty() {
         CentralInstall::NotInstalled
@@ -226,16 +218,12 @@ pub fn build_status_report(
 
     Ok(StatusReport {
         first_party: vec!["pino".to_string(), "headroom".to_string()],
-        central: CentralStatus {
-            install,
-            run,
-            login,
-        },
+        central: CentralStatus { install, run, login },
         runs: enumerate_runs(runs_root)?,
     })
 }
 
-// rendering + live probe + dispatch (M10.3) =====
+// rendering + live probe + dispatch (M10.3) ===========================================================================
 
 use std::fmt::Write as _;
 
@@ -277,11 +265,7 @@ pub fn render_status(report: &StatusReport) -> String {
         let _ = writeln!(out, "  no live runs");
     } else {
         for run in &report.runs {
-            let proxies: Vec<String> = run
-                .proxies
-                .iter()
-                .map(|p| format!("{}:{}", p.name, p.port))
-                .collect();
+            let proxies: Vec<String> = run.proxies.iter().map(|p| format!("{}:{}", p.name, p.port)).collect();
             let _ = writeln!(out, "  {}  [{}]", run.run_id, proxies.join(", "));
         }
     }
@@ -304,11 +288,7 @@ pub struct WireConfig {
 /// `running` is left `false` here; the caller flips it to the real `/health` result
 /// for the carried port (see `run_status`). With no install we emit a fully dead
 /// probe so login is forced Unknown by `build_status_report`.
-pub fn assemble_probe(
-    versions_present: bool,
-    wire: Option<WireConfig>,
-    login: CentralLogin,
-) -> CentralProbe {
+pub fn assemble_probe(versions_present: bool, wire: Option<WireConfig>, login: CentralLogin) -> CentralProbe {
     if !versions_present {
         return CentralProbe {
             running: false,

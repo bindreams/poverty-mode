@@ -34,8 +34,7 @@ pub const ENV_ENABLE_TOOL_SEARCH: &str = "ENABLE_TOOL_SEARCH";
 /// file-based source, but enterprise Managed (policy) settings still win.
 /// `doctor` detects and surfaces a Managed or conflicting ANTHROPIC_BASE_URL;
 /// `run` warns. We never silently route around it.
-pub const MANAGED_POLICY_NOTE: &str =
-    "Managed (enterprise policy) settings outrank our --settings CLI override; \
+pub const MANAGED_POLICY_NOTE: &str = "Managed (enterprise policy) settings outrank our --settings CLI override; \
      doctor surfaces a Managed or conflicting ANTHROPIC_BASE_URL.";
 
 /// Documents the local-chain bypass for cloud/remote execution (spec §8).
@@ -44,8 +43,7 @@ pub const MANAGED_POLICY_NOTE: &str =
 /// our --settings argument and therefore bypasses the local proxy chain. This is
 /// inherent, not a defect: only locally-spawned `claude` (main loop + in-process
 /// subagents) is routed through poverty-mode.
-pub const REMOTE_EXECUTION_NOTE: &str =
-    "Cloud/remote execution (scheduled routines, RemoteTrigger) runs server-side \
+pub const REMOTE_EXECUTION_NOTE: &str = "Cloud/remote execution (scheduled routines, RemoteTrigger) runs server-side \
      and bypasses the local proxy chain; only locally-spawned claude is routed.";
 
 /// The v1 agent implementation. Zero-sized: all per-run state arrives through

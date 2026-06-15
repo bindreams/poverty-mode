@@ -26,11 +26,7 @@ impl BodyTransform for HeadroomTransform {
     // round-tripped through `serde_json::Value`), so the cache-hot zone
     // (system/tools/history/thinking) the engine forwards is byte-for-byte
     // identical to what the client sent and the prompt cache survives.
-    fn transform_bytes(
-        &self,
-        raw: &[u8],
-        _ctx: &RequestContext,
-    ) -> anyhow::Result<Option<Vec<u8>>> {
+    fn transform_bytes(&self, raw: &[u8], _ctx: &RequestContext) -> anyhow::Result<Option<Vec<u8>>> {
         use headroom_core::transforms::{compress_anthropic_live_zone, AuthMode, LiveZoneOutcome};
 
         // Disabled => NO change: the engine forwards the original bytes verbatim.
@@ -65,9 +61,7 @@ impl BodyTransform for HeadroomTransform {
             // `new_body.get()` is the dispatcher's byte-surgical JSON document:
             // only the compressed block byte-ranges changed; the cache-hot zone
             // is copied verbatim from `raw`. Forward those bytes exactly.
-            LiveZoneOutcome::Modified { new_body, .. } => {
-                Ok(Some(new_body.get().as_bytes().to_vec()))
-            }
+            LiveZoneOutcome::Modified { new_body, .. } => Ok(Some(new_body.get().as_bytes().to_vec())),
         }
     }
 
@@ -78,8 +72,8 @@ impl BodyTransform for HeadroomTransform {
     fn transform(&self, body: &mut serde_json::Value, ctx: &RequestContext) -> anyhow::Result<()> {
         let raw = serde_json::to_vec(body)?;
         if let Some(bytes) = self.transform_bytes(&raw, ctx)? {
-            *body = serde_json::from_slice(&bytes)
-                .map_err(|e| anyhow::anyhow!("headroom produced invalid JSON: {e}"))?;
+            *body =
+                serde_json::from_slice(&bytes).map_err(|e| anyhow::anyhow!("headroom produced invalid JSON: {e}"))?;
         }
         Ok(())
     }

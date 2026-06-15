@@ -18,8 +18,7 @@ two design assumptions:
 ### Why they are gated (no skip-on-missing)
 
 Both spawn `claude`, which must be installed on `PATH` and logged in. We never
-silently skip on a missing dependency: the gates carry `#[ignore]`, so `cargo
-test` excludes them and a normal run is green without `claude`. They become a
+silently skip on a missing dependency: the gates carry `#[ignore]`, so `cargo test` excludes them and a normal run is green without `claude`. They become a
 **hard failure** (not a skip) the moment you opt in and the binary is missing
 (the spawn `.expect(...)` panics with an actionable message).
 
@@ -77,10 +76,10 @@ Record each run here (date, OS/arch, `claude` version, exit + the `EMPIRICAL(...
 line). This is the authoritative record the design's §8/§17 open verifications
 refer to; update it whenever a gate is run on a new platform or `claude` version.
 
-| Date | OS/arch | claude version | Gate | EMPIRICAL line | PASS? |
-| --- | --- | --- | --- | --- | --- |
-| _pending first provisioned run_ | | | (a) | | |
-| _pending first provisioned run_ | | | (b) | | |
+| Date                            | OS/arch | claude version | Gate | EMPIRICAL line | PASS? |
+| ------------------------------- | ------- | -------------- | ---- | -------------- | ----- |
+| _pending first provisioned run_ |         |                | (a)  |                |       |
+| _pending first provisioned run_ |         |                | (b)  |                |       |
 
 ### Belt load-bearing decision (fill in after gate (a) resolves) — R8 follow-up
 

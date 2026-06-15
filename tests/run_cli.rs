@@ -29,13 +29,9 @@ struct LiveChain {
 }
 
 async fn serve_chain(run_id: &'static str) -> LiveChain {
-    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
-        .await
-        .unwrap();
+    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let health = format!(
-        r#"{{"proxy":"pino","port":{port},"upstream":"api.anthropic.com","run_id":"{run_id}"}}"#
-    );
+    let health = format!(r#"{{"proxy":"pino","port":{port},"upstream":"api.anthropic.com","run_id":"{run_id}"}}"#);
     let health_hits = Arc::new(AtomicUsize::new(0));
     let post_hits = Arc::new(AtomicUsize::new(0));
     let codex_post_hits = Arc::new(AtomicUsize::new(0));
@@ -64,14 +60,10 @@ async fn serve_chain(run_id: &'static str) -> LiveChain {
                             h_counter.fetch_add(1, Ordering::SeqCst);
                             health.clone()
                         } else {
-                            if req.method() == hyper::Method::POST
-                                && req.uri().path() == "/v1/messages"
-                            {
+                            if req.method() == hyper::Method::POST && req.uri().path() == "/v1/messages" {
                                 p_counter.fetch_add(1, Ordering::SeqCst);
                             }
-                            if req.method() == hyper::Method::POST
-                                && req.uri().path() == "/codex/openai/responses"
-                            {
+                            if req.method() == hyper::Method::POST && req.uri().path() == "/codex/openai/responses" {
                                 c_counter.fetch_add(1, Ordering::SeqCst);
                             }
                             r#"{"ok":true}"#.to_string()
@@ -117,10 +109,7 @@ async fn run_empty_chain_execs_agent_unchanged() {
         .arg("run")
         .args(&agent_args);
     let status = cmd.status().expect("spawn poverty-mode run");
-    assert!(
-        status.success(),
-        "empty-chain run should exec the agent and exit 0"
-    );
+    assert!(status.success(), "empty-chain run should exec the agent and exit 0");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -183,12 +172,7 @@ async fn run_reuses_live_chain_via_nested_guard() {
 /// A cross-platform "print one env var and exit 0" agent: self-exec the in-repo
 /// __printenv helper so there is no shell dependency.
 fn print_env_agent(exe: &str, var: &str) -> Vec<String> {
-    vec![
-        "--".into(),
-        exe.to_string(),
-        "__printenv".into(),
-        var.to_string(),
-    ]
+    vec!["--".into(), exe.to_string(), "__printenv".into(), var.to_string()]
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -211,16 +195,9 @@ async fn nested_reuse_fires_when_desired_sig_matches_env_and_live() {
         .args(&args)
         .output()
         .expect("run output");
-    assert!(
-        out.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        stdout.contains("pino"),
-        "agent POVERTY_PROXY_CHAIN was: {stdout:?}"
-    );
+    assert!(stdout.contains("pino"), "agent POVERTY_PROXY_CHAIN was: {stdout:?}");
     assert!(
         chain.health_hits.load(Ordering::SeqCst) >= 1,
         "the guard must have probed the live base before reusing it"
@@ -252,20 +229,13 @@ async fn cli_proxies_override_env_in_resolution_signature() {
         .args(&args)
         .output()
         .expect("run output");
-    assert!(
-        out.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("headroom"),
         "cli --proxies must win resolution; agent saw: {stdout:?}"
     );
-    assert!(
-        !stdout.trim().eq("pino"),
-        "must not be the stale env value: {stdout:?}"
-    );
+    assert!(!stdout.trim().eq("pino"), "must not be the stale env value: {stdout:?}");
 }
 
 /// Copy the test binary to a temp dir under the basename `codex` (`codex.exe` on
@@ -352,7 +322,7 @@ async fn run_codex_reuses_live_chain_end_to_end() {
     );
 }
 
-// `run` setting overrides persisted by `--save` =====
+// `run` setting overrides persisted by `--save` =======================================================================
 
 use poverty_mode::config::{Config, ProxySettings};
 use poverty_mode::proxy::pino::CacheTtl;
@@ -364,10 +334,9 @@ use poverty_mode::proxy::ProxyName;
 /// parallel test runner.
 fn load_persisted_config(cfg_home: &std::path::Path) -> Config {
     let path = cfg_home.join("poverty-mode.yaml");
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("reading persisted config {}: {e}", path.display()));
-    serde_yaml::from_str(&text)
-        .unwrap_or_else(|e| panic!("parsing persisted config {}: {e}", path.display()))
+    let text =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading persisted config {}: {e}", path.display()));
+    serde_yaml::from_str(&text).unwrap_or_else(|e| panic!("parsing persisted config {}: {e}", path.display()))
 }
 
 /// The pino entry's resolved settings from a loaded config.

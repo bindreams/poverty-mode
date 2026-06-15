@@ -213,7 +213,7 @@ impl BodyTransform for PinoTransform {
     }
 }
 
-// --- pipeline stages (filled in by later tasks) -----
+// --- pipeline stages (filled in by later tasks) ----------------------------------------------------------------------
 
 // Source model that Claude Code self-identifies as; rewritten to the override.
 // Ported verbatim from reference/pino/src/model.js SOURCE_ID_PATTERN (the JS /g
@@ -261,9 +261,7 @@ fn apply_model_override(body: &mut Value, model: &str) {
 
     // Compute the replacement strings (model.js: base/friendly).
     let base = date_suffix_re().replace(model, "").into_owned();
-    let friendly: String = target_friendly_name(&base)
-        .map(|s| s.to_string())
-        .unwrap_or(base);
+    let friendly: String = target_friendly_name(&base).map(|s| s.to_string()).unwrap_or(base);
 
     // R18 / Finding 3: closure replacements so a '$' in the override (or friendly)
     // is emitted literally and NOT expanded as a regex capture template.
@@ -290,7 +288,7 @@ fn apply_model_override(body: &mut Value, model: &str) {
     }
 }
 
-// --- strip_ansi (default.js lines 42-70) -----
+// --- strip_ansi (default.js lines 42-70) -----------------------------------------------------------------------------
 
 // Matches a CSI/SGR sequence: ESC '[' <params> <final letter>. Port of the Node
 // ANSI_RE /\x1b\[[0-9;]*[A-Za-z]/g; only this exact form is scrubbed.
@@ -349,7 +347,7 @@ fn strip_ansi_from_messages(body: &mut Value) {
     }
 }
 
-// --- drop_tools (default.js lines 72-113) -----
+// --- drop_tools (default.js lines 72-113) ----------------------------------------------------------------------------
 
 // Matches a <system-reminder>...</system-reminder> block (non-greedy). Port of
 // the Node REMINDER_RE /<system-reminder>([\s\S]*?)<\/system-reminder>/g; JS
@@ -427,7 +425,7 @@ fn scrub_reminders_from_messages(body: &mut Value, drop: &[String]) {
     }
 }
 
-// --- restructureV123 (default.js lines 126-208) -----
+// --- restructureV123 (default.js lines 126-208) ----------------------------------------------------------------------
 
 // Ported verbatim from reference/pino/src/transforms/default.js restructureV123
 // (lines 126-208). Normalizes string content to arrays, extracts core-context
@@ -442,10 +440,7 @@ fn is_core_context(t: &str) -> bool {
     if t.contains("<local-command-stdout>") || t.contains("<local-command-caveat>") {
         return false;
     }
-    t.contains("ToolSearch")
-        || t.contains("claudeMd")
-        || t.contains(".claude/projects")
-        || t.contains(".claude/plans")
+    t.contains("ToolSearch") || t.contains("claudeMd") || t.contains(".claude/projects") || t.contains(".claude/plans")
 }
 
 fn is_stale_removable(t: &str) -> bool {
@@ -508,11 +503,7 @@ fn restructure_v123(body: &mut Value) {
         let mut unique_core: Vec<Value> = Vec::new();
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         for b in core_blocks.into_iter() {
-            let key = b
-                .get("text")
-                .and_then(|t| t.as_str())
-                .unwrap_or("")
-                .to_string();
+            let key = b.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string();
             if seen.insert(key) {
                 unique_core.push(b);
             }
@@ -553,7 +544,7 @@ fn apply_default_transform(body: &mut Value, settings: &PinoSettings) {
     }
 }
 
-// --- cache helpers (cache.js lines 28-96) -----
+// --- cache helpers (cache.js lines 28-96) ----------------------------------------------------------------------------
 
 /// Counts every `cache_control.type == "ephemeral"` breakpoint anywhere in the
 /// body. Mirrors countCacheBreakpoints in reference/pino/src/cache.js (lines 28-38).
@@ -780,10 +771,7 @@ pub fn inject_breakpoint_if_absent(body: &mut Value, ttl: CacheTtl) -> Vec<Strin
     //    Finding 6: compute the array-arm condition as a bool first to avoid a dead
     //    binding and a double-fetch of body["system"], mirroring the tools pattern.
     let inject_system_array = matches!(body.get("system"), Some(Value::Array(a)) if !a.is_empty())
-        && body
-            .get("system")
-            .map(|s| !has_breakpoint(s))
-            .unwrap_or(false);
+        && body.get("system").map(|s| !has_breakpoint(s)).unwrap_or(false);
     if inject_system_array {
         if let Some(sys) = body.get_mut("system").and_then(|s| s.as_array_mut()) {
             if let Some(last) = sys.last_mut() {
@@ -853,7 +841,7 @@ pub fn inject_breakpoint_if_absent(body: &mut Value, ttl: CacheTtl) -> Vec<Strin
     tail_paths
 }
 
-// --- tail normalization + ttl rewrite with skip-set (cache.js 3-26, 44-59) -----
+// --- tail normalization + ttl rewrite with skip-set (cache.js 3-26, 44-59) -------------------------------------------
 
 use std::collections::HashSet;
 
@@ -893,11 +881,7 @@ fn normalize_walk(node: &mut Value, path: &str, ttl: CacheTtl, out: &mut Vec<Str
                 out.push(path.to_string());
             }
             // Node recurses into every key EXCEPT cache_control (cache.js line 55).
-            let keys: Vec<String> = map
-                .keys()
-                .filter(|k| *k != "cache_control")
-                .cloned()
-                .collect();
+            let keys: Vec<String> = map.keys().filter(|k| *k != "cache_control").cloned().collect();
             for k in keys {
                 let child_path = format!("{}/{}", path, k);
                 if let Some(child) = map.get_mut(&k) {

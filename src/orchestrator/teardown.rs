@@ -112,9 +112,7 @@ mod imp {
                     .append(true)
                     .mode(0o600)
                     .open(path)
-                    .map_err(|e| {
-                        anyhow::anyhow!("opening hop stderr log {}: {e}", path.display())
-                    })?;
+                    .map_err(|e| anyhow::anyhow!("opening hop stderr log {}: {e}", path.display()))?;
                 if let Err(e) = crate::paths::harden_file_perms(path) {
                     tracing::warn!("cannot harden hop stderr log {}: {e}", path.display());
                 }
@@ -158,14 +156,7 @@ mod imp {
                     // death-pipe-only test).
                     #[cfg(target_os = "linux")]
                     if !disable_pdeathsig {
-                        if libc::prctl(
-                            libc::PR_SET_PDEATHSIG,
-                            libc::SIGKILL as libc::c_ulong,
-                            0,
-                            0,
-                            0,
-                        ) != 0
-                        {
+                        if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong, 0, 0, 0) != 0 {
                             return Err(std::io::Error::last_os_error());
                         }
                         // Race: if the parent died between fork and prctl, we are
@@ -189,9 +180,7 @@ mod imp {
             let mut child = cmd
                 .spawn()
                 .map_err(|e| anyhow::anyhow!("spawning grouped child: {e}"))?;
-            let pid = child
-                .id()
-                .ok_or_else(|| anyhow::anyhow!("spawned child has no pid"))?;
+            let pid = child.id().ok_or_else(|| anyhow::anyhow!("spawned child has no pid"))?;
             let stdout = child
                 .stdout
                 .take()
@@ -294,15 +283,13 @@ mod imp {
     use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
     use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE};
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-        SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
+        TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
     use windows_sys::Win32::System::Pipes::CreatePipe;
     use windows_sys::Win32::System::Threading::{
-        CreateProcessW, GetExitCodeProcess, ResumeThread, TerminateProcess, WaitForSingleObject,
-        CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, INFINITE, PROCESS_INFORMATION,
-        STARTF_USESTDHANDLES, STARTUPINFOW,
+        CreateProcessW, GetExitCodeProcess, ResumeThread, TerminateProcess, WaitForSingleObject, CREATE_SUSPENDED,
+        CREATE_UNICODE_ENVIRONMENT, INFINITE, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW,
     };
 
     struct OwnedChild {
@@ -322,10 +309,7 @@ mod imp {
     }
 
     fn to_wide(s: &str) -> Vec<u16> {
-        OsStr::new(s)
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect()
+        OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
     }
 
     /// Build a double-null-terminated UTF-16 environment block: the parent env
@@ -468,17 +452,11 @@ mod imp {
                         .create(true)
                         .append(true)
                         .open(path)
-                        .map_err(|e| {
-                            anyhow::anyhow!("opening hop stderr log {}: {e}", path.display())
-                        })?;
+                        .map_err(|e| anyhow::anyhow!("opening hop stderr log {}: {e}", path.display()))?;
                     // Make the handle inheritable so the child can use it as stderr.
                     // SAFETY: f.as_raw_handle() is a live, owned handle for this call.
                     unsafe {
-                        SetHandleInformation(
-                            f.as_raw_handle() as HANDLE,
-                            HANDLE_FLAG_INHERIT,
-                            HANDLE_FLAG_INHERIT,
-                        );
+                        SetHandleInformation(f.as_raw_handle() as HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
                     }
                     Some(f)
                 }
@@ -498,8 +476,7 @@ mod imp {
             // a custom UTF-16 block with the overrides applied. `env_block` is kept
             // alive for the whole CreateProcessW call (env_ptr borrows it).
             let env_block: Vec<u16>;
-            let (creation_flags, env_ptr): (u32, *const std::ffi::c_void) = if extra_env.is_empty()
-            {
+            let (creation_flags, env_ptr): (u32, *const std::ffi::c_void) = if extra_env.is_empty() {
                 (CREATE_SUSPENDED, std::ptr::null())
             } else {
                 env_block = build_env_block(extra_env);
@@ -558,8 +535,8 @@ mod imp {
                 .iter()
                 .any(|(k, v)| k == "PM_TEST_FORCE_ASSIGN_FAIL" && v == "1");
             // SAFETY: both are valid handles owned by us for this call.
-            let assigned = !force_assign_fail
-                && unsafe { AssignProcessToJobObject(job_raw as HANDLE, proc_raw as HANDLE) } != 0;
+            let assigned =
+                !force_assign_fail && unsafe { AssignProcessToJobObject(job_raw as HANDLE, proc_raw as HANDLE) } != 0;
             if !assigned {
                 let err = if force_assign_fail {
                     std::io::Error::other("forced via extra_env PM_TEST_FORCE_ASSIGN_FAIL=1")
@@ -588,8 +565,7 @@ mod imp {
             // Wrap the parent's read end as an async reader for the READY read.
             let std_file = std::fs::File::from(read_owned);
             let tokio_file = tokio::fs::File::from_std(std_file);
-            let stdout: Option<Box<dyn tokio::io::AsyncRead + Send + Unpin>> =
-                Some(Box::new(tokio_file));
+            let stdout: Option<Box<dyn tokio::io::AsyncRead + Send + Unpin>> = Some(Box::new(tokio_file));
 
             self.children.push(OwnedChild {
                 process,
@@ -655,10 +631,7 @@ pub use imp::ProxyGroup;
 /// value means this child was not spawned into a group, so this is a no-op.
 #[cfg(unix)]
 pub fn spawn_death_watcher_from_env() {
-    let fd: i32 = match std::env::var("PM_DEATH_PIPE_FD")
-        .ok()
-        .and_then(|s| s.parse().ok())
-    {
+    let fd: i32 = match std::env::var("PM_DEATH_PIPE_FD").ok().and_then(|s| s.parse().ok()) {
         Some(fd) => fd,
         None => return,
     };

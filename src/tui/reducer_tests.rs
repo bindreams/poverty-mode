@@ -69,7 +69,7 @@ fn focused_value(st: &TuiState) -> String {
     }
 }
 
-// Activation semantics ============================================================
+// Activation semantics ================================================================================================
 
 #[test]
 fn enter_and_space_both_activate_not_run() {
@@ -93,9 +93,7 @@ fn activate_on_proxy_toggles_enabled_does_not_run() {
     let TuiOutcome::Run(entries) = st.apply(TuiAction::Activate) else {
         panic!("expected Run")
     };
-    assert!(entries
-        .iter()
-        .any(|e| e.name == ProxyName::Pino && e.enabled));
+    assert!(entries.iter().any(|e| e.name == ProxyName::Pino && e.enabled));
 }
 
 #[test]
@@ -114,7 +112,7 @@ fn cancel_paths() {
     assert_eq!(b.apply(TuiAction::Cancel), TuiOutcome::Cancel);
 }
 
-// Navigation ======================================================================
+// Navigation ==========================================================================================================
 
 #[test]
 fn up_down_step_focus_and_clamp() {
@@ -131,7 +129,7 @@ fn up_down_step_focus_and_clamp() {
     assert_eq!(st.focus(), Focus::Cancel);
 }
 
-// Expand / edit ===================================================================
+// Expand / edit =======================================================================================================
 
 #[test]
 fn expand_reveals_and_edit_text_commits() {
@@ -223,7 +221,7 @@ fn editing_routes_only_edit_actions() {
     assert!(st.is_editing());
 }
 
-// Bool / enum activation + cycle ==================================================
+// Bool / enum activation + cycle ======================================================================================
 
 #[test]
 fn activate_on_bool_toggles_in_place() {
@@ -270,7 +268,7 @@ fn expand_on_setting_collapses_back_to_proxy() {
         .contains(&Focus::Setting(ProxyName::Pino, SettingId::SubTtl)));
 }
 
-// Reorder =========================================================================
+// Reorder =============================================================================================================
 
 #[test]
 fn move_only_acts_on_proxy_headers() {
@@ -281,10 +279,7 @@ fn move_only_acts_on_proxy_headers() {
     let before = st.rows_order();
     assert_eq!(st.apply(TuiAction::MoveDown), TuiOutcome::Continue);
     assert_eq!(st.rows_order(), before);
-    assert_eq!(
-        st.focus(),
-        Focus::Setting(ProxyName::Pino, SettingId::SubTtl)
-    );
+    assert_eq!(st.focus(), Focus::Setting(ProxyName::Pino, SettingId::SubTtl));
 }
 
 #[test]
@@ -350,7 +345,7 @@ fn reorder_then_clear_hint_on_legal_move() {
     assert_eq!(st.hint(), None);
 }
 
-// Run outcome / central-last ======================================================
+// Run outcome / central-last ==========================================================================================
 
 #[test]
 fn run_outcome_full_state_central_last() {
@@ -361,9 +356,7 @@ fn run_outcome_full_state_central_last() {
     };
     assert_eq!(entries.len(), 3);
     assert_eq!(entries.last().unwrap().name, ProxyName::Central);
-    assert!(entries
-        .iter()
-        .any(|e| e.name == ProxyName::Pino && e.enabled));
+    assert!(entries.iter().any(|e| e.name == ProxyName::Pino && e.enabled));
 }
 
 #[test]
@@ -435,7 +428,7 @@ fn central_stays_last_under_adversarial_sequence() {
     }
 }
 
-// chain_preview ===================================================================
+// chain_preview =======================================================================================================
 
 #[test]
 fn from_resolved_enables_and_orders_members_first() {
@@ -466,10 +459,7 @@ fn chain_preview_lists_enabled_in_order() {
     st.apply(TuiAction::Activate); // pino on
     st.set_focus(Focus::Proxy(ProxyName::Headroom));
     st.apply(TuiAction::Activate); // headroom on
-    assert_eq!(
-        st.chain_preview(),
-        "claude → pino → headroom → api.anthropic.com"
-    );
+    assert_eq!(st.chain_preview(), "claude → pino → headroom → api.anthropic.com");
 }
 
 #[test]
@@ -478,7 +468,7 @@ fn chain_preview_empty_when_none_enabled() {
     assert_eq!(st.chain_preview(), "claude → api.anthropic.com");
 }
 
-// No-op focus targets =============================================================
+// No-op focus targets =================================================================================================
 
 #[test]
 fn cycle_and_expand_on_buttons_are_noops() {

@@ -15,8 +15,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
         .filter(|p| !p.as_os_str().is_empty())
         .map(Path::to_path_buf)
         .unwrap_or_else(|| Path::new(".").to_path_buf());
-    fs::create_dir_all(&parent)
-        .with_context(|| format!("creating parent dir {}", parent.display()))?;
+    fs::create_dir_all(&parent).with_context(|| format!("creating parent dir {}", parent.display()))?;
 
     let mut tmp = tempfile::Builder::new()
         .prefix(".pm-tmp-")
@@ -24,8 +23,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
         .with_context(|| format!("creating temp file in {}", parent.display()))?;
     tmp.write_all(bytes).context("writing temp file")?;
     tmp.as_file().sync_all().context("fsync temp file")?;
-    harden_file_perms(tmp.path())
-        .with_context(|| format!("hardening perms on temp file in {}", parent.display()))?;
+    harden_file_perms(tmp.path()).with_context(|| format!("hardening perms on temp file in {}", parent.display()))?;
     tmp.persist(path)
         .map_err(|e| e.error)
         .with_context(|| format!("renaming temp file onto {}", path.display()))?;
@@ -54,13 +52,9 @@ use fs2::FileExt;
 /// the file's existence). The lock is released when the handle is dropped, which
 /// happens on every exit path — normal return, `?` early-return, or panic — so no
 /// explicit unlock is needed.
-pub fn with_file_lock<T>(
-    lock_path: &Path,
-    f: impl FnOnce() -> anyhow::Result<T>,
-) -> anyhow::Result<T> {
+pub fn with_file_lock<T>(lock_path: &Path, f: impl FnOnce() -> anyhow::Result<T>) -> anyhow::Result<T> {
     if let Some(parent) = lock_path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating lock dir {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("creating lock dir {}", parent.display()))?;
     }
     let file = fs::OpenOptions::new()
         .create(true)
@@ -102,9 +96,7 @@ fn project_dirs() -> anyhow::Result<directories::ProjectDirs> {
 /// Read an env override, returning `Some(PathBuf)` only when the var is set to a
 /// non-empty value (an empty value is treated as unset, like `XDG_CONFIG_HOME`).
 fn env_dir_override(var: &str) -> Option<PathBuf> {
-    std::env::var_os(var)
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
+    std::env::var_os(var).filter(|v| !v.is_empty()).map(PathBuf::from)
 }
 
 /// Absolute path to the config file. Honors `XDG_CONFIG_HOME` on every OS when it
@@ -271,8 +263,7 @@ pub(crate) fn enumerate_run_ids(runs_dir: &Path) -> anyhow::Result<Vec<String>> 
         Ok(r) => r,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => {
-            return Err(anyhow::Error::from(e))
-                .with_context(|| format!("reading runs dir {}", runs_dir.display()));
+            return Err(anyhow::Error::from(e)).with_context(|| format!("reading runs dir {}", runs_dir.display()));
         }
     };
 
@@ -308,8 +299,7 @@ fn prune_run_dirs_in(runs_dir: &Path, keep: usize) -> anyhow::Result<()> {
     let remove_count = ids.len().saturating_sub(keep);
     for id in ids.into_iter().take(remove_count) {
         let path = runs_dir.join(&id);
-        fs::remove_dir_all(&path)
-            .with_context(|| format!("pruning old run dir {}", path.display()))?;
+        fs::remove_dir_all(&path).with_context(|| format!("pruning old run dir {}", path.display()))?;
     }
     Ok(())
 }

@@ -59,10 +59,7 @@ fn atomic_write_hardens_file_perms_to_0600_on_unix() {
     atomic_write(&target, b"secret").unwrap();
 
     let mode = fs::metadata(&target).unwrap().permissions().mode() & 0o777;
-    assert_eq!(
-        mode, 0o600,
-        "config writes must be owner-only on POSIX, got {mode:o}"
-    );
+    assert_eq!(mode, 0o600, "config writes must be owner-only on POSIX, got {mode:o}");
 }
 
 #[test]
@@ -139,10 +136,7 @@ fn new_run_id_is_lowercase_crockford_base32_len_26() {
             c.is_ascii_lowercase() || c.is_ascii_digit(),
             "char {c:?} not lowercase/digit"
         );
-        assert!(
-            allowed.contains(c),
-            "char {c:?} not in Crockford base32 alphabet"
-        );
+        assert!(allowed.contains(c), "char {c:?} not in Crockford base32 alphabet");
     }
 }
 
@@ -184,11 +178,7 @@ fn config_path_falls_back_to_platform_dir_when_xdg_unset() {
     // Whatever the platform dir is, the file name must be poverty-mode.yaml.
     assert_eq!(p.file_name().unwrap(), "poverty-mode.yaml");
     // And it must be an absolute path (every platform config dir is absolute).
-    assert!(
-        p.is_absolute(),
-        "config path must be absolute, got {}",
-        p.display()
-    );
+    assert!(p.is_absolute(), "config path must be absolute, got {}", p.display());
 }
 
 #[test]
@@ -250,10 +240,7 @@ fn ensure_run_dir_hardens_dir_to_0700_on_unix() {
     let id = new_run_id();
     let created = ensure_run_dir(&id).unwrap();
     let mode = std::fs::metadata(&created).unwrap().permissions().mode() & 0o777;
-    assert_eq!(
-        mode, 0o700,
-        "run dir must be owner-only on POSIX, got {mode:o}"
-    );
+    assert_eq!(mode, 0o700, "run dir must be owner-only on POSIX, got {mode:o}");
 }
 
 #[cfg(unix)]
@@ -451,7 +438,7 @@ fn enumerate_run_ids_accepts_suffixed_session_names_sorted_by_ulid() {
     );
 }
 
-// log_dir / session naming =====
+// log_dir / session naming ============================================================================================
 
 #[test]
 fn log_dir_honors_poverty_log_dir_override() {
@@ -497,10 +484,7 @@ fn new_session_name_is_findable_and_carries_a_ulid() {
         "session name must be recognized as a run dir: {name}"
     );
     // Has a prefix before the ULID (stem + timestamp).
-    assert!(
-        name.len() > 27,
-        "session name must carry stem + timestamp: {name}"
-    );
+    assert!(name.len() > 27, "session name must carry stem + timestamp: {name}");
 }
 
 #[test]

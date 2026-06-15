@@ -17,10 +17,7 @@ fn manifest() -> toml::Value {
 fn package_has_install_metadata() {
     let m = manifest();
     let pkg = m.get("package").expect("[package]");
-    assert_eq!(
-        pkg.get("name").and_then(|v| v.as_str()),
-        Some("poverty-mode")
-    );
+    assert_eq!(pkg.get("name").and_then(|v| v.as_str()), Some("poverty-mode"));
     assert!(
         pkg.get("description")
             .and_then(|v| v.as_str())
@@ -56,11 +53,7 @@ fn binary_target_is_named_poverty_mode() {
                 .any(|e| e.get("name").and_then(|v| v.as_str()) == Some("poverty-mode"))
         })
         .unwrap_or(false);
-    let default_bin = m
-        .get("package")
-        .and_then(|p| p.get("name"))
-        .and_then(|v| v.as_str())
-        == Some("poverty-mode")
+    let default_bin = m.get("package").and_then(|p| p.get("name")).and_then(|v| v.as_str()) == Some("poverty-mode")
         && root().join("src/main.rs").exists();
     assert!(
         named || default_bin,
@@ -85,8 +78,5 @@ fn both_license_files_exist_in_repo() {
 #[test]
 fn readme_exists_and_has_install_section() {
     let readme = std::fs::read_to_string(root().join("README.md")).expect("README.md must exist");
-    assert!(
-        readme.contains("## Install"),
-        "README must have an Install section"
-    );
+    assert!(readme.contains("## Install"), "README must have an Install section");
 }

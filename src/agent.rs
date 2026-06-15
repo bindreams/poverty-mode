@@ -40,12 +40,8 @@ pub trait Agent {
 
     /// Build the child command for this agent, pointed at `base_url` with
     /// `extra_env` applied. Does not spawn — the caller runs it.
-    fn build_command(
-        &self,
-        argv: &[String],
-        base_url: &Url,
-        extra_env: &[(String, String)],
-    ) -> tokio::process::Command;
+    fn build_command(&self, argv: &[String], base_url: &Url, extra_env: &[(String, String)])
+        -> tokio::process::Command;
 }
 
 use crate::agent::claude::ClaudeAgent;

@@ -89,10 +89,7 @@ pub fn run_picker(config: &Config, resolved: &[ResolvedProxy]) -> anyhow::Result
 /// still drives expand/collapse.
 fn push_keyboard_enhancement() -> bool {
     use crossterm::event::{KeyboardEnhancementFlags, PushKeyboardEnhancementFlags};
-    if matches!(
-        crossterm::terminal::supports_keyboard_enhancement(),
-        Ok(true)
-    ) {
+    if matches!(crossterm::terminal::supports_keyboard_enhancement(), Ok(true)) {
         crossterm::execute!(
             std::io::stdout(),
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
@@ -188,10 +185,7 @@ fn render(frame: &mut Frame, state: &TuiState) {
     .areas(frame.area());
 
     frame.render_widget(
-        Paragraph::new(Span::styled(
-            header,
-            Style::new().add_modifier(Modifier::BOLD),
-        )),
+        Paragraph::new(Span::styled(header, Style::new().add_modifier(Modifier::BOLD))),
         header_area,
     );
     frame.render_widget(Paragraph::new(lines), body_area);

@@ -34,10 +34,7 @@ fn default_all_disabled_lists_three_proxies_all_disabled_in_order() {
     assert_eq!(cfg.defaults.enable_tool_search, true);
 
     let names: Vec<ProxyName> = cfg.proxies.iter().map(|e| e.name).collect();
-    assert_eq!(
-        names,
-        vec![ProxyName::Pino, ProxyName::Headroom, ProxyName::Central]
-    );
+    assert_eq!(names, vec![ProxyName::Pino, ProxyName::Headroom, ProxyName::Central]);
 
     for e in &cfg.proxies {
         assert_eq!(e.enabled, false, "proxy {:?} must default disabled", e.name);
@@ -151,8 +148,8 @@ drop_tools: []
 strip_ansi: true
 model_override: null
 "#;
-    let s: ProxySettings = serde_yaml::from_str(yaml)
-        .expect("invalid cache TTL must NOT be a deserialization error (lenient parse)");
+    let s: ProxySettings =
+        serde_yaml::from_str(yaml).expect("invalid cache TTL must NOT be a deserialization error (lenient parse)");
     let p = pino_of(&s);
     assert_eq!(p.main_ttl, CacheTtl::OneHour);
     assert_eq!(
@@ -166,24 +163,17 @@ model_override: null
 fn cache_ttl_invalid_value_deserializes_to_five_min() {
     // Direct check of the lenient CacheTtl::Deserialize contract from M1 (R23k):
     // a bare invalid scalar maps to FiveMin rather than failing.
-    let t: CacheTtl = serde_yaml::from_str("nonsense\n")
-        .expect("invalid CacheTtl must deserialize leniently to FiveMin");
+    let t: CacheTtl =
+        serde_yaml::from_str("nonsense\n").expect("invalid CacheTtl must deserialize leniently to FiveMin");
     assert_eq!(t, CacheTtl::FiveMin);
     // And the valid tokens still parse exactly.
-    assert_eq!(
-        serde_yaml::from_str::<CacheTtl>("5m\n").unwrap(),
-        CacheTtl::FiveMin
-    );
-    assert_eq!(
-        serde_yaml::from_str::<CacheTtl>("1h\n").unwrap(),
-        CacheTtl::OneHour
-    );
+    assert_eq!(serde_yaml::from_str::<CacheTtl>("5m\n").unwrap(), CacheTtl::FiveMin);
+    assert_eq!(serde_yaml::from_str::<CacheTtl>("1h\n").unwrap(), CacheTtl::OneHour);
 }
 
 #[test]
 fn pino_settings_rejects_legacy_tail_ttl_key() {
-    let yaml =
-        "auto_cache: true\ntail_ttl: 5m\ndrop_tools: []\nstrip_ansi: true\nmodel_override: null\n";
+    let yaml = "auto_cache: true\ntail_ttl: 5m\ndrop_tools: []\nstrip_ansi: true\nmodel_override: null\n";
     let err = serde_yaml::from_str::<PinoSettings>(yaml).unwrap_err();
     assert!(
         err.to_string().contains("tail_ttl") || err.to_string().contains("unknown field"),
@@ -273,10 +263,7 @@ defaults:
 
     let err = Config::load_or_create().unwrap_err();
     let msg = err.to_string().to_lowercase();
-    assert!(
-        msg.contains("pino"),
-        "error should mention the proxy name: {msg}"
-    );
+    assert!(msg.contains("pino"), "error should mention the proxy name: {msg}");
     assert!(
         msg.contains("settings") || msg.contains("mismatch"),
         "error should mention settings mismatch: {msg}"
@@ -309,14 +296,8 @@ defaults:
 
     let err = Config::load_or_create().unwrap_err();
     let msg = err.to_string().to_lowercase();
-    assert!(
-        msg.contains("central"),
-        "error should mention central: {msg}"
-    );
-    assert!(
-        msg.contains("last"),
-        "error should mention last-position rule: {msg}"
-    );
+    assert!(msg.contains("central"), "error should mention central: {msg}");
+    assert!(msg.contains("last"), "error should mention last-position rule: {msg}");
 }
 
 #[test]
@@ -374,15 +355,8 @@ fn save_writes_config_file_0600_on_unix() {
     let cfg = Config::default_all_disabled();
     cfg.save().unwrap();
 
-    let mode = std::fs::metadata(g.config_file())
-        .unwrap()
-        .permissions()
-        .mode()
-        & 0o777;
-    assert_eq!(
-        mode, 0o600,
-        "config file must be owner-only on POSIX, got {mode:o}"
-    );
+    let mode = std::fs::metadata(g.config_file()).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "config file must be owner-only on POSIX, got {mode:o}");
 }
 
 fn enabled_default() -> Config {
@@ -541,9 +515,7 @@ fn resolve_errors_when_requested_central_missing_from_config() {
     // Config with no central entry, but CLI requests central => no settings.
     let mut cfg = Config::default_all_disabled();
     cfg.proxies.retain(|e| e.name != ProxyName::Central);
-    let err = cfg
-        .resolve_chain(Some(&[ProxyName::Central]), None)
-        .unwrap_err();
+    let err = cfg.resolve_chain(Some(&[ProxyName::Central]), None).unwrap_err();
     let msg = err.to_string().to_lowercase();
     assert!(msg.contains("central"), "msg: {msg}");
 }
@@ -553,9 +525,7 @@ fn resolve_errors_when_requested_pino_missing_from_config() {
     // Config trimmed to only headroom+central, but CLI requests pino => no settings.
     let mut cfg = enabled_default();
     cfg.proxies.retain(|e| e.name != ProxyName::Pino);
-    let err = cfg
-        .resolve_chain(Some(&[ProxyName::Pino]), None)
-        .unwrap_err();
+    let err = cfg.resolve_chain(Some(&[ProxyName::Pino]), None).unwrap_err();
     let msg = err.to_string().to_lowercase();
     assert!(msg.contains("pino"), "msg: {msg}");
 }
@@ -584,10 +554,7 @@ fn resolve_file_source_rejects_settings_name_mismatch_invariant() {
     let err = cfg.resolve_chain(None, None).unwrap_err();
     let msg = err.to_string().to_lowercase();
     assert!(msg.contains("pino"), "msg: {msg}");
-    assert!(
-        msg.contains("settings") || msg.contains("mismatch"),
-        "msg: {msg}"
-    );
+    assert!(msg.contains("settings") || msg.contains("mismatch"), "msg: {msg}");
 }
 
 #[test]
@@ -608,15 +575,8 @@ fn save_resolved_chain_rewrites_order_and_enabled_set() {
 
     let reloaded = Config::load_or_create().unwrap();
     let names: Vec<ProxyName> = reloaded.proxies.iter().map(|e| e.name).collect();
-    assert_eq!(
-        names,
-        vec![ProxyName::Headroom, ProxyName::Pino, ProxyName::Central]
-    );
-    let enabled: Vec<(ProxyName, bool)> = reloaded
-        .proxies
-        .iter()
-        .map(|e| (e.name, e.enabled))
-        .collect();
+    assert_eq!(names, vec![ProxyName::Headroom, ProxyName::Pino, ProxyName::Central]);
+    let enabled: Vec<(ProxyName, bool)> = reloaded.proxies.iter().map(|e| (e.name, e.enabled)).collect();
     assert_eq!(
         enabled,
         vec![
@@ -645,11 +605,7 @@ fn save_resolved_chain_carries_resolved_settings_and_reloads_equal() {
     cfg.save_full_state(cfg.entries_for_chain(&chain)).unwrap();
 
     let reloaded = Config::load_or_create().unwrap();
-    let pino = reloaded
-        .proxies
-        .iter()
-        .find(|e| e.name == ProxyName::Pino)
-        .unwrap();
+    let pino = reloaded.proxies.iter().find(|e| e.name == ProxyName::Pino).unwrap();
     assert_eq!(pino.enabled, true);
     match &pino.settings {
         ProxySettings::Pino(p) => {
@@ -695,11 +651,7 @@ fn characterization_default_yaml_has_spec_5_2_shape() {
         pino_at < headroom_at && headroom_at < central_at,
         "order; yaml:\n{yaml}"
     );
-    assert_eq!(
-        yaml.matches("enabled: false").count(),
-        3,
-        "all disabled; yaml:\n{yaml}"
-    );
+    assert_eq!(yaml.matches("enabled: false").count(), 3, "all disabled; yaml:\n{yaml}");
 
     // Pino settings shape.
     assert!(yaml.contains("auto_cache: true"), "yaml:\n{yaml}");
@@ -713,7 +665,7 @@ fn characterization_default_yaml_has_spec_5_2_shape() {
     assert_eq!(back, Config::default_all_disabled());
 }
 
-// `config show` rendering (FIX-D) =====
+// `config show` rendering (FIX-D) =====================================================================================
 
 #[test]
 fn render_config_matches_save_serialization_and_round_trips() {
@@ -726,15 +678,12 @@ fn render_config_matches_save_serialization_and_round_trips() {
     assert_eq!(back, cfg);
 }
 
-// `config edit` editor resolution (FIX-D) =====
+// `config edit` editor resolution (FIX-D) =============================================================================
 
 #[test]
 fn resolve_editor_prefers_visual_then_editor_then_fallback() {
     // $VISUAL wins over $EDITOR.
-    assert_eq!(
-        resolve_editor(Some("vis"), Some("ed")),
-        vec!["vis".to_string()]
-    );
+    assert_eq!(resolve_editor(Some("vis"), Some("ed")), vec!["vis".to_string()]);
     // $EDITOR used when $VISUAL is unset.
     assert_eq!(resolve_editor(None, Some("ed")), vec!["ed".to_string()]);
     // Multi-word editor commands split into argv (e.g. `code --wait`).
@@ -747,10 +696,7 @@ fn resolve_editor_prefers_visual_then_editor_then_fallback() {
 #[test]
 fn resolve_editor_treats_blank_env_as_unset_and_falls_back() {
     // Whitespace-only values are ignored; an empty $VISUAL falls through to $EDITOR.
-    assert_eq!(
-        resolve_editor(Some("   "), Some("ed")),
-        vec!["ed".to_string()]
-    );
+    assert_eq!(resolve_editor(Some("   "), Some("ed")), vec!["ed".to_string()]);
     // Neither set => a single-element platform fallback (notepad on Windows, vi elsewhere).
     let fallback = resolve_editor(None, None);
     assert_eq!(fallback.len(), 1);
@@ -758,7 +704,7 @@ fn resolve_editor_treats_blank_env_as_unset_and_falls_back() {
     assert_eq!(fallback, vec![expected.to_string()]);
 }
 
-// `with_overrides` + `save_full_state` (Task A3) =====
+// `with_overrides` + `save_full_state` (Task A3) ======================================================================
 
 #[test]
 fn with_overrides_applies_to_matching_entries_only() {
@@ -776,11 +722,7 @@ fn with_overrides_applies_to_matching_entries_only() {
         ..Default::default()
     };
     let next = cfg.with_overrides(&ov);
-    let pino = next
-        .proxies
-        .iter()
-        .find(|e| e.name == ProxyName::Pino)
-        .unwrap();
+    let pino = next.proxies.iter().find(|e| e.name == ProxyName::Pino).unwrap();
     assert_eq!(
         pino.settings,
         ProxySettings::Pino(PinoSettings {
@@ -792,24 +734,14 @@ fn with_overrides_applies_to_matching_entries_only() {
             model_override: None
         })
     );
-    let hr = next
-        .proxies
-        .iter()
-        .find(|e| e.name == ProxyName::Headroom)
-        .unwrap();
+    let hr = next.proxies.iter().find(|e| e.name == ProxyName::Headroom).unwrap();
     assert_eq!(
         hr.settings,
         ProxySettings::Headroom(HeadroomSettings { compression: false })
     );
     assert_eq!(
-        next.proxies
-            .iter()
-            .map(|e| (e.name, e.enabled))
-            .collect::<Vec<_>>(),
-        cfg.proxies
-            .iter()
-            .map(|e| (e.name, e.enabled))
-            .collect::<Vec<_>>()
+        next.proxies.iter().map(|e| (e.name, e.enabled)).collect::<Vec<_>>(),
+        cfg.proxies.iter().map(|e| (e.name, e.enabled)).collect::<Vec<_>>()
     );
 }
 
@@ -825,11 +757,7 @@ fn with_overrides_applies_central_override() {
         ..Default::default()
     };
     let next = cfg.with_overrides(&ov);
-    let central = next
-        .proxies
-        .iter()
-        .find(|e| e.name == ProxyName::Central)
-        .unwrap();
+    let central = next.proxies.iter().find(|e| e.name == ProxyName::Central).unwrap();
     assert_eq!(
         central.settings,
         ProxySettings::Central(CentralSettings {
@@ -838,11 +766,7 @@ fn with_overrides_applies_central_override() {
         })
     );
     // pino is unaffected by a central-only override.
-    let pino = next
-        .proxies
-        .iter()
-        .find(|e| e.name == ProxyName::Pino)
-        .unwrap();
+    let pino = next.proxies.iter().find(|e| e.name == ProxyName::Pino).unwrap();
     assert_eq!(pino.settings, cfg.proxies[0].settings);
 }
 
@@ -873,9 +797,7 @@ fn save_full_state_rejects_central_not_last() {
             }),
         },
     ];
-    let err = Config::default_all_disabled()
-        .save_full_state(entries)
-        .unwrap_err();
+    let err = Config::default_all_disabled().save_full_state(entries).unwrap_err();
     let msg = err.to_string().to_lowercase();
     assert!(msg.contains("central"));
     assert!(msg.contains("last"));
@@ -911,14 +833,12 @@ fn save_full_state_round_trips() {
             }),
         },
     ];
-    Config::default_all_disabled()
-        .save_full_state(entries.clone())
-        .unwrap();
+    Config::default_all_disabled().save_full_state(entries.clone()).unwrap();
     let _ = &guard;
     assert_eq!(Config::load_or_create().unwrap().proxies, entries);
 }
 
-// `entries_for_chain` (Task A4) =====
+// `entries_for_chain` (Task A4) =======================================================================================
 
 #[test]
 fn entries_for_chain_orders_enabled_then_disabled_central_last() {
@@ -943,10 +863,7 @@ fn entries_for_chain_orders_enabled_then_disabled_central_last() {
     }];
     let entries = cfg.entries_for_chain(&chain);
     assert_eq!(
-        entries
-            .iter()
-            .map(|e| (e.name, e.enabled))
-            .collect::<Vec<_>>(),
+        entries.iter().map(|e| (e.name, e.enabled)).collect::<Vec<_>>(),
         vec![
             (ProxyName::Headroom, true),
             (ProxyName::Pino, false),

@@ -70,10 +70,7 @@ const BASE_URL_KEY: &str = "ANTHROPIC_BASE_URL";
 /// returning `None` if absent or not a string.
 fn read_base_url(obj: &serde_json::Value, in_env: bool) -> Option<String> {
     let target = if in_env { obj.get("env")? } else { obj };
-    target
-        .get(BASE_URL_KEY)
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
+    target.get(BASE_URL_KEY).and_then(|v| v.as_str()).map(|s| s.to_string())
 }
 
 /// Detect conflicting/Managed `ANTHROPIC_BASE_URL` across settings layers.
@@ -196,11 +193,7 @@ use std::fmt::Write as _;
 pub fn target_is_supported(os: &str, arch: &str) -> bool {
     matches!(
         (os, arch),
-        ("windows", "x86_64")
-            | ("macos", "x86_64")
-            | ("macos", "aarch64")
-            | ("linux", "x86_64")
-            | ("linux", "aarch64")
+        ("windows", "x86_64") | ("macos", "x86_64") | ("macos", "aarch64") | ("linux", "x86_64") | ("linux", "aarch64")
     )
 }
 
@@ -231,9 +224,7 @@ pub fn analyze_toolchain(os: &str, arch: &str) -> Vec<Finding> {
             domain: FindingDomain::Toolchain,
             layer: None,
             severity: Severity::Warn,
-            message: format!(
-                "no jbcentral asset for {os}/{arch}; the central proxy cannot be used on this platform"
-            ),
+            message: format!("no jbcentral asset for {os}/{arch}; the central proxy cannot be used on this platform"),
             found_value: None,
         });
     }
@@ -270,10 +261,7 @@ pub fn run_doctor() -> Result<bool> {
         findings.extend(analyze_base_url(&[source], "\u{0}none"));
     }
 
-    findings.extend(analyze_toolchain(
-        std::env::consts::OS,
-        std::env::consts::ARCH,
-    ));
+    findings.extend(analyze_toolchain(std::env::consts::OS, std::env::consts::ARCH));
 
     print!("{}", render_findings(&findings));
     Ok(!findings.iter().any(|f| f.severity == Severity::Error))

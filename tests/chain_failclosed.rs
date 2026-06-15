@@ -82,16 +82,10 @@ async fn readiness_failure_via_manager_tears_down_started_hops() {
     };
 
     let result = manager.start_hops(&[spec], &tail).await;
-    assert!(
-        result.is_err(),
-        "a hop that never becomes ready must fail start_hops"
-    );
+    assert!(result.is_err(), "a hop that never becomes ready must fail start_hops");
     let msg = result.err().unwrap().to_string().to_lowercase();
     assert!(
-        msg.contains("ready")
-            || msg.contains("readiness")
-            || msg.contains("health")
-            || msg.contains("torn down"),
+        msg.contains("ready") || msg.contains("readiness") || msg.contains("health") || msg.contains("torn down"),
         "error should describe the readiness failure: {msg}"
     );
     // The manager tore down on failure; a second shutdown is a clean no-op.

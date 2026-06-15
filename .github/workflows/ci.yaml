@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install prek
+        run: uv tool install prek
+
+      # cargo-clippy is run per-platform in build-test (cfg(unix)/per-OS coverage).
+      # cargo-fmt and the other hooks are platform-independent, so one Linux run
+      # covers the workspace. SKIP omits the clippy hook here.
+      - name: Run linters (prek)
+        env:
+          SKIP: cargo-clippy
+        run: prek run --all-files --show-diff-on-failure
+
+  build-test:
+    name: Build+test (${{ matrix.os }}/${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows, arch: amd64, runner: windows-latest }
+          - { os: darwin,  arch: arm64, runner: macos-latest }
+          - { os: linux,   arch: amd64, runner: ubuntu-latest }
+          - { os: linux,   arch: arm64, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}-${{ matrix.arch }}
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Build
+        run: cargo build --release --locked
+
+      # Default `cargo test` only. The #[ignore]-d live-central and empirical-claude
+      # suites are NEVER run in CI (R7): they require a human-provisioned jbcentral +
+      # a JetBrains AI Pro subscription and an interactive browser login. See
+      # tests/EMPIRICAL_GATES.md for how to run them locally.
+      - name: Test
+        run: cargo test --locked

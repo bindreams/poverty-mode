@@ -75,11 +75,7 @@ fn run_writes_all_session_logs_to_one_dir_under_log_dir() {
         .filter(|e| e.file_type().unwrap().is_dir())
         .map(|e| e.path())
         .collect();
-    assert_eq!(
-        sessions.len(),
-        1,
-        "expected one session dir, got {sessions:?}"
-    );
+    assert_eq!(sessions.len(), 1, "expected one session dir, got {sessions:?}");
     let session = sessions.pop().unwrap();
     let name = session.file_name().unwrap().to_string_lossy().into_owned();
 
@@ -92,14 +88,8 @@ fn run_writes_all_session_logs_to_one_dir_under_log_dir() {
     );
 
     // Parent + hop logs live together in that dir.
-    assert!(
-        session.join("main.log").exists(),
-        "parent tracing log must exist"
-    );
-    assert!(
-        session.join("pino.log").exists(),
-        "hop stderr log must exist"
-    );
+    assert!(session.join("main.log").exists(), "parent tracing log must exist");
+    assert!(session.join("pino.log").exists(), "hop stderr log must exist");
 
     // The parent must not have leaked tracing onto its own terminal (stderr). Match
     // a tracing TARGET line (`poverty_mode::<module>`), which only a tracing event
