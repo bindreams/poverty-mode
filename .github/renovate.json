@@ -1,0 +1,33 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "minimumReleaseAge": "7 days",
+  "platformAutomerge": true,
+  "packageRules": [
+    {
+      "description": "Don't update the vendored, feature-trimmed headroom-core (must not regain ONNX/embedding deps).",
+      "matchFileNames": ["vendor/**"],
+      "enabled": false
+    },
+    {
+      "description": "Group non-major GitHub Actions updates",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+      "groupName": "GitHub Actions",
+      "automerge": true
+    },
+    {
+      "description": "Group non-major Rust crate updates",
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+      "groupName": "Rust crates",
+      "automerge": true
+    },
+    {
+      "description": "Major updates: one PR per package (not grouped); automerged after the 7-day cooldown + green CI.",
+      "matchUpdateTypes": ["major"],
+      "groupName": null,
+      "automerge": true
+    }
+  ]
+}
