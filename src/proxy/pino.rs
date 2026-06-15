@@ -9,7 +9,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::proxy::BodyTransform;
+use crate::proxy::{BodyTransform, RequestContext};
 
 /// Cache TTL (`5m`/`1h`). Serializes to the short forms `"5m"` / `"1h"`.
 ///
@@ -166,16 +166,16 @@ impl BodyTransform for PinoTransform {
     // parse -> mutate -> serialize -> Some: pino re-serialization is acceptable
     // because the prompt cache relies on cross-turn CONSISTENCY (a stable
     // canonical form per turn), which this preserves.
-    fn transform_bytes(&self, raw: &[u8]) -> Result<Option<Vec<u8>>> {
+    fn transform_bytes(&self, raw: &[u8], ctx: &RequestContext) -> Result<Option<Vec<u8>>> {
         if !self.has_active_feature() {
             return Ok(None);
         }
         let mut body: Value = serde_json::from_slice(raw)?;
-        self.transform(&mut body)?;
+        self.transform(&mut body, ctx)?;
         Ok(Some(serde_json::to_vec(&body)?))
     }
 
-    fn transform(&self, body: &mut Value) -> Result<()> {
+    fn transform(&self, body: &mut Value, _ctx: &RequestContext) -> Result<()> {
         // Only object bodies are mutable in any meaningful way; non-objects pass through.
         if !body.is_object() {
             return Ok(());

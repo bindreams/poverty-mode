@@ -155,7 +155,11 @@ fn transform_kind_variants_exist() {
 
 struct IdentityTransform;
 impl BodyTransform for IdentityTransform {
-    fn transform(&self, _body: &mut serde_json::Value) -> anyhow::Result<()> {
+    fn transform(
+        &self,
+        _body: &mut serde_json::Value,
+        _ctx: &RequestContext,
+    ) -> anyhow::Result<()> {
         Ok(())
     }
 }
@@ -442,7 +446,7 @@ fn transform_kind_pino_transform_succeeds_after_m4() {
     let t = TransformKind::Pino(settings).as_body_transform().unwrap();
     let original = serde_json::json!({"model": "claude-x", "messages": []});
     let mut body = original.clone();
-    t.transform(&mut body)
+    t.transform(&mut body, &crate::proxy::RequestContext::default())
         .expect("M4 pino transform must succeed");
     assert_eq!(body, original, "all-features-off pino transform is a no-op");
 }

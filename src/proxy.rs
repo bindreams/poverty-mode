@@ -300,7 +300,7 @@ impl RequestContext {
 /// `PinoTransform` overrides it.
 pub trait BodyTransform: Send + Sync {
     /// Mutate the parsed JSON request body in place.
-    fn transform(&self, body: &mut serde_json::Value) -> anyhow::Result<()>;
+    fn transform(&self, body: &mut serde_json::Value, ctx: &RequestContext) -> anyhow::Result<()>;
 
     /// Transform the ORIGINAL request bytes (FIX-B).
     ///
@@ -314,9 +314,9 @@ pub trait BodyTransform: Send + Sync {
     /// byte-fidelity) is what the prompt cache needs (pino). Transforms that
     /// must preserve the upstream's cache-hot bytes exactly (headroom's
     /// byte-surgical output) OVERRIDE this and never round-trip through `Value`.
-    fn transform_bytes(&self, raw: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
+    fn transform_bytes(&self, raw: &[u8], ctx: &RequestContext) -> anyhow::Result<Option<Vec<u8>>> {
         let mut value: serde_json::Value = serde_json::from_slice(raw)?;
-        self.transform(&mut value)?;
+        self.transform(&mut value, ctx)?;
         Ok(Some(serde_json::to_vec(&value)?))
     }
 
@@ -439,7 +439,7 @@ pub struct MarkerTransform;
 
 #[cfg(feature = "test-transforms")]
 impl BodyTransform for MarkerTransform {
-    fn transform(&self, body: &mut serde_json::Value) -> anyhow::Result<()> {
+    fn transform(&self, body: &mut serde_json::Value, _ctx: &RequestContext) -> anyhow::Result<()> {
         if let Some(obj) = body.as_object_mut() {
             obj.insert("__pm_test".to_string(), serde_json::Value::Bool(true));
         }
@@ -643,6 +643,7 @@ async fn forward(
         .map(|pq| pq.as_str().to_string())
         .unwrap_or_else(|| req.uri().path().to_string());
     let inbound_headers = req.headers().clone();
+    let req_ctx = RequestContext::from_headers(&inbound_headers);
 
     let should_transform = method == hyper::Method::POST
         && is_messages_path(&path_and_query)
@@ -691,8 +692,10 @@ async fn forward(
                 // its error.
                 let transform = transform.clone();
                 let raw = out_body.clone();
+                let ctx = req_ctx;
                 let outcome =
-                    tokio::task::spawn_blocking(move || transform.transform_bytes(&raw)).await;
+                    tokio::task::spawn_blocking(move || transform.transform_bytes(&raw, &ctx))
+                        .await;
                 match outcome {
                     Ok(Ok(Some(bytes))) => {
                         out_body = bytes;
