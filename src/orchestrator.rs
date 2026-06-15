@@ -319,7 +319,7 @@ async fn build_via_manager(
     // back-to-front --upstream. No placeholder/strip/re-append dance.
     //
     // The body-log file is named per design spec §5.11 as
-    // `<state>/runs/<run-id>/<proxy>-<port>.log`, where `<port>` is the hop's REAL
+    // `<log_dir>/<run-id>/<proxy>-<port>.log`, where `<port>` is the hop's REAL
     // listening port — the value `status::enumerate_runs` parses back out. The port
     // is OS-assigned and unknown here (hops bind `127.0.0.1:0` later), so we embed
     // the `{port}` token; the engine substitutes its bound port at file-open
