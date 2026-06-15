@@ -101,15 +101,23 @@ mod imp {
             // line is inherited onto the parent terminal the agent owns. `None`
             // inherits (the `__spawn-holder`/`__sleep` teardown harness).
             if let Some(path) = stderr_log {
+                // `.mode(0o600)` is applied AT creation so the file is born owner-only
+                // with no world-readable TOCTOU window between create and chmod (mirrors
+                // the body-log pattern in `proxy.rs`). Ignored when the file already
+                // exists; `harden_file_perms` below tightens the pre-existing/append
+                // case.
+                use std::os::unix::fs::OpenOptionsExt as _;
                 let file = std::fs::OpenOptions::new()
                     .create(true)
                     .append(true)
+                    .mode(0o600)
                     .open(path)
                     .map_err(|e| {
                         anyhow::anyhow!("opening hop stderr log {}: {e}", path.display())
                     })?;
-                // Owner-only on POSIX (the run dir is already 0700; defense in depth).
-                let _ = crate::paths::harden_file_perms(path);
+                if let Err(e) = crate::paths::harden_file_perms(path) {
+                    tracing::warn!("cannot harden hop stderr log {}: {e}", path.display());
+                }
                 cmd.stderr(Stdio::from(file));
             }
             // Tell the child which fd is the death-pipe read end to watch.
