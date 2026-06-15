@@ -1,12 +1,13 @@
 use super::*;
 use crate::config::CentralSettings;
 use crate::proxy::headroom::HeadroomSettings;
-use crate::proxy::pino::{PinoSettings, TailTtl};
+use crate::proxy::pino::{CacheTtl, PinoSettings};
 
 fn base_pino() -> PinoSettings {
     PinoSettings {
         auto_cache: true,
-        tail_ttl: TailTtl::FiveMin,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: vec![],
         strip_ansi: true,
         model_override: None,
@@ -24,14 +25,29 @@ fn empty_override_is_identity() {
 fn pino_override_sets_only_present_fields() {
     let mut s = base_pino();
     PinoOverride {
-        tail_ttl: Some(TailTtl::OneHour),
+        sub_ttl: Some(CacheTtl::OneHour),
         auto_cache: Some(false),
         ..Default::default()
     }
     .apply(&mut s);
-    assert_eq!(s.tail_ttl, TailTtl::OneHour);
+    assert_eq!(s.sub_ttl, CacheTtl::OneHour);
+    // main_ttl was not overridden, so it keeps the base value.
+    assert_eq!(s.main_ttl, CacheTtl::OneHour);
     assert!(!s.auto_cache);
     assert!(s.strip_ansi);
+}
+
+#[test]
+fn pino_override_applies_both_ttls_independently() {
+    let mut s = base_pino(); // main=1h, sub=5m
+    PinoOverride {
+        main_ttl: Some(CacheTtl::FiveMin),
+        sub_ttl: Some(CacheTtl::OneHour),
+        ..Default::default()
+    }
+    .apply(&mut s);
+    assert_eq!(s.main_ttl, CacheTtl::FiveMin);
+    assert_eq!(s.sub_ttl, CacheTtl::OneHour);
 }
 
 #[test]

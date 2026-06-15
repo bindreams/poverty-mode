@@ -1,5 +1,5 @@
 use crate::proxy::headroom::HeadroomSettings;
-use crate::proxy::pino::{PinoSettings, TailTtl};
+use crate::proxy::pino::{CacheTtl, PinoSettings};
 use crate::proxy::ProxyName;
 
 pub mod overrides;
@@ -102,7 +102,8 @@ impl Config {
                     enabled: false,
                     settings: ProxySettings::Pino(PinoSettings {
                         auto_cache: true,
-                        tail_ttl: TailTtl::FiveMin,
+                        main_ttl: CacheTtl::OneHour,
+                        sub_ttl: CacheTtl::FiveMin,
                         drop_tools: Vec::new(),
                         strip_ansi: true,
                         model_override: None,

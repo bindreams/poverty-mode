@@ -10,7 +10,7 @@ use poverty_mode::agent::Agent;
 use poverty_mode::config::{CentralSettings, ProxySettings, ResolvedProxy};
 use poverty_mode::orchestrator;
 use poverty_mode::proxy::headroom::HeadroomSettings;
-use poverty_mode::proxy::pino::{PinoSettings, TailTtl};
+use poverty_mode::proxy::pino::{CacheTtl, PinoSettings};
 use poverty_mode::proxy::{ProxyName, Upstream};
 use url::Url;
 
@@ -34,7 +34,8 @@ pub fn pino_passthrough() -> ResolvedProxy {
         name: ProxyName::Pino,
         settings: ProxySettings::Pino(PinoSettings {
             auto_cache: false,
-            tail_ttl: TailTtl::FiveMin,
+            main_ttl: CacheTtl::OneHour,
+            sub_ttl: CacheTtl::FiveMin,
             drop_tools: vec![],
             strip_ansi: false,
             model_override: None,
@@ -305,7 +306,7 @@ async fn hop_emits_exactly_one_ready_line_then_silence_on_stdout() {
         "127.0.0.1:0".to_string(),
         "--run-id".to_string(),
         run_id.clone(),
-        "--tail-ttl".to_string(),
+        "--main-ttl".to_string(),
         "5m".to_string(),
         "--no-strip-ansi".to_string(),
         "--upstream".to_string(),

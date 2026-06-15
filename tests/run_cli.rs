@@ -343,7 +343,7 @@ async fn run_codex_reuses_live_chain_end_to_end() {
 // `run` setting overrides persisted by `--save` =====
 
 use poverty_mode::config::{Config, ProxySettings};
-use poverty_mode::proxy::pino::TailTtl;
+use poverty_mode::proxy::pino::CacheTtl;
 use poverty_mode::proxy::ProxyName;
 
 /// Read and parse the config the child persisted under its temp `XDG_CONFIG_HOME`.
@@ -396,9 +396,9 @@ fn exit0_agent() -> Vec<&'static str> {
 }
 
 /// `--save` must persist a CLI-source setting override: `--proxies pino` puts pino
-/// in the chain, and `--pino-tail-ttl 1h` overrides the loaded config's pino
+/// in the chain, and `--pino-sub-ttl 1h` overrides the loaded config's pino
 /// settings BEFORE chain resolution / save, so the saved pino entry is enabled and
-/// carries `tail_ttl = 1h`. With the override not yet applied in the handler, the
+/// carries `sub_ttl = 1h`. With the override not yet applied in the handler, the
 /// saved entry would keep the default `5m`, failing this test.
 #[tokio::test(flavor = "multi_thread")]
 async fn run_save_persists_setting_override_cli_source() {
@@ -410,7 +410,7 @@ async fn run_save_persists_setting_override_cli_source() {
         .env_remove("ANTHROPIC_BASE_URL")
         .arg("run")
         .args(["--proxies", "pino"])
-        .args(["--pino-tail-ttl", "1h"])
+        .args(["--pino-sub-ttl", "1h"])
         .arg("--save")
         .args(exit0_agent());
     let out = cmd.output().expect("spawn poverty-mode run");
@@ -424,22 +424,24 @@ async fn run_save_persists_setting_override_cli_source() {
     let (enabled, pino) = pino_settings(&cfg);
     assert!(enabled, "--proxies pino must persist pino as enabled");
     assert_eq!(
-        pino.tail_ttl,
-        TailTtl::OneHour,
-        "--pino-tail-ttl 1h override must be persisted"
+        pino.sub_ttl,
+        CacheTtl::OneHour,
+        "--pino-sub-ttl 1h override must be persisted"
     );
+    // main_ttl was not overridden, so it keeps the default 1h.
+    assert_eq!(pino.main_ttl, CacheTtl::OneHour);
 }
 
 /// `--save` must apply a setting override even when the chain is FILE-sourced (no
 /// `--proxies`, no env chain): pre-enabled pino is resolved from the file, and
-/// `--pino-tail-ttl 1h` overrides the loaded config before resolution / save, so
-/// the saved pino entry carries `tail_ttl = 1h`. Without the handler applying the
+/// `--pino-sub-ttl 1h` overrides the loaded config before resolution / save, so
+/// the saved pino entry carries `sub_ttl = 1h`. Without the handler applying the
 /// override, the saved entry would keep the file's `5m`, failing this test.
 #[tokio::test(flavor = "multi_thread")]
 async fn run_save_persists_setting_override_file_source() {
     let cfg_home = tempfile::tempdir().unwrap();
 
-    // Pre-write a config with pino ENABLED at the default 5m tail.
+    // Pre-write a config with pino ENABLED at the default 5m sub-ttl.
     let mut seed = Config::default_all_disabled();
     let pino_entry = seed
         .proxies
@@ -455,7 +457,7 @@ async fn run_save_persists_setting_override_file_source() {
         .env_remove("POVERTY_PROXY_CHAIN")
         .env_remove("ANTHROPIC_BASE_URL")
         .arg("run")
-        .args(["--pino-tail-ttl", "1h"])
+        .args(["--pino-sub-ttl", "1h"])
         .arg("--save")
         .args(exit0_agent());
     let out = cmd.output().expect("spawn poverty-mode run");
@@ -469,9 +471,9 @@ async fn run_save_persists_setting_override_file_source() {
     let (enabled, pino) = pino_settings(&cfg);
     assert!(enabled, "file-source pino must remain enabled");
     assert_eq!(
-        pino.tail_ttl,
-        TailTtl::OneHour,
-        "--pino-tail-ttl 1h override must apply on file-source resolution"
+        pino.sub_ttl,
+        CacheTtl::OneHour,
+        "--pino-sub-ttl 1h override must apply on file-source resolution"
     );
 }
 

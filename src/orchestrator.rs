@@ -424,7 +424,7 @@ fn forward_signal_unix(child_pid: Option<u32>, sig: libc::c_int) {
 use std::path::PathBuf;
 
 use crate::config::ProxySettings;
-use crate::proxy::pino::TailTtl;
+use crate::proxy::pino::CacheTtl;
 
 /// Everything needed to render one hop's `poverty-mode proxy <name>` argv.
 pub struct ProxyHopSpec<'a> {
@@ -438,10 +438,10 @@ pub struct ProxyHopSpec<'a> {
     pub log_file: PathBuf,
 }
 
-fn tail_ttl_str(t: TailTtl) -> &'static str {
+fn ttl_str(t: CacheTtl) -> &'static str {
     match t {
-        TailTtl::FiveMin => "5m",
-        TailTtl::OneHour => "1h",
+        CacheTtl::FiveMin => "5m",
+        CacheTtl::OneHour => "1h",
     }
 }
 
@@ -478,8 +478,10 @@ pub fn proxy_child_args(spec: &ProxyHopSpec) -> Vec<String> {
             if p.auto_cache {
                 args.push("--auto-cache".to_string());
             }
-            args.push("--tail-ttl".to_string());
-            args.push(tail_ttl_str(p.tail_ttl).to_string());
+            args.push("--main-ttl".to_string());
+            args.push(ttl_str(p.main_ttl).to_string());
+            args.push("--sub-ttl".to_string());
+            args.push(ttl_str(p.sub_ttl).to_string());
             if !p.drop_tools.is_empty() {
                 args.push("--drop-tools".to_string());
                 args.push(p.drop_tools.join(","));

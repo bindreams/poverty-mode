@@ -261,6 +261,35 @@ impl TransformKind {
     }
 }
 
+/// The header Claude Code stamps on subagent (Task-tool) requests; absent on the
+/// main loop. The only reliable main-vs-subagent discriminator — subagents inherit
+/// the main loop's env, settings, auth, and URL, so nothing else on the wire differs.
+pub const SUBAGENT_HEADER: &str = "x-claude-code-agent-id";
+
+/// Per-request classification handed to body transforms. Carries only what a
+/// transform varies behavior on (currently subagent vs main). `Copy` so the engine
+/// can move it into the `spawn_blocking` transform closure.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RequestContext {
+    /// True when the request carries a non-empty `x-claude-code-agent-id`.
+    pub is_subagent: bool,
+}
+
+impl RequestContext {
+    /// Classify a request from its inbound headers. Subagent ⇔ a present, non-empty
+    /// `x-claude-code-agent-id` (an empty value is not a subagent — matches Claude
+    /// Code's `Boolean(header)` truthiness). Real agent IDs are ASCII; a non-ASCII
+    /// value (`to_str` fails) is treated as main, as is a multi-valued header whose
+    /// first value is empty (`HeaderMap::get` reads only the first).
+    pub fn from_headers(headers: &http::HeaderMap) -> Self {
+        let is_subagent = headers
+            .get(SUBAGENT_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|s| !s.is_empty());
+        RequestContext { is_subagent }
+    }
+}
+
 /// A request-body mutation applied to a transformed `POST /v1/messages`.
 ///
 /// `transform_bytes` is the byte-fidelity seam (FIX-B): it takes the ORIGINAL
@@ -276,10 +305,13 @@ impl TransformKind {
 /// only on a transformed POST `/v1/messages` (R6). The default is a no-op;
 /// `PinoTransform` overrides it.
 pub trait BodyTransform: Send + Sync {
-    /// Mutate the parsed JSON request body in place.
-    fn transform(&self, body: &mut serde_json::Value) -> anyhow::Result<()>;
+    /// Mutate the parsed JSON request body in place. `ctx` classifies the request
+    /// (e.g. subagent vs main) so a transform may vary behavior by origin — see
+    /// [`RequestContext`].
+    fn transform(&self, body: &mut serde_json::Value, ctx: &RequestContext) -> anyhow::Result<()>;
 
-    /// Transform the ORIGINAL request bytes (FIX-B).
+    /// Transform the ORIGINAL request bytes (FIX-B). `ctx` classifies the request
+    /// (see [`RequestContext`]) and is forwarded to [`BodyTransform::transform`].
     ///
     /// Returns `Ok(None)` when there is NO change — the engine forwards the
     /// original request bytes verbatim (byte-faithful, prompt-cache-preserving).
@@ -291,9 +323,9 @@ pub trait BodyTransform: Send + Sync {
     /// byte-fidelity) is what the prompt cache needs (pino). Transforms that
     /// must preserve the upstream's cache-hot bytes exactly (headroom's
     /// byte-surgical output) OVERRIDE this and never round-trip through `Value`.
-    fn transform_bytes(&self, raw: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
+    fn transform_bytes(&self, raw: &[u8], ctx: &RequestContext) -> anyhow::Result<Option<Vec<u8>>> {
         let mut value: serde_json::Value = serde_json::from_slice(raw)?;
-        self.transform(&mut value)?;
+        self.transform(&mut value, ctx)?;
         Ok(Some(serde_json::to_vec(&value)?))
     }
 
@@ -416,7 +448,7 @@ pub struct MarkerTransform;
 
 #[cfg(feature = "test-transforms")]
 impl BodyTransform for MarkerTransform {
-    fn transform(&self, body: &mut serde_json::Value) -> anyhow::Result<()> {
+    fn transform(&self, body: &mut serde_json::Value, _ctx: &RequestContext) -> anyhow::Result<()> {
         if let Some(obj) = body.as_object_mut() {
             obj.insert("__pm_test".to_string(), serde_json::Value::Bool(true));
         }
@@ -620,6 +652,7 @@ async fn forward(
         .map(|pq| pq.as_str().to_string())
         .unwrap_or_else(|| req.uri().path().to_string());
     let inbound_headers = req.headers().clone();
+    let req_ctx = RequestContext::from_headers(&inbound_headers);
 
     let should_transform = method == hyper::Method::POST
         && is_messages_path(&path_and_query)
@@ -668,8 +701,10 @@ async fn forward(
                 // its error.
                 let transform = transform.clone();
                 let raw = out_body.clone();
+                let ctx = req_ctx;
                 let outcome =
-                    tokio::task::spawn_blocking(move || transform.transform_bytes(&raw)).await;
+                    tokio::task::spawn_blocking(move || transform.transform_bytes(&raw, &ctx))
+                        .await;
                 match outcome {
                     Ok(Ok(Some(bytes))) => {
                         out_body = bytes;

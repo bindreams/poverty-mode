@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::proxy::BodyTransform;
+use crate::proxy::{BodyTransform, RequestContext};
 
 /// headroom transform settings (config + CLI). FILLED behavior lands in M5; this
 /// shape is never redefined.
@@ -26,7 +26,11 @@ impl BodyTransform for HeadroomTransform {
     // round-tripped through `serde_json::Value`), so the cache-hot zone
     // (system/tools/history/thinking) the engine forwards is byte-for-byte
     // identical to what the client sent and the prompt cache survives.
-    fn transform_bytes(&self, raw: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
+    fn transform_bytes(
+        &self,
+        raw: &[u8],
+        _ctx: &RequestContext,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
         use headroom_core::transforms::{compress_anthropic_live_zone, AuthMode, LiveZoneOutcome};
 
         // Disabled => NO change: the engine forwards the original bytes verbatim.
@@ -71,9 +75,9 @@ impl BodyTransform for HeadroomTransform {
     // to the byte-faithful `transform_bytes` and re-parses on a change. NOT on
     // the engine forward path (the engine calls `transform_bytes` directly), so
     // this re-parse never re-canonicalizes the bytes the upstream receives.
-    fn transform(&self, body: &mut serde_json::Value) -> anyhow::Result<()> {
+    fn transform(&self, body: &mut serde_json::Value, ctx: &RequestContext) -> anyhow::Result<()> {
         let raw = serde_json::to_vec(body)?;
-        if let Some(bytes) = self.transform_bytes(&raw)? {
+        if let Some(bytes) = self.transform_bytes(&raw, ctx)? {
             *body = serde_json::from_slice(&bytes)
                 .map_err(|e| anyhow::anyhow!("headroom produced invalid JSON: {e}"))?;
         }

@@ -152,12 +152,13 @@ fn path_prefix_root_is_empty() {
 #[test]
 fn transform_kind_variants_exist() {
     use crate::proxy::headroom::HeadroomSettings;
-    use crate::proxy::pino::{PinoSettings, TailTtl};
+    use crate::proxy::pino::{CacheTtl, PinoSettings};
     let kinds = [
         TransformKind::None,
         TransformKind::Pino(PinoSettings {
             auto_cache: false,
-            tail_ttl: TailTtl::FiveMin,
+            main_ttl: CacheTtl::OneHour,
+            sub_ttl: CacheTtl::FiveMin,
             drop_tools: vec![],
             strip_ansi: false,
             model_override: None,
@@ -171,7 +172,11 @@ fn transform_kind_variants_exist() {
 
 struct IdentityTransform;
 impl BodyTransform for IdentityTransform {
-    fn transform(&self, _body: &mut serde_json::Value) -> anyhow::Result<()> {
+    fn transform(
+        &self,
+        _body: &mut serde_json::Value,
+        _ctx: &RequestContext,
+    ) -> anyhow::Result<()> {
         Ok(())
     }
 }
@@ -266,10 +271,11 @@ fn health_body_round_trips_with_run_id() {
 
 #[test]
 fn engine_config_holds_run_id_and_transform_kind() {
-    use crate::proxy::pino::{PinoSettings, TailTtl};
+    use crate::proxy::pino::{CacheTtl, PinoSettings};
     let settings = PinoSettings {
         auto_cache: false,
-        tail_ttl: TailTtl::FiveMin,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: vec![],
         strip_ansi: false,
         model_override: None,
@@ -425,12 +431,13 @@ fn transform_kind_none_yields_no_transform() {
 
 #[test]
 fn transform_kind_pino_yields_a_boxed_transform() {
-    use crate::proxy::pino::{PinoSettings, TailTtl};
+    use crate::proxy::pino::{CacheTtl, PinoSettings};
     // M1's PinoTransform stub fails loud until M4; the materializer must still
     // hand back an Arc-shared transform (the engine decides what to do with an Err).
     let settings = PinoSettings {
         auto_cache: false,
-        tail_ttl: TailTtl::FiveMin,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: vec![],
         strip_ansi: false,
         model_override: None,
@@ -444,13 +451,14 @@ fn transform_kind_pino_yields_a_boxed_transform() {
 
 #[test]
 fn transform_kind_pino_transform_succeeds_after_m4() {
-    use crate::proxy::pino::{PinoSettings, TailTtl};
+    use crate::proxy::pino::{CacheTtl, PinoSettings};
     // R9's M1 stub returned an explicit Err; M4.2 replaced it with the real
     // dispatch skeleton, so the materialized pino transform now returns Ok (and,
     // with every feature off, is a byte-faithful no-op).
     let settings = PinoSettings {
         auto_cache: false,
-        tail_ttl: TailTtl::FiveMin,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: vec![],
         strip_ansi: false,
         model_override: None,
@@ -458,7 +466,7 @@ fn transform_kind_pino_transform_succeeds_after_m4() {
     let t = TransformKind::Pino(settings).as_body_transform().unwrap();
     let original = serde_json::json!({"model": "claude-x", "messages": []});
     let mut body = original.clone();
-    t.transform(&mut body)
+    t.transform(&mut body, &crate::proxy::RequestContext::default())
         .expect("M4 pino transform must succeed");
     assert_eq!(body, original, "all-features-off pino transform is a no-op");
 }
@@ -471,4 +479,54 @@ fn transform_kind_headroom_yields_a_boxed_transform() {
         k.as_body_transform().is_some(),
         "headroom kind yields a transform"
     );
+}
+
+// ---- RequestContext subagent detection ----
+
+#[test]
+fn request_context_detects_subagent_from_nonempty_header() {
+    let mut h = http::HeaderMap::new();
+    h.insert(
+        SUBAGENT_HEADER,
+        http::HeaderValue::from_static("agent_general-purpose_01J"),
+    );
+    assert!(RequestContext::from_headers(&h).is_subagent);
+}
+
+#[test]
+fn request_context_main_when_header_absent() {
+    let h = http::HeaderMap::new();
+    assert!(!RequestContext::from_headers(&h).is_subagent);
+    assert_eq!(RequestContext::from_headers(&h), RequestContext::default());
+}
+
+#[test]
+fn request_context_main_when_header_present_but_empty() {
+    // Matches Claude Code's `Boolean(header)` truthiness: "" is not a subagent.
+    let mut h = http::HeaderMap::new();
+    h.insert(SUBAGENT_HEADER, http::HeaderValue::from_static(""));
+    assert!(!RequestContext::from_headers(&h).is_subagent);
+}
+
+#[test]
+fn request_context_main_when_header_value_not_ascii() {
+    // Real agent IDs are ASCII; a non-ASCII value (`to_str` fails) is treated as main.
+    let mut h = http::HeaderMap::new();
+    h.insert(
+        SUBAGENT_HEADER,
+        http::HeaderValue::from_bytes(b"\xff\xfe").unwrap(),
+    );
+    assert!(!RequestContext::from_headers(&h).is_subagent);
+}
+
+#[test]
+fn request_context_uses_first_value_for_duplicate_header() {
+    // `HeaderMap::get` reads only the first value: an empty first value wins.
+    let mut h = http::HeaderMap::new();
+    h.append(SUBAGENT_HEADER, http::HeaderValue::from_static(""));
+    h.append(
+        SUBAGENT_HEADER,
+        http::HeaderValue::from_static("agent_general-purpose_01J"),
+    );
+    assert!(!RequestContext::from_headers(&h).is_subagent);
 }

@@ -18,6 +18,15 @@ fn upstream(s: &str) -> Upstream {
 }
 
 async fn raw_post(port: u16, path: &str, body: &str) -> (StatusCode, String) {
+    raw_post_with_header(port, path, body, None).await
+}
+
+async fn raw_post_with_header(
+    port: u16,
+    path: &str,
+    body: &str,
+    header: Option<(&str, &str)>,
+) -> (StatusCode, String) {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let stream = TcpStream::connect(addr).await.expect("connect stub");
     let io = TokioIo::new(stream);
@@ -27,17 +36,91 @@ async fn raw_post(port: u16, path: &str, body: &str) -> (StatusCode, String) {
     tokio::spawn(async move {
         let _ = conn.await;
     });
-    let req = Request::builder()
+    let mut builder = Request::builder()
         .method("POST")
         .uri(path)
         .header("host", format!("127.0.0.1:{port}"))
-        .header("content-type", "application/json")
-        .body(Full::<Bytes>::from(body.to_string()))
-        .unwrap();
+        .header("content-type", "application/json");
+    if let Some((k, v)) = header {
+        builder = builder.header(k, v);
+    }
+    let req = builder.body(Full::<Bytes>::from(body.to_string())).unwrap();
     let resp = sender.send_request(req).await.expect("send");
     let status = resp.status();
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     (status, String::from_utf8_lossy(&bytes).to_string())
+}
+
+#[tokio::test]
+async fn forward_classifies_subagent_by_header_and_picks_sub_ttl() {
+    use poverty_mode::proxy::pino::{CacheTtl, PinoSettings};
+
+    let stub = start_stub_async(r#"{"ok":true}"#).await;
+    let shutdown = std::sync::Arc::new(Notify::new());
+    let shutdown_fut = {
+        let s = shutdown.clone();
+        async move { s.notified().await }
+    };
+    let cfg = EngineConfig {
+        name: ProxyName::Pino,
+        listen: "127.0.0.1:0".parse().unwrap(),
+        upstream: upstream(&format!("http://127.0.0.1:{}", stub.port)),
+        run_id: "01J0PINOSUB".to_string(),
+        log_file: None,
+        transform: TransformKind::Pino(PinoSettings {
+            auto_cache: true,
+            main_ttl: CacheTtl::OneHour,
+            sub_ttl: CacheTtl::FiveMin,
+            drop_tools: vec![],
+            strip_ansi: false,
+            model_override: None,
+        }),
+    };
+    let bound = bind_engine(cfg, shutdown_fut).await.expect("bind");
+    let port = bound.local_addr.port();
+
+    let body = r#"{"model":"claude-x","system":[{"type":"text","text":"hi"}],"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}"#;
+
+    // Subagent header present -> every injected breakpoint uses sub_ttl (5m).
+    let (status, _) = raw_post_with_header(
+        port,
+        "/v1/messages",
+        body,
+        Some(("x-claude-code-agent-id", "agent_x")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let sub_body = serde_json::to_string(
+        &serde_json::from_slice::<serde_json::Value>(&stub.last().unwrap().body).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        sub_body.contains("\"ttl\":\"5m\""),
+        "subagent body: {sub_body}"
+    );
+    assert!(
+        !sub_body.contains("\"ttl\":\"1h\""),
+        "no 1h slot for subagent: {sub_body}"
+    );
+
+    // No header -> main_ttl (1h).
+    let (status, _) = raw_post_with_header(port, "/v1/messages", body, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let main_body = serde_json::to_string(
+        &serde_json::from_slice::<serde_json::Value>(&stub.last().unwrap().body).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        main_body.contains("\"ttl\":\"1h\""),
+        "main body: {main_body}"
+    );
+    assert!(
+        !main_body.contains("\"ttl\":\"5m\""),
+        "no 5m slot for main: {main_body}"
+    );
+
+    shutdown.notify_waiters();
+    bound.handle.await.expect("join").expect("engine ok");
 }
 
 #[tokio::test]
@@ -335,7 +418,7 @@ async fn forward_post_messages_recomputes_content_length() {
 // reference pino's `mutate=false` arm).
 #[tokio::test]
 async fn pino_all_features_off_forwards_bytes_verbatim_no_beta() {
-    use poverty_mode::proxy::pino::{PinoSettings, TailTtl};
+    use poverty_mode::proxy::pino::{CacheTtl, PinoSettings};
 
     let stub = start_stub_async(r#"{"ok":true}"#).await;
     let shutdown = std::sync::Arc::new(Notify::new());
@@ -351,7 +434,8 @@ async fn pino_all_features_off_forwards_bytes_verbatim_no_beta() {
         log_file: None,
         transform: TransformKind::Pino(PinoSettings {
             auto_cache: false,
-            tail_ttl: TailTtl::FiveMin,
+            main_ttl: CacheTtl::OneHour,
+            sub_ttl: CacheTtl::FiveMin,
             drop_tools: vec![],
             strip_ansi: false,
             model_override: None,
@@ -390,7 +474,7 @@ async fn pino_all_features_off_forwards_bytes_verbatim_no_beta() {
 // applies the 1h-cache beta header (apply_headers fires on the active transform).
 #[tokio::test]
 async fn pino_auto_cache_on_injects_and_applies_beta() {
-    use poverty_mode::proxy::pino::{PinoSettings, TailTtl, BETA_FLAG};
+    use poverty_mode::proxy::pino::{CacheTtl, PinoSettings, BETA_FLAG};
 
     let stub = start_stub_async(r#"{"ok":true}"#).await;
     let shutdown = std::sync::Arc::new(Notify::new());
@@ -406,7 +490,8 @@ async fn pino_auto_cache_on_injects_and_applies_beta() {
         log_file: None,
         transform: TransformKind::Pino(PinoSettings {
             auto_cache: true,
-            tail_ttl: TailTtl::FiveMin,
+            main_ttl: CacheTtl::OneHour,
+            sub_ttl: CacheTtl::FiveMin,
             drop_tools: vec![],
             strip_ansi: false,
             model_override: None,

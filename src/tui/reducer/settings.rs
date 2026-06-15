@@ -6,20 +6,21 @@
 //! re-format or duplicate value logic.
 
 use crate::config::ProxySettings;
-use crate::proxy::pino::TailTtl;
+use crate::proxy::pino::CacheTtl;
 use crate::proxy::ProxyName;
 
 #[cfg(test)]
 #[path = "settings_tests.rs"]
 mod settings_tests;
 
-/// Identity of one editable per-proxy setting. Eight variants spanning all three
+/// Identity of one editable per-proxy setting. Nine variants spanning all three
 /// proxies; [`settings_of`] returns the fixed display order for each proxy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettingId {
     // pino
     AutoCache,
-    TailTtl,
+    MainTtl,
+    SubTtl,
     DropTools,
     StripAnsi,
     ModelOverride,
@@ -47,7 +48,8 @@ pub enum SettingKind {
 
 const PINO_SETTINGS: &[SettingId] = &[
     SettingId::AutoCache,
-    SettingId::TailTtl,
+    SettingId::MainTtl,
+    SettingId::SubTtl,
     SettingId::DropTools,
     SettingId::StripAnsi,
     SettingId::ModelOverride,
@@ -70,7 +72,8 @@ impl SettingId {
     pub fn label(self) -> &'static str {
         match self {
             SettingId::AutoCache => "auto-cache",
-            SettingId::TailTtl => "tail-ttl",
+            SettingId::MainTtl => "main-ttl",
+            SettingId::SubTtl => "sub-ttl",
             SettingId::DropTools => "drop-tools",
             SettingId::StripAnsi => "strip-ansi",
             SettingId::ModelOverride => "model",
@@ -86,7 +89,7 @@ impl SettingId {
             SettingId::AutoCache | SettingId::StripAnsi | SettingId::Compression => {
                 SettingKind::Bool
             }
-            SettingId::TailTtl => SettingKind::Enum,
+            SettingId::MainTtl | SettingId::SubTtl => SettingKind::Enum,
             SettingId::DropTools => SettingKind::List,
             SettingId::ModelOverride | SettingId::PinnedVersion => SettingKind::Text,
             SettingId::Port => SettingKind::Number,
@@ -104,16 +107,22 @@ impl SettingId {
         }
     }
 
-    /// Step an `Enum` setting by `dir` (the only enum, `TailTtl`, has two values
-    /// so any nonzero `dir` flips it). Debug-asserts the id is an `Enum`.
+    /// Step an `Enum` setting by `dir` (each enum, `MainTtl`/`SubTtl`, has two
+    /// values so any nonzero `dir` flips it). Debug-asserts the id is an `Enum`.
     pub fn cycle(self, s: &mut ProxySettings, dir: i8) {
         debug_assert_eq!(self.kind(), SettingKind::Enum, "cycle on non-enum setting");
         let _ = dir;
         match (self, s) {
-            (SettingId::TailTtl, ProxySettings::Pino(p)) => {
-                p.tail_ttl = match p.tail_ttl {
-                    TailTtl::FiveMin => TailTtl::OneHour,
-                    TailTtl::OneHour => TailTtl::FiveMin,
+            (SettingId::MainTtl, ProxySettings::Pino(p)) => {
+                p.main_ttl = match p.main_ttl {
+                    CacheTtl::FiveMin => CacheTtl::OneHour,
+                    CacheTtl::OneHour => CacheTtl::FiveMin,
+                };
+            }
+            (SettingId::SubTtl, ProxySettings::Pino(p)) => {
+                p.sub_ttl = match p.sub_ttl {
+                    CacheTtl::FiveMin => CacheTtl::OneHour,
+                    CacheTtl::OneHour => CacheTtl::FiveMin,
                 };
             }
             _ => debug_assert!(false, "cycle: setting/proxy mismatch"),
@@ -202,7 +211,8 @@ pub fn render_value(s: &ProxySettings, id: SettingId) -> String {
     match id.kind() {
         SettingKind::Bool => if id.bool_value(s) { "[x]" } else { "[ ]" }.to_string(),
         SettingKind::Enum => match (id, s) {
-            (SettingId::TailTtl, ProxySettings::Pino(p)) => format!("‹ {} ›", p.tail_ttl.as_str()),
+            (SettingId::MainTtl, ProxySettings::Pino(p)) => format!("‹ {} ›", p.main_ttl.as_str()),
+            (SettingId::SubTtl, ProxySettings::Pino(p)) => format!("‹ {} ›", p.sub_ttl.as_str()),
             _ => String::new(),
         },
         SettingKind::List => match (id, s) {
@@ -238,8 +248,8 @@ pub fn render_value(s: &ProxySettings, id: SettingId) -> String {
 
 /// A short collapsed-row description that reflects live settings (spec §3.4).
 ///
-/// pino: `cache · <ttl>` (omit `cache` when `auto_cache` off) `(· drop N` when
-/// `drop_tools` nonempty); headroom: `compression on`/`compression off`;
+/// pino: `cache · <main>/<sub>` (omit `cache` when `auto_cache` off) `(· drop N`
+/// when `drop_tools` nonempty); headroom: `compression on`/`compression off`;
 /// central: `JetBrains AI · :PORT` or `JetBrains AI`.
 pub fn describe(name: ProxyName, s: &ProxySettings) -> String {
     match (name, s) {
@@ -248,7 +258,7 @@ pub fn describe(name: ProxyName, s: &ProxySettings) -> String {
             if p.auto_cache {
                 parts.push("cache".to_string());
             }
-            parts.push(p.tail_ttl.as_str().to_string());
+            parts.push(format!("{}/{}", p.main_ttl.as_str(), p.sub_ttl.as_str()));
             if !p.drop_tools.is_empty() {
                 parts.push(format!("drop {}", p.drop_tools.len()));
             }

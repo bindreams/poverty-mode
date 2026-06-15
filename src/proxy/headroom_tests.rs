@@ -2,6 +2,10 @@ use super::*;
 use crate::proxy::BodyTransform;
 use serde_json::json;
 
+fn main_ctx() -> crate::proxy::RequestContext {
+    crate::proxy::RequestContext::default()
+}
+
 #[test]
 fn headroom_settings_default_round_trips_yaml() {
     let s = HeadroomSettings { compression: false };
@@ -50,7 +54,7 @@ fn disabled_compression_is_byte_equal_noop() {
     };
     let mut body = compressible_body();
     let before = serde_json::to_vec(&body).unwrap();
-    t.transform(&mut body)
+    t.transform(&mut body, &main_ctx())
         .expect("disabled transform must be Ok");
     let after = serde_json::to_vec(&body).unwrap();
     assert_eq!(
@@ -92,7 +96,7 @@ fn enabled_but_nothing_shrinks_is_byte_equal() {
     };
     let mut body = tiny_array_body();
     let before = serde_json::to_vec(&body).unwrap();
-    t.transform(&mut body)
+    t.transform(&mut body, &main_ctx())
         .expect("enabled transform must be Ok on a valid body");
     let after = serde_json::to_vec(&body).unwrap();
     assert_eq!(
@@ -149,7 +153,7 @@ fn shrink_metrics(text: &str) -> (usize, usize, usize, usize) {
     let mut body = body_with_tool_result(text);
     let before_content = tool_result_content(&body).len();
     let before_total = serde_json::to_vec(&body).unwrap().len();
-    t.transform(&mut body)
+    t.transform(&mut body, &main_ctx())
         .expect("enabled transform must be Ok");
     let after_content = tool_result_content(&body).len();
     let after_total = serde_json::to_vec(&body).unwrap().len();
@@ -332,7 +336,7 @@ fn hot_zones_history_and_numeric_precision_preserved() {
         .expect("tool_result content is a string")
         .len();
 
-    t.transform(&mut body)
+    t.transform(&mut body, &main_ctx())
         .expect("enabled transform must be Ok");
 
     // (a) Cache-hot top-level zones byte-identical.
@@ -440,7 +444,7 @@ fn transform_bytes_preserves_noncanonical_cache_hot_zone_verbatim() {
     );
 
     let out = t
-        .transform_bytes(&raw)
+        .transform_bytes(&raw, &main_ctx())
         .expect("enabled transform must be Ok")
         .expect("a 200-dict tool_result must be compressed -> Some(bytes)");
 
@@ -478,7 +482,9 @@ fn transform_bytes_nochange_returns_none() {
         settings: HeadroomSettings { compression: true },
     };
     let raw = serde_json::to_vec(&tiny_array_body()).unwrap();
-    let out = t.transform_bytes(&raw).expect("transform must be Ok");
+    let out = t
+        .transform_bytes(&raw, &main_ctx())
+        .expect("transform must be Ok");
     assert!(
         out.is_none(),
         "NoChange must map to None (forward original bytes verbatim)"
@@ -492,7 +498,9 @@ fn transform_bytes_disabled_returns_none() {
         settings: HeadroomSettings { compression: false },
     };
     let raw = serde_json::to_vec(&compressible_body()).unwrap();
-    let out = t.transform_bytes(&raw).expect("transform must be Ok");
+    let out = t
+        .transform_bytes(&raw, &main_ctx())
+        .expect("transform must be Ok");
     assert!(out.is_none(), "disabled compression must map to None");
 }
 
@@ -572,7 +580,7 @@ fn transform_bytes_reads_model_from_body_for_tokenizer_gate() {
         settings: HeadroomSettings { compression: true },
     };
     let via_transform = t
-        .transform_bytes(&raw)
+        .transform_bytes(&raw, &main_ctx())
         .expect("transform must be Ok")
         .expect(
             "body declares a tiktoken model -> Some (a hardcoded DEFAULT_MODEL would yield None)",

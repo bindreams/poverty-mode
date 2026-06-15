@@ -1,12 +1,13 @@
 use super::*;
 use crate::config::{CentralSettings, ProxySettings};
-use crate::proxy::pino::{PinoSettings, TailTtl};
+use crate::proxy::pino::{CacheTtl, PinoSettings};
 use crate::proxy::ProxyName;
 
 fn pino() -> ProxySettings {
     ProxySettings::Pino(PinoSettings {
         auto_cache: true,
-        tail_ttl: TailTtl::FiveMin,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: vec![],
         strip_ansi: true,
         model_override: None,
@@ -19,7 +20,8 @@ fn settings_of_lists_fields_in_fixed_order() {
         settings_of(ProxyName::Pino),
         &[
             SettingId::AutoCache,
-            SettingId::TailTtl,
+            SettingId::MainTtl,
+            SettingId::SubTtl,
             SettingId::DropTools,
             SettingId::StripAnsi,
             SettingId::ModelOverride
@@ -34,7 +36,8 @@ fn settings_of_lists_fields_in_fixed_order() {
 #[test]
 fn kind_classifies_each_setting() {
     assert_eq!(SettingId::AutoCache.kind(), SettingKind::Bool);
-    assert_eq!(SettingId::TailTtl.kind(), SettingKind::Enum);
+    assert_eq!(SettingId::MainTtl.kind(), SettingKind::Enum);
+    assert_eq!(SettingId::SubTtl.kind(), SettingKind::Enum);
     assert_eq!(SettingId::DropTools.kind(), SettingKind::List);
     assert_eq!(SettingId::ModelOverride.kind(), SettingKind::Text);
     assert_eq!(SettingId::Port.kind(), SettingKind::Number);
@@ -47,11 +50,19 @@ fn toggle_bool_flips_value() {
 }
 #[test]
 fn cycle_enum_wraps() {
+    // pino() seeds main=1h, sub=5m.
+    // main_ttl flips 1h -> 5m -> 1h, independent of sub_ttl.
     let mut s = pino();
-    SettingId::TailTtl.cycle(&mut s, 1);
-    assert_eq!(render_value(&s, SettingId::TailTtl), "‹ 1h ›");
-    SettingId::TailTtl.cycle(&mut s, 1);
-    assert_eq!(render_value(&s, SettingId::TailTtl), "‹ 5m ›");
+    SettingId::MainTtl.cycle(&mut s, 1);
+    assert_eq!(render_value(&s, SettingId::MainTtl), "‹ 5m ›");
+    SettingId::MainTtl.cycle(&mut s, 1);
+    assert_eq!(render_value(&s, SettingId::MainTtl), "‹ 1h ›");
+    // sub_ttl flips 5m -> 1h -> 5m, leaving main_ttl untouched.
+    SettingId::SubTtl.cycle(&mut s, 1);
+    assert_eq!(render_value(&s, SettingId::SubTtl), "‹ 1h ›");
+    SettingId::SubTtl.cycle(&mut s, 1);
+    assert_eq!(render_value(&s, SettingId::SubTtl), "‹ 5m ›");
+    assert_eq!(render_value(&s, SettingId::MainTtl), "‹ 1h ›");
 }
 #[test]
 fn render_defaults_for_text_and_list() {
@@ -96,7 +107,7 @@ fn describe_reflects_key_settings() {
     // collapsed-row description must reflect live settings (spec §3.4)
     let s = pino();
     let d = describe(ProxyName::Pino, &s);
-    assert!(d.contains("5m")); // tail_ttl
+    assert!(d.contains("1h/5m")); // main_ttl/sub_ttl
     assert!(d.to_lowercase().contains("cache")); // auto_cache on
     let hr_on =
         ProxySettings::Headroom(crate::proxy::headroom::HeadroomSettings { compression: true });

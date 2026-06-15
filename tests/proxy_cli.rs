@@ -22,7 +22,7 @@ fn proxy_subcommand_binds_prints_ready_line_with_real_port() {
             "--run-id",
             "01J0CLIRUN",
             "--auto-cache",
-            "--tail-ttl",
+            "--main-ttl",
             "1h",
             "--no-strip-ansi",
         ])

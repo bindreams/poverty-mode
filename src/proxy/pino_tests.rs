@@ -1,10 +1,19 @@
 use super::*;
 
+fn main_ctx() -> crate::proxy::RequestContext {
+    crate::proxy::RequestContext::default()
+}
+
+fn sub_ctx() -> crate::proxy::RequestContext {
+    crate::proxy::RequestContext { is_subagent: true }
+}
+
 #[test]
 fn pino_settings_default_round_trips_yaml() {
     let s = PinoSettings {
         auto_cache: true,
-        tail_ttl: TailTtl::FiveMin,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: vec![],
         strip_ansi: true,
         model_override: None,
@@ -15,37 +24,37 @@ fn pino_settings_default_round_trips_yaml() {
 }
 
 #[test]
-fn tail_ttl_serializes_as_short_strings() {
+fn cache_ttl_serializes_as_short_strings() {
     assert_eq!(
-        serde_yaml::to_string(&TailTtl::FiveMin).unwrap().trim(),
+        serde_yaml::to_string(&CacheTtl::FiveMin).unwrap().trim(),
         "5m"
     );
     assert_eq!(
-        serde_yaml::to_string(&TailTtl::OneHour).unwrap().trim(),
+        serde_yaml::to_string(&CacheTtl::OneHour).unwrap().trim(),
         "1h"
     );
-    let five: TailTtl = serde_yaml::from_str("\"5m\"").unwrap();
-    let hour: TailTtl = serde_yaml::from_str("\"1h\"").unwrap();
-    assert_eq!(five, TailTtl::FiveMin);
-    assert_eq!(hour, TailTtl::OneHour);
+    let five: CacheTtl = serde_yaml::from_str("\"5m\"").unwrap();
+    let hour: CacheTtl = serde_yaml::from_str("\"1h\"").unwrap();
+    assert_eq!(five, CacheTtl::FiveMin);
+    assert_eq!(hour, CacheTtl::OneHour);
 }
 
 #[test]
-fn tail_ttl_invalid_value_falls_back_to_five_min() {
+fn cache_ttl_invalid_value_falls_back_to_five_min() {
     // R22/R23k: the custom lenient Deserialize maps any invalid string to
     // FiveMin (Node parseTailTtl parity) instead of erroring. M2 also asserts
     // this from the config layer; M4 relies on it.
-    let parsed: TailTtl = serde_yaml::from_str("\"7m\"").unwrap();
-    assert_eq!(parsed, TailTtl::FiveMin);
-    let parsed: TailTtl = serde_yaml::from_str("\"\"").unwrap();
-    assert_eq!(parsed, TailTtl::FiveMin);
-    let parsed: TailTtl = serde_yaml::from_str("\"banana\"").unwrap();
-    assert_eq!(parsed, TailTtl::FiveMin);
+    let parsed: CacheTtl = serde_yaml::from_str("\"7m\"").unwrap();
+    assert_eq!(parsed, CacheTtl::FiveMin);
+    let parsed: CacheTtl = serde_yaml::from_str("\"\"").unwrap();
+    assert_eq!(parsed, CacheTtl::FiveMin);
+    let parsed: CacheTtl = serde_yaml::from_str("\"banana\"").unwrap();
+    assert_eq!(parsed, CacheTtl::FiveMin);
 }
 
 #[test]
 fn pino_settings_rejects_unknown_fields() {
-    let yaml = "auto_cache: true\ntail_ttl: 5m\ndrop_tools: []\nstrip_ansi: true\nmodel_override: null\nbogus: 1\n";
+    let yaml = "auto_cache: true\nmain_ttl: 1h\nsub_ttl: 5m\ndrop_tools: []\nstrip_ansi: true\nmodel_override: null\nbogus: 1\n";
     let err = serde_yaml::from_str::<PinoSettings>(yaml).unwrap_err();
     assert!(
         err.to_string().contains("bogus") || err.to_string().contains("unknown field"),
@@ -53,14 +62,15 @@ fn pino_settings_rejects_unknown_fields() {
     );
 }
 
-// M4.1 ===== lock the PinoSettings / TailTtl serde wire shape + lenient
-// tail_ttl fallback (Node parseTailTtl parity). `PinoSettings`/`TailTtl` are
+// M4.1 ===== lock the PinoSettings / CacheTtl serde wire shape + lenient
+// cache-TTL fallback (Node parseTailTtl parity). `PinoSettings`/`CacheTtl` are
 // already in scope via `use super::*;` at the top of this file.
 
 fn sample_settings() -> PinoSettings {
     PinoSettings {
         auto_cache: true,
-        tail_ttl: TailTtl::FiveMin,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: vec!["NotebookEdit".to_string(), "CronList".to_string()],
         strip_ansi: true,
         model_override: None,
@@ -71,17 +81,17 @@ fn sample_settings() -> PinoSettings {
 // --- types already exist; NOT a red->green cycle) -----
 
 #[test]
-fn tail_ttl_serializes_as_human_strings() {
-    assert_eq!(serde_json::to_string(&TailTtl::FiveMin).unwrap(), "\"5m\"");
-    assert_eq!(serde_json::to_string(&TailTtl::OneHour).unwrap(), "\"1h\"");
+fn cache_ttl_serializes_as_human_strings() {
+    assert_eq!(serde_json::to_string(&CacheTtl::FiveMin).unwrap(), "\"5m\"");
+    assert_eq!(serde_json::to_string(&CacheTtl::OneHour).unwrap(), "\"1h\"");
 }
 
 #[test]
-fn tail_ttl_deserializes_from_human_strings() {
-    let five: TailTtl = serde_json::from_str("\"5m\"").unwrap();
-    let hour: TailTtl = serde_json::from_str("\"1h\"").unwrap();
-    assert_eq!(five, TailTtl::FiveMin);
-    assert_eq!(hour, TailTtl::OneHour);
+fn cache_ttl_deserializes_from_human_strings() {
+    let five: CacheTtl = serde_json::from_str("\"5m\"").unwrap();
+    let hour: CacheTtl = serde_json::from_str("\"1h\"").unwrap();
+    assert_eq!(five, CacheTtl::FiveMin);
+    assert_eq!(hour, CacheTtl::OneHour);
 }
 
 #[test]
@@ -95,12 +105,12 @@ fn pino_settings_round_trips_through_json() {
 #[test]
 fn pino_settings_yaml_shape_matches_config_file() {
     // Mirrors the config.yaml default block in the design doc (spec 5.2):
-    // settings: { auto_cache: true, tail_ttl: 5m, drop_tools: [], strip_ansi: true, model_override: null }
-    let yaml =
-        "auto_cache: true\ntail_ttl: 5m\ndrop_tools: []\nstrip_ansi: true\nmodel_override: null\n";
+    // settings: { auto_cache: true, main_ttl: 1h, sub_ttl: 5m, drop_tools: [], strip_ansi: true, model_override: null }
+    let yaml = "auto_cache: true\nmain_ttl: 1h\nsub_ttl: 5m\ndrop_tools: []\nstrip_ansi: true\nmodel_override: null\n";
     let s: PinoSettings = serde_yaml::from_str(yaml).unwrap();
     assert!(s.auto_cache);
-    assert_eq!(s.tail_ttl, TailTtl::FiveMin);
+    assert_eq!(s.main_ttl, CacheTtl::OneHour);
+    assert_eq!(s.sub_ttl, CacheTtl::FiveMin);
     assert!(s.drop_tools.is_empty());
     assert!(s.strip_ansi);
     assert_eq!(s.model_override, None);
@@ -113,29 +123,29 @@ fn pino_settings_yaml_shape_matches_config_file() {
 // --- + trim parity this task adds. -----
 
 #[test]
-fn tail_ttl_invalid_value_falls_back_to_five_min_json() {
-    let v: TailTtl = serde_json::from_str("\"10m\"").unwrap();
+fn cache_ttl_invalid_value_falls_back_to_five_min_json() {
+    let v: CacheTtl = serde_json::from_str("\"10m\"").unwrap();
     assert_eq!(
         v,
-        TailTtl::FiveMin,
-        "unknown tail_ttl must degrade to 5m, not error"
+        CacheTtl::FiveMin,
+        "unknown cache TTL must degrade to 5m, not error"
     );
-    let from_yaml: TailTtl = serde_yaml::from_str("nonsense").unwrap();
-    assert_eq!(from_yaml, TailTtl::FiveMin);
+    let from_yaml: CacheTtl = serde_yaml::from_str("nonsense").unwrap();
+    assert_eq!(from_yaml, CacheTtl::FiveMin);
 }
 
 #[test]
-fn tail_ttl_is_case_insensitive_like_node() {
+fn cache_ttl_is_case_insensitive_like_node() {
     // Node lowercases+trims before matching: "  1H " -> "1h".
-    let v: TailTtl = serde_json::from_str("\"  1H \"").unwrap();
-    assert_eq!(v, TailTtl::OneHour);
-    let v2: TailTtl = serde_json::from_str("\"5M\"").unwrap();
-    assert_eq!(v2, TailTtl::FiveMin);
+    let v: CacheTtl = serde_json::from_str("\"  1H \"").unwrap();
+    assert_eq!(v, CacheTtl::OneHour);
+    let v2: CacheTtl = serde_json::from_str("\"5M\"").unwrap();
+    assert_eq!(v2, CacheTtl::FiveMin);
 }
 
 // M4.2 ===== real dispatch skeleton + cache constants + no-op gate. With every
 // feature off, `transform` must be a byte-faithful passthrough; the cache
-// constants must match the Node config. (`PinoSettings`/`TailTtl`/`PinoTransform`
+// constants must match the Node config. (`PinoSettings`/`CacheTtl`/`PinoTransform`
 // are in scope via `use super::*;`; the constants + trait are imported below.)
 
 use super::{BREAKPOINT_CEILING, MIN_SYSTEM_CACHE_CHARS};
@@ -145,7 +155,8 @@ use serde_json::json;
 fn no_op_settings() -> PinoSettings {
     PinoSettings {
         auto_cache: false,
-        tail_ttl: TailTtl::FiveMin,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: vec![],
         strip_ansi: false,
         model_override: None,
@@ -172,7 +183,7 @@ fn all_features_off_is_a_no_op() {
         ]
     });
     let mut body = original.clone();
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     assert_eq!(
         body, original,
         "no feature enabled => byte-faithful passthrough"
@@ -185,7 +196,7 @@ fn non_object_body_is_left_untouched_and_ok() {
         settings: no_op_settings(),
     };
     let mut body = json!("not an object");
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     assert_eq!(body, json!("not an object"));
 }
 
@@ -197,7 +208,8 @@ fn non_object_body_is_left_untouched_and_ok() {
 fn model_override_settings(model: &str) -> PinoSettings {
     PinoSettings {
         auto_cache: false,
-        tail_ttl: TailTtl::FiveMin,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: vec![],
         strip_ansi: false,
         model_override: Some(model.to_string()),
@@ -210,7 +222,7 @@ fn model_override_replaces_top_level_model_field() {
         settings: model_override_settings("claude-opus-4-6"),
     };
     let mut body = json!({ "model": "claude-sonnet-4-5", "messages": [] });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     assert_eq!(body["model"], json!("claude-opus-4-6"));
 }
 
@@ -224,7 +236,7 @@ fn model_override_rewrites_source_id_in_system_string() {
         "system": "You are claude-opus-4-7-20260101, also called Opus 4.7.",
         "messages": []
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     assert_eq!(
         body["system"],
         json!("You are claude-opus-4-6, also called Opus 4.6.")
@@ -244,7 +256,7 @@ fn model_override_rewrites_source_id_in_system_blocks_array() {
         ],
         "messages": []
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     // Override base = claude-sonnet-4-6 (date suffix stripped) => friendly "Sonnet 4.6".
     // The bare source id (no date) is replaced with the FULL override INCLUDING the date.
     assert_eq!(
@@ -264,7 +276,7 @@ fn model_override_unknown_target_uses_base_id_as_friendly_name() {
         "system": "id claude-opus-4-7 and name Opus 4.7",
         "messages": []
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     // Unknown base => friendly falls back to the base id itself (Node `|| base`).
     assert_eq!(
         body["system"],
@@ -282,7 +294,7 @@ fn model_override_none_leaves_system_untouched() {
         "system": "I am claude-opus-4-7 (Opus 4.7)",
         "messages": []
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     assert_eq!(body["model"], json!("claude-opus-4-7"));
     assert_eq!(body["system"], json!("I am claude-opus-4-7 (Opus 4.7)"));
 }
@@ -299,7 +311,7 @@ fn model_override_with_literal_dollar_is_not_treated_as_template() {
         "system": "self: claude-opus-4-7",
         "messages": []
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     assert_eq!(body["model"], json!("claude-$weird-4-6"));
     assert_eq!(body["system"], json!("self: claude-$weird-4-6"));
 }
@@ -317,7 +329,7 @@ fn model_override_friendly_with_literal_dollar_is_not_treated_as_template() {
         "system": "name Opus 4.7",
         "messages": []
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     assert_eq!(body["system"], json!("name claude-$x"));
 }
 
@@ -328,7 +340,8 @@ fn model_override_friendly_with_literal_dollar_is_not_treated_as_template() {
 fn strip_only_settings() -> PinoSettings {
     PinoSettings {
         auto_cache: false,
-        tail_ttl: TailTtl::FiveMin,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: vec![],
         strip_ansi: true,
         model_override: None,
@@ -345,7 +358,7 @@ fn strip_ansi_cleans_string_message_content() {
             { "role": "user", "content": "\u{1b}[31mred\u{1b}[0m text" }
         ]
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     assert_eq!(body["messages"][0]["content"], json!("red text"));
 }
 
@@ -362,7 +375,7 @@ fn strip_ansi_cleans_block_text_and_block_content_string() {
             ] }
         ]
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     assert_eq!(body["messages"][0]["content"][0]["text"], json!("bold"));
     assert_eq!(body["messages"][0]["content"][1]["content"], json!("ok"));
 }
@@ -381,7 +394,7 @@ fn strip_ansi_cleans_nested_tool_result_content_array() {
             ] }
         ]
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     assert_eq!(
         body["messages"][0]["content"][0]["content"][0]["text"],
         json!("warn line")
@@ -396,7 +409,7 @@ fn strip_ansi_disabled_leaves_escapes_intact() {
     let mut body = json!({
         "messages": [ { "role": "user", "content": "\u{1b}[31mred\u{1b}[0m" } ]
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     assert_eq!(
         body["messages"][0]["content"],
         json!("\u{1b}[31mred\u{1b}[0m")
@@ -412,7 +425,7 @@ fn strip_ansi_only_matches_csi_sgr_form_not_arbitrary_text() {
     let mut body = json!({
         "messages": [ { "role": "user", "content": "literal [31m stays" } ]
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     assert_eq!(body["messages"][0]["content"], json!("literal [31m stays"));
 }
 
@@ -423,7 +436,8 @@ fn strip_ansi_only_matches_csi_sgr_form_not_arbitrary_text() {
 fn drop_settings(names: &[&str]) -> PinoSettings {
     PinoSettings {
         auto_cache: false,
-        tail_ttl: TailTtl::FiveMin,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: names.iter().map(|s| s.to_string()).collect(),
         strip_ansi: false,
         model_override: None,
@@ -444,7 +458,7 @@ fn drop_tools_removes_named_tools_from_tools_array() {
         ],
         "messages": []
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     let names: Vec<&str> = body["tools"]
         .as_array()
         .unwrap()
@@ -461,7 +475,7 @@ fn drop_tools_empty_leaves_tools_untouched() {
     };
     let original = json!({ "tools": [ { "name": "Bash" }, { "name": "Read" } ], "messages": [] });
     let mut body = original.clone();
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     assert_eq!(body, original);
 }
 
@@ -475,7 +489,7 @@ fn drop_tools_scrubs_names_from_deferred_tools_reminder_in_string_content() {
         "tools": [],
         "messages": [ { "role": "user", "content": reminder } ]
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     let out = body["messages"][0]["content"].as_str().unwrap();
     assert!(
         !out.contains("NotebookEdit"),
@@ -497,7 +511,7 @@ fn drop_tools_scrubs_names_from_toolsearch_reminder_in_block_text() {
         "tools": [],
         "messages": [ { "role": "user", "content": [ { "type": "text", "text": reminder } ] } ]
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     let out = body["messages"][0]["content"][0]["text"].as_str().unwrap();
     assert!(!out.contains("Monitor"));
     assert!(out.contains("Glob"));
@@ -513,7 +527,7 @@ fn drop_tools_does_not_touch_reminders_without_deferred_or_toolsearch() {
         "tools": [],
         "messages": [ { "role": "user", "content": reminder } ]
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     // No "deferred tools"/"ToolSearch" marker => block left verbatim, name stays.
     assert_eq!(body["messages"][0]["content"], json!(reminder));
 }
@@ -528,7 +542,7 @@ fn drop_tools_scrubs_only_inside_reminder_not_surrounding_prose() {
         "tools": [],
         "messages": [ { "role": "user", "content": text } ]
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     let out = body["messages"][0]["content"].as_str().unwrap();
     assert!(out.starts_with("Keep NotebookEdit here."));
     assert!(out.trim_end().ends_with("NotebookEdit after."));
@@ -553,7 +567,7 @@ fn drop_tools_reminder_rebuild_preserves_crlf_line_endings() {
     };
     let reminder = "<system-reminder>\r\ndeferred tools:\r\nDrop\r\nKeep\r\n</system-reminder>";
     let mut body = json!({ "tools": [], "messages": [ { "role": "user", "content": reminder } ] });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     // "Drop\r".trim() == "Drop" -> dropped; every other "\r"-suffixed line kept verbatim.
     let expected = "<system-reminder>\r\ndeferred tools:\r\nKeep\r\n</system-reminder>";
     assert_eq!(body["messages"][0]["content"], json!(expected));
@@ -567,7 +581,7 @@ fn drop_tools_reminder_rebuild_preserves_embedded_angle_brackets() {
     };
     let reminder = "<system-reminder>\ndeferred tools:\nuse <T> generics\nDrop\n</system-reminder>";
     let mut body = json!({ "tools": [], "messages": [ { "role": "user", "content": reminder } ] });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     let expected = "<system-reminder>\ndeferred tools:\nuse <T> generics\n</system-reminder>";
     assert_eq!(body["messages"][0]["content"], json!(expected));
 }
@@ -580,7 +594,7 @@ fn drop_tools_reminder_rebuild_preserves_blank_and_whitespace_lines() {
     };
     let reminder = "<system-reminder>\ndeferred tools:\n\nDrop\n  \nKeep\n</system-reminder>";
     let mut body = json!({ "tools": [], "messages": [ { "role": "user", "content": reminder } ] });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     let expected = "<system-reminder>\ndeferred tools:\n\n  \nKeep\n</system-reminder>";
     assert_eq!(body["messages"][0]["content"], json!(expected));
 }
@@ -594,7 +608,7 @@ fn drop_tools_reminder_line_match_is_exact_trim_not_substring() {
     };
     let reminder = "<system-reminder>\ndeferred tools:\nNotebookEdit\nNotebookEditExtra\n  NotebookEdit  \n</system-reminder>";
     let mut body = json!({ "tools": [], "messages": [ { "role": "user", "content": reminder } ] });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     let out = body["messages"][0]["content"].as_str().unwrap();
     // The bare line and the whitespace-padded line drop; "NotebookEditExtra" stays.
     assert!(
@@ -613,7 +627,8 @@ fn restructure_settings() -> PinoSettings {
     // no model override) so these tests isolate restructureV123.
     PinoSettings {
         auto_cache: false,
-        tail_ttl: TailTtl::FiveMin,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: vec![],
         strip_ansi: false,
         model_override: None,
@@ -630,7 +645,7 @@ fn restructure_noop_for_single_message() {
         "messages": [ { "role": "user", "content": "ToolSearch hint, single turn" } ]
     });
     let mut body = original.clone();
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     assert_eq!(
         body, original,
         "single-message body must be untouched by restructure"
@@ -648,7 +663,7 @@ fn restructure_normalizes_string_content_to_arrays() {
             { "role": "assistant", "content": "second turn" }
         ]
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     assert_eq!(
         body["messages"][0]["content"],
         json!([{ "type": "text", "text": "first turn" }])
@@ -674,7 +689,7 @@ fn restructure_extracts_core_context_into_msg0_and_sets_role_user() {
             ] }
         ]
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     // Core block moved to the FRONT of msg0; msg0 prose retained after it; role coerced.
     assert_eq!(body["messages"][0]["role"], json!("user"));
     assert_eq!(
@@ -707,7 +722,7 @@ fn restructure_dedupes_core_blocks_by_text_first_occurrence_wins() {
             ] }
         ]
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     // Only ONE copy of the duplicate core block, prepended to msg0 before its prose.
     assert_eq!(
         body["messages"][0]["content"],
@@ -749,7 +764,7 @@ fn restructure_removes_stale_scaffolding_from_history_but_not_tail() {
             ] }
         ]
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     // History stale-removable block dropped; non-stale prose kept.
     assert_eq!(
         body["messages"][0]["content"],
@@ -778,7 +793,7 @@ fn restructure_local_command_text_is_not_core_context() {
             ] }
         ]
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     // The local-command block is NOT core (so not extracted to msg0), and since it
     // is the TAIL it is also NOT stale-removed: it stays in the tail message.
     assert_eq!(
@@ -809,7 +824,7 @@ fn restructure_prunes_emptied_messages() {
             { "role": "user", "content": [ { "type": "text", "text": "tail" } ] }
         ]
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     let texts: Vec<&str> = body["messages"]
         .as_array()
         .unwrap()
@@ -837,7 +852,7 @@ fn restructure_preserves_non_text_blocks() {
         ]
     });
     let original = body.clone();
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     // No core blocks, no stale-removable text blocks => only string->array no-op
     // (already arrays) and no pruning. Body is unchanged.
     assert_eq!(body, original);
@@ -855,7 +870,7 @@ fn restructure_no_core_blocks_does_not_force_msg0_role() {
             { "role": "user", "content": [ { "type": "text", "text": "tail" } ] }
         ]
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     // Role left as the original "assistant" because no core blocks were collected.
     assert_eq!(body["messages"][0]["role"], json!("assistant"));
     assert_eq!(
@@ -996,7 +1011,7 @@ fn strip_small_system_uses_utf16_length_at_boundary() {
 
 use super::inject_breakpoint_if_absent;
 
-fn cc(block: &serde_json::Value) -> Option<&serde_json::Value> {
+fn cc_of(block: &serde_json::Value) -> Option<&serde_json::Value> {
     block.get("cache_control")
 }
 
@@ -1017,31 +1032,32 @@ fn inject_places_tools_system_msg0_tail_within_cap() {
             { "role": "user", "content": [ { "type": "text", "text": "latest" } ] }
         ]
     });
-    let tail_paths = inject_breakpoint_if_absent(&mut body, TailTtl::FiveMin);
+    let tail_paths = inject_breakpoint_if_absent(&mut body, CacheTtl::FiveMin);
 
+    // Uniform TTL: every injected slot carries the passed ttl (5m).
     let tools = body["tools"].as_array().unwrap();
     assert_eq!(
-        cc(&tools[1]).unwrap(),
-        &json!({ "type": "ephemeral", "ttl": "1h" })
+        cc_of(&tools[1]).unwrap(),
+        &json!({ "type": "ephemeral", "ttl": "5m" })
     );
-    assert!(cc(&tools[0]).is_none());
+    assert!(cc_of(&tools[0]).is_none());
 
     let system = body["system"].as_array().unwrap();
     assert_eq!(
-        cc(&system[1]).unwrap(),
-        &json!({ "type": "ephemeral", "ttl": "1h" })
+        cc_of(&system[1]).unwrap(),
+        &json!({ "type": "ephemeral", "ttl": "5m" })
     );
-    assert!(cc(&system[0]).is_none());
+    assert!(cc_of(&system[0]).is_none());
 
     let msg0 = body["messages"][0]["content"].as_array().unwrap();
     assert_eq!(
-        cc(&msg0[1]).unwrap(),
-        &json!({ "type": "ephemeral", "ttl": "1h" })
+        cc_of(&msg0[1]).unwrap(),
+        &json!({ "type": "ephemeral", "ttl": "5m" })
     );
 
     let last_block = &body["messages"][2]["content"][0];
     assert_eq!(
-        cc(last_block).unwrap(),
+        cc_of(last_block).unwrap(),
         &json!({ "type": "ephemeral", "ttl": "5m" })
     );
     assert_eq!(tail_paths, vec!["/messages/2/content/0".to_string()]);
@@ -1055,8 +1071,8 @@ fn inject_skips_tools_when_already_has_breakpoint() {
         "tools": [ { "name": "Bash", "cache_control": { "type": "ephemeral", "ttl": "5m" } }, { "name": "Read" } ],
         "messages": [ { "role": "user", "content": [ { "type": "text", "text": "hi" } ] } ]
     });
-    inject_breakpoint_if_absent(&mut body, TailTtl::FiveMin);
-    assert!(cc(&body["tools"][1]).is_none());
+    inject_breakpoint_if_absent(&mut body, CacheTtl::FiveMin);
+    assert!(cc_of(&body["tools"][1]).is_none());
 }
 
 #[test]
@@ -1065,11 +1081,11 @@ fn inject_converts_string_system_to_cached_array() {
         "system": "you are a helpful assistant",
         "messages": [ { "role": "user", "content": [ { "type": "text", "text": "hi" } ] } ]
     });
-    inject_breakpoint_if_absent(&mut body, TailTtl::FiveMin);
+    inject_breakpoint_if_absent(&mut body, CacheTtl::FiveMin);
     assert_eq!(
         body["system"],
         json!([ { "type": "text", "text": "you are a helpful assistant",
-                  "cache_control": { "type": "ephemeral", "ttl": "1h" } } ])
+                  "cache_control": { "type": "ephemeral", "ttl": "5m" } } ])
     );
 }
 
@@ -1079,11 +1095,11 @@ fn inject_skips_msg0_breakpoint_when_single_message() {
     let mut body = json!({
         "messages": [ { "role": "user", "content": [ { "type": "text", "text": "only" } ] } ]
     });
-    let tail_paths = inject_breakpoint_if_absent(&mut body, TailTtl::OneHour);
+    let tail_paths = inject_breakpoint_if_absent(&mut body, CacheTtl::OneHour);
     let blocks = body["messages"][0]["content"].as_array().unwrap();
     assert_eq!(count_cache_breakpoints(&body), 1);
     assert_eq!(
-        cc(&blocks[0]).unwrap(),
+        cc_of(&blocks[0]).unwrap(),
         &json!({ "type": "ephemeral", "ttl": "1h" })
     );
     assert_eq!(tail_paths, vec!["/messages/0/content/0".to_string()]);
@@ -1094,7 +1110,7 @@ fn inject_normalizes_string_message_tail_into_array() {
     let mut body = json!({
         "messages": [ { "role": "user", "content": "plain string turn" } ]
     });
-    inject_breakpoint_if_absent(&mut body, TailTtl::FiveMin);
+    inject_breakpoint_if_absent(&mut body, CacheTtl::FiveMin);
     assert_eq!(
         body["messages"][0]["content"],
         json!([ { "type": "text", "text": "plain string turn",
@@ -1108,10 +1124,10 @@ fn inject_strips_small_system_breakpoint_then_reuses_slot() {
         "system": [ { "type": "text", "text": "tiny", "cache_control": { "type": "ephemeral" } } ],
         "messages": [ { "role": "user", "content": [ { "type": "text", "text": "hi" } ] } ]
     });
-    inject_breakpoint_if_absent(&mut body, TailTtl::FiveMin);
+    inject_breakpoint_if_absent(&mut body, CacheTtl::FiveMin);
     assert_eq!(
-        cc(&body["system"][0]).unwrap(),
-        &json!({ "type": "ephemeral", "ttl": "1h" })
+        cc_of(&body["system"][0]).unwrap(),
+        &json!({ "type": "ephemeral", "ttl": "5m" })
     );
 }
 
@@ -1125,7 +1141,7 @@ fn inject_respects_cap_when_four_breakpoints_already_present() {
             { "role": "user", "content": [ { "type": "text", "text": "m1", "cache_control": { "type": "ephemeral" } } ] }
         ]
     });
-    let tail_paths = inject_breakpoint_if_absent(&mut body, TailTtl::FiveMin);
+    let tail_paths = inject_breakpoint_if_absent(&mut body, CacheTtl::FiveMin);
     assert_eq!(count_cache_breakpoints(&body), 4, "cap not exceeded");
     assert!(tail_paths.is_empty(), "no new tail injected at the cap");
 }
@@ -1142,11 +1158,11 @@ fn inject_len_gt_one_only_msg0_cacheable_no_duplicate_tail() {
             { "role": "assistant", "content": [ { "type": "tool_use", "id": "t", "name": "X", "input": {} } ] }
         ]
     });
-    let tail_paths = inject_breakpoint_if_absent(&mut body, TailTtl::FiveMin);
-    // msg0 block keeps its 1h (msg0 pass), tail pass adds nothing.
+    let tail_paths = inject_breakpoint_if_absent(&mut body, CacheTtl::FiveMin);
+    // msg0 block keeps its 5m (msg0 pass), tail pass adds nothing.
     assert_eq!(
-        cc(&body["messages"][0]["content"][0]).unwrap(),
-        &json!({ "type": "ephemeral", "ttl": "1h" })
+        cc_of(&body["messages"][0]["content"][0]).unwrap(),
+        &json!({ "type": "ephemeral", "ttl": "5m" })
     );
     assert_eq!(
         count_cache_breakpoints(&body),
@@ -1155,7 +1171,7 @@ fn inject_len_gt_one_only_msg0_cacheable_no_duplicate_tail() {
     );
     assert!(
         tail_paths.is_empty(),
-        "no 5m tail added when the only cacheable block is msg0's"
+        "no extra tail added when the only cacheable block is msg0's"
     );
 }
 
@@ -1167,7 +1183,7 @@ use super::{normalize_tail_breakpoints, rewrite_cache_control};
 use std::collections::HashSet;
 
 #[test]
-fn normalize_tail_forces_last_message_breakpoints_to_tail_ttl() {
+fn normalize_tail_forces_last_message_breakpoints_to_ttl() {
     let mut body = json!({
         "messages": [
             { "role": "user", "content": [ { "type": "text", "text": "a", "cache_control": { "type": "ephemeral", "ttl": "1h" } } ] },
@@ -1177,7 +1193,7 @@ fn normalize_tail_forces_last_message_breakpoints_to_tail_ttl() {
             ] }
         ]
     });
-    let paths = normalize_tail_breakpoints(&mut body, TailTtl::FiveMin);
+    let paths = normalize_tail_breakpoints(&mut body, CacheTtl::FiveMin);
     assert_eq!(
         body["messages"][1]["content"][0]["cache_control"]["ttl"],
         json!("5m")
@@ -1199,7 +1215,7 @@ fn normalize_tail_forces_last_message_breakpoints_to_tail_ttl() {
 #[test]
 fn normalize_tail_empty_when_no_messages() {
     let mut body = json!({ "messages": [] });
-    let paths = normalize_tail_breakpoints(&mut body, TailTtl::OneHour);
+    let paths = normalize_tail_breakpoints(&mut body, CacheTtl::OneHour);
     assert!(paths.is_empty());
 }
 
@@ -1212,12 +1228,12 @@ fn normalize_tail_records_block_path_not_cache_control_path() {
             { "role": "user", "content": [ { "type": "text", "text": "only", "cache_control": { "type": "ephemeral", "ttl": "1h" } } ] }
         ]
     });
-    let paths = normalize_tail_breakpoints(&mut body, TailTtl::FiveMin);
+    let paths = normalize_tail_breakpoints(&mut body, CacheTtl::FiveMin);
     assert_eq!(paths, vec!["/messages/0/content/0".to_string()]);
 }
 
 #[test]
-fn rewrite_bumps_every_ephemeral_to_1h_except_skip() {
+fn rewrite_bumps_every_ephemeral_to_ttl_except_skip() {
     let mut body = json!({
         "tools": [ { "name": "x", "cache_control": { "type": "ephemeral", "ttl": "5m" } } ],
         "system": [ { "type": "text", "text": "s", "cache_control": { "type": "ephemeral" } } ],
@@ -1229,7 +1245,7 @@ fn rewrite_bumps_every_ephemeral_to_1h_except_skip() {
     });
     let mut skip: HashSet<String> = HashSet::new();
     skip.insert("/messages/0/content/0".to_string());
-    rewrite_cache_control(&mut body, &skip);
+    rewrite_cache_control(&mut body, &skip, CacheTtl::OneHour);
     assert_eq!(body["tools"][0]["cache_control"]["ttl"], json!("1h"));
     assert_eq!(body["system"][0]["cache_control"]["ttl"], json!("1h"));
     assert_eq!(
@@ -1243,27 +1259,121 @@ fn rewrite_leaves_non_ephemeral_alone() {
     let mut body = json!({
         "x": { "cache_control": { "type": "persistent", "ttl": "5m" } }
     });
-    rewrite_cache_control(&mut body, &HashSet::new());
+    rewrite_cache_control(&mut body, &HashSet::new(), CacheTtl::OneHour);
     assert_eq!(body["x"]["cache_control"]["ttl"], json!("5m"));
 }
 
 // M4.9 ===== apply_auto_cache pipeline (strip-intermediate -> inject -> normalize-tail
 // ===== -> rewrite). End-to-end through PinoTransform::transform (server.js 88-98).
 
-fn auto_cache_settings(tail: TailTtl) -> PinoSettings {
+fn auto_cache_settings(main: CacheTtl, sub: CacheTtl) -> PinoSettings {
     PinoSettings {
         auto_cache: true,
-        tail_ttl: tail,
+        main_ttl: main,
+        sub_ttl: sub,
         drop_tools: vec![],
         strip_ansi: false,
         model_override: None,
     }
 }
 
+// M4.9b ===== per-agent uniform TTL: the selected ttl (main vs sub by ctx) is
+// applied to EVERY cache slot, not just the tail.
+
+fn main_sub_settings() -> PinoSettings {
+    PinoSettings {
+        auto_cache: true,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
+        drop_tools: vec![],
+        strip_ansi: false,
+        model_override: None,
+    }
+}
+
+fn ttl_at(body: &serde_json::Value, ptr: &str) -> String {
+    body.pointer(ptr)
+        .and_then(|b| b.get("cache_control"))
+        .and_then(|cc| cc.get("ttl"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("<none>")
+        .to_string()
+}
+
 #[test]
-fn auto_cache_end_to_end_caps_at_four_and_keeps_tail_at_configured_ttl() {
+fn main_request_applies_main_ttl_to_every_slot() {
     let t = PinoTransform {
-        settings: auto_cache_settings(TailTtl::FiveMin),
+        settings: main_sub_settings(),
+    };
+    let mut body = json!({
+        "tools": [ { "name": "Bash" }, { "name": "Read" } ],
+        "system": [ { "type": "text", "text": "s".repeat(600) } ],
+        "messages": [
+            { "role": "user", "content": [ { "type": "text", "text": "r".repeat(600) } ] },
+            { "role": "assistant", "content": [ { "type": "text", "text": "mid" } ] },
+            { "role": "user", "content": [ { "type": "text", "text": "tail turn" } ] }
+        ]
+    });
+    t.transform(&mut body, &main_ctx()).unwrap();
+    assert_eq!(count_cache_breakpoints(&body), 4);
+    assert_eq!(ttl_at(&body, "/tools/1"), "1h");
+    assert_eq!(ttl_at(&body, "/system/0"), "1h");
+    assert_eq!(ttl_at(&body, "/messages/0/content/0"), "1h");
+    assert_eq!(ttl_at(&body, "/messages/2/content/0"), "1h"); // tail also 1h (uniform)
+}
+
+#[test]
+fn subagent_request_applies_sub_ttl_to_every_slot() {
+    let t = PinoTransform {
+        settings: main_sub_settings(),
+    };
+    let mut body = json!({
+        "tools": [ { "name": "Bash" }, { "name": "Read" } ],
+        "system": [ { "type": "text", "text": "s".repeat(600) } ],
+        "messages": [
+            { "role": "user", "content": [ { "type": "text", "text": "r".repeat(600) } ] },
+            { "role": "assistant", "content": [ { "type": "text", "text": "mid" } ] },
+            { "role": "user", "content": [ { "type": "text", "text": "tail turn" } ] }
+        ]
+    });
+    t.transform(&mut body, &sub_ctx()).unwrap();
+    assert_eq!(count_cache_breakpoints(&body), 4);
+    assert_eq!(ttl_at(&body, "/tools/1"), "5m"); // head slot is 5m for a subagent
+    assert_eq!(ttl_at(&body, "/system/0"), "5m");
+    assert_eq!(ttl_at(&body, "/messages/0/content/0"), "5m");
+    assert_eq!(ttl_at(&body, "/messages/2/content/0"), "5m");
+}
+
+#[test]
+fn settings_values_are_honored_per_agent_type() {
+    // Non-default: main=5m, sub=1h. Proves the value comes from settings, not a constant.
+    let t = PinoTransform {
+        settings: PinoSettings {
+            auto_cache: true,
+            main_ttl: CacheTtl::FiveMin,
+            sub_ttl: CacheTtl::OneHour,
+            drop_tools: vec![],
+            strip_ansi: false,
+            model_override: None,
+        },
+    };
+    let body0 = json!({
+        "system": [ { "type": "text", "text": "s".repeat(600) } ],
+        "messages": [ { "role": "user", "content": [ { "type": "text", "text": "hi" } ] } ]
+    });
+    let mut bmain = body0.clone();
+    t.transform(&mut bmain, &main_ctx()).unwrap();
+    assert_eq!(ttl_at(&bmain, "/system/0"), "5m");
+
+    let mut bsub = body0.clone();
+    t.transform(&mut bsub, &sub_ctx()).unwrap();
+    assert_eq!(ttl_at(&bsub, "/system/0"), "1h");
+}
+
+#[test]
+fn auto_cache_caps_at_four_and_strips_intermediate() {
+    let t = PinoTransform {
+        settings: auto_cache_settings(CacheTtl::OneHour, CacheTtl::FiveMin),
     };
     let mut body = json!({
         "tools": [ { "name": "Bash" }, { "name": "Read" } ],
@@ -1274,7 +1384,7 @@ fn auto_cache_end_to_end_caps_at_four_and_keeps_tail_at_configured_ttl() {
             { "role": "user", "content": [ { "type": "text", "text": "tail turn" } ] }
         ]
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
 
     assert_eq!(count_cache_breakpoints(&body), 4);
     assert!(
@@ -1283,6 +1393,7 @@ fn auto_cache_end_to_end_caps_at_four_and_keeps_tail_at_configured_ttl() {
             .is_none(),
         "intermediate breakpoint stripped"
     );
+    // Uniform under main: every slot, including the tail, carries main_ttl (1h).
     assert_eq!(body["tools"][1]["cache_control"]["ttl"], json!("1h"));
     assert_eq!(body["system"][0]["cache_control"]["ttl"], json!("1h"));
     assert_eq!(
@@ -1291,14 +1402,14 @@ fn auto_cache_end_to_end_caps_at_four_and_keeps_tail_at_configured_ttl() {
     );
     assert_eq!(
         body["messages"][2]["content"][0]["cache_control"]["ttl"],
-        json!("5m")
+        json!("1h")
     );
 }
 
 #[test]
-fn auto_cache_rewrites_every_ephemeral_to_1h_except_client_tail() {
+fn auto_cache_main_rewrites_every_ephemeral_to_main_ttl() {
     let t = PinoTransform {
-        settings: auto_cache_settings(TailTtl::FiveMin),
+        settings: auto_cache_settings(CacheTtl::OneHour, CacheTtl::FiveMin),
     };
     let mut body = json!({
         "system": [ { "type": "text", "text": "s".repeat(600), "cache_control": { "type": "ephemeral" } } ],
@@ -1307,23 +1418,24 @@ fn auto_cache_rewrites_every_ephemeral_to_1h_except_client_tail() {
             { "role": "user", "content": [ { "type": "text", "text": "client tail", "cache_control": { "type": "ephemeral", "ttl": "1h" } } ] }
         ]
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
+    // Uniform TTL: the client tail is no longer special-cased to a different value.
     assert_eq!(body["system"][0]["cache_control"]["ttl"], json!("1h"));
     assert_eq!(
         body["messages"][1]["content"][0]["cache_control"]["ttl"],
-        json!("5m")
+        json!("1h")
     );
 }
 
 #[test]
-fn auto_cache_tail_ttl_1h_keeps_tail_at_1h() {
+fn auto_cache_main_single_turn_uses_main_ttl() {
     let t = PinoTransform {
-        settings: auto_cache_settings(TailTtl::OneHour),
+        settings: auto_cache_settings(CacheTtl::OneHour, CacheTtl::FiveMin),
     };
     let mut body = json!({
         "messages": [ { "role": "user", "content": [ { "type": "text", "text": "only turn" } ] } ]
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     assert_eq!(
         body["messages"][0]["content"][0]["cache_control"]["ttl"],
         json!("1h")
@@ -1336,7 +1448,8 @@ fn auto_cache_disabled_does_not_inject_any_breakpoint() {
     let t = PinoTransform {
         settings: PinoSettings {
             auto_cache: false,
-            tail_ttl: TailTtl::FiveMin,
+            main_ttl: CacheTtl::OneHour,
+            sub_ttl: CacheTtl::FiveMin,
             drop_tools: vec![],
             strip_ansi: false,
             model_override: None,
@@ -1347,7 +1460,7 @@ fn auto_cache_disabled_does_not_inject_any_breakpoint() {
         "system": [ { "type": "text", "text": "s".repeat(600) } ],
         "messages": [ { "role": "user", "content": [ { "type": "text", "text": "hi" } ] } ]
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     assert_eq!(count_cache_breakpoints(&body), 0);
 }
 
@@ -1357,7 +1470,7 @@ fn auto_cache_disabled_does_not_inject_any_breakpoint() {
 #[test]
 fn auto_cache_targets_restructured_layout_not_pre_restructure() {
     let t = PinoTransform {
-        settings: auto_cache_settings(TailTtl::FiveMin),
+        settings: auto_cache_settings(CacheTtl::OneHour, CacheTtl::FiveMin),
     };
     let mut body = json!({
         "messages": [
@@ -1369,21 +1482,20 @@ fn auto_cache_targets_restructured_layout_not_pre_restructure() {
             ] }
         ]
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
     // After restructure: msg0 = [core, "msg0 prose"]; tail (now index 2) = ["latest user turn"].
     assert_eq!(
         body["messages"][0]["content"][0]["text"],
         json!("claudeMd core context block")
     );
-    // msg0 dedicated breakpoint goes on msg0's LAST cacheable block ("msg0 prose") at 1h.
+    // Uniform under main: msg0 dedicated breakpoint and the tail are both main_ttl (1h).
     assert_eq!(
         body["messages"][0]["content"][1]["cache_control"]["ttl"],
         json!("1h")
     );
-    // Tail breakpoint on the last message's only block at 5m.
     assert_eq!(
         body["messages"][2]["content"][0]["cache_control"]["ttl"],
-        json!("5m")
+        json!("1h")
     );
     assert_eq!(count_cache_breakpoints(&body), 2);
 }
@@ -1474,7 +1586,8 @@ fn apply_headers_sets_beta_when_auto_cache_on() {
     let t = PinoTransform {
         settings: PinoSettings {
             auto_cache: true,
-            tail_ttl: TailTtl::FiveMin,
+            main_ttl: CacheTtl::OneHour,
+            sub_ttl: CacheTtl::FiveMin,
             drop_tools: vec![],
             strip_ansi: false,
             model_override: None,
@@ -1511,7 +1624,8 @@ fn full_pipeline_parity_realistic_body() {
     let t = PinoTransform {
         settings: PinoSettings {
             auto_cache: true,
-            tail_ttl: TailTtl::FiveMin,
+            main_ttl: CacheTtl::OneHour,
+            sub_ttl: CacheTtl::FiveMin,
             drop_tools: vec!["NotebookEdit".to_string()],
             strip_ansi: true,
             model_override: Some("claude-opus-4-6".to_string()),
@@ -1544,7 +1658,7 @@ fn full_pipeline_parity_realistic_body() {
             ] }
         ]
     });
-    t.transform(&mut body).unwrap();
+    t.transform(&mut body, &main_ctx()).unwrap();
 
     // --- model override applied + system self-ref rewritten ---
     assert_eq!(body["model"], json!("claude-opus-4-6"));
@@ -1593,7 +1707,7 @@ fn full_pipeline_parity_realistic_body() {
     assert!(!rem_text.contains("NotebookEdit"));
     assert!(rem_text.contains("Glob"));
 
-    // --- caching: 4-cap respected; tools/system/msg0 at 1h; tail at 5m ---
+    // --- caching: 4-cap respected; uniform under main => every slot at 1h ---
     assert_eq!(count_cache_breakpoints(&body), 4);
     assert_eq!(body["tools"][1]["cache_control"]["ttl"], json!("1h")); // last remaining tool = Read
     assert_eq!(body["system"][0]["cache_control"]["ttl"], json!("1h"));
@@ -1604,11 +1718,11 @@ fn full_pipeline_parity_realistic_body() {
         body["messages"][0]["content"][msg0_last]["cache_control"]["ttl"],
         json!("1h")
     );
-    // tail breakpoint at 5m on the last message's last cacheable block.
+    // tail breakpoint also at 1h (uniform main_ttl) on the last message's last cacheable block.
     let tail_last = tail_content.len() - 1;
     assert_eq!(
         body["messages"][last]["content"][tail_last]["cache_control"]["ttl"],
-        json!("5m")
+        json!("1h")
     );
 
     // --- apply_headers emits the beta flag (engine hook) ---
@@ -1630,7 +1744,8 @@ fn full_pipeline_parity_realistic_body() {
 fn all_off_settings() -> PinoSettings {
     PinoSettings {
         auto_cache: false,
-        tail_ttl: TailTtl::FiveMin,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: vec![],
         strip_ansi: false,
         model_override: None,
@@ -1646,7 +1761,9 @@ fn transform_bytes_all_features_off_is_true_passthrough_none() {
     // canonicalize these; None proves it never parsed/re-serialized at all.
     let raw =
         br#"{"model":"claude-x","max_tokens":1e1,"messages":[{"role":"user","content":"a\/b"}]}"#;
-    let out = t.transform_bytes(raw).expect("all-off transform is Ok");
+    let out = t
+        .transform_bytes(raw, &main_ctx())
+        .expect("all-off transform is Ok");
     assert!(
         out.is_none(),
         "all-features-off pino must be a TRUE byte passthrough (None)"
@@ -1663,7 +1780,7 @@ fn transform_bytes_auto_cache_on_returns_some_mutated() {
     };
     let raw = br#"{"model":"claude-x","system":[{"type":"text","text":"hi"}],"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}"#;
     let out = t
-        .transform_bytes(raw)
+        .transform_bytes(raw, &main_ctx())
         .expect("auto_cache transform is Ok")
         .expect("auto_cache is an active feature -> Some (re-serialized + mutated)");
     let v: serde_json::Value = serde_json::from_slice(&out).expect("output is valid JSON");
@@ -1683,7 +1800,7 @@ fn transform_bytes_drop_tools_on_returns_some() {
     };
     let raw = br#"{"model":"claude-x","tools":[{"name":"Bash"},{"name":"Read"}],"messages":[{"role":"user","content":"hi"}]}"#;
     let out = t
-        .transform_bytes(raw)
+        .transform_bytes(raw, &main_ctx())
         .expect("drop_tools transform is Ok")
         .expect("drop_tools is an active feature -> Some");
     let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
@@ -1706,7 +1823,7 @@ fn transform_bytes_model_override_on_returns_some() {
     };
     let raw = br#"{"model":"claude-x","messages":[{"role":"user","content":"hi"}]}"#;
     let out = t
-        .transform_bytes(raw)
+        .transform_bytes(raw, &main_ctx())
         .expect("model_override transform is Ok")
         .expect("model_override is an active feature -> Some");
     let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
@@ -1726,7 +1843,7 @@ fn transform_bytes_strip_ansi_on_returns_some() {
     let raw =
         br#"{"model":"claude-x","messages":[{"role":"user","content":"\u001b[31mred\u001b[0m"}]}"#;
     let out = t
-        .transform_bytes(raw)
+        .transform_bytes(raw, &main_ctx())
         .expect("strip_ansi transform is Ok")
         .expect("strip_ansi is an active feature -> Some");
     let v: serde_json::Value = serde_json::from_slice(&out).unwrap();

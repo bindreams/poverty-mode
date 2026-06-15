@@ -53,14 +53,16 @@ fn parses_run_with_proxies_and_trailing_agent() {
 
 #[test]
 fn run_parses_prefixed_setting_flags_into_overrides() {
-    use crate::proxy::pino::TailTtl;
+    use crate::proxy::pino::CacheTtl;
     let cli = Cli::try_parse_from([
         "poverty-mode",
         "run",
         "--proxies",
         "pino,headroom",
-        "--pino-tail-ttl",
+        "--pino-main-ttl",
         "1h",
+        "--pino-sub-ttl",
+        "5m",
         "--pino-no-auto-cache",
         "--pino-drop-tools",
         "Bash,Edit",
@@ -79,7 +81,8 @@ fn run_parses_prefixed_setting_flags_into_overrides() {
         panic!("expected Run")
     };
     let ov = settings.to_overrides();
-    assert_eq!(ov.pino.tail_ttl, Some(TailTtl::OneHour));
+    assert_eq!(ov.pino.main_ttl, Some(CacheTtl::OneHour));
+    assert_eq!(ov.pino.sub_ttl, Some(CacheTtl::FiveMin));
     assert_eq!(ov.pino.auto_cache, Some(false));
     assert_eq!(ov.pino.drop_tools, Some(vec!["Bash".into(), "Edit".into()]));
     assert_eq!(ov.pino.model_override.as_deref(), Some("claude-opus-4-8"));
@@ -143,8 +146,10 @@ fn parses_proxy_pino_with_transform_flags() {
         "--run-id",
         "01ARZ",
         "--auto-cache",
-        "--tail-ttl",
+        "--main-ttl",
         "1h",
+        "--sub-ttl",
+        "5m",
         "--drop-tools",
         "WebFetch,WebSearch",
         "--no-strip-ansi",
@@ -162,7 +167,8 @@ fn parses_proxy_pino_with_transform_flags() {
             assert_eq!(args.common.upstream.as_str(), "https://api.anthropic.com/");
             assert_eq!(args.common.run_id, "01ARZ");
             assert!(args.auto_cache());
-            assert_eq!(args.pino.tail_ttl, TailTtlArg::OneHour);
+            assert_eq!(args.pino.main_ttl, CacheTtlArg::OneHour);
+            assert_eq!(args.pino.sub_ttl, CacheTtlArg::FiveMin);
             assert_eq!(
                 args.pino.drop_tools,
                 vec!["WebFetch".to_string(), "WebSearch".to_string()]
@@ -270,7 +276,7 @@ fn parses_central_and_config_subactions() {
 }
 
 #[test]
-fn rejects_invalid_tail_ttl() {
+fn rejects_invalid_main_ttl() {
     let err = Cli::try_parse_from([
         "poverty-mode",
         "proxy",
@@ -281,7 +287,26 @@ fn rejects_invalid_tail_ttl() {
         "https://api.anthropic.com",
         "--run-id",
         "x",
-        "--tail-ttl",
+        "--main-ttl",
+        "10m",
+    ])
+    .unwrap_err();
+    assert_eq!(err.kind(), clap::error::ErrorKind::InvalidValue);
+}
+
+#[test]
+fn rejects_invalid_sub_ttl() {
+    let err = Cli::try_parse_from([
+        "poverty-mode",
+        "proxy",
+        "pino",
+        "--listen",
+        "127.0.0.1:0",
+        "--upstream",
+        "https://api.anthropic.com",
+        "--run-id",
+        "x",
+        "--sub-ttl",
         "10m",
     ])
     .unwrap_err();
@@ -447,7 +472,7 @@ fn proxy_transform_kind_matches_chosen_proxy() {
         "--run-id",
         "r",
         "--auto-cache",
-        "--tail-ttl",
+        "--main-ttl",
         "1h",
         "--drop-tools",
         "NotebookEdit,CronList",

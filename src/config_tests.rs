@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::proxy::headroom::HeadroomSettings;
-use crate::proxy::pino::{PinoSettings, TailTtl};
+use crate::proxy::pino::{CacheTtl, PinoSettings};
 use crate::proxy::ProxyName;
 
 fn pino_of(s: &ProxySettings) -> &PinoSettings {
@@ -50,7 +50,8 @@ fn default_all_disabled_has_expected_per_proxy_settings() {
 
     let pino = pino_of(&cfg.proxies[0].settings);
     assert_eq!(pino.auto_cache, true);
-    assert_eq!(pino.tail_ttl, TailTtl::FiveMin);
+    assert_eq!(pino.main_ttl, CacheTtl::OneHour);
+    assert_eq!(pino.sub_ttl, CacheTtl::FiveMin);
     assert_eq!(pino.drop_tools, Vec::<String>::new());
     assert_eq!(pino.strip_ansi, true);
     assert_eq!(pino.model_override, None);
@@ -73,15 +74,19 @@ fn default_config_round_trips_through_yaml() {
 }
 
 #[test]
-fn yaml_uses_lowercase_proxy_names_and_5m_tail_ttl() {
+fn yaml_uses_lowercase_proxy_names_and_main_1h_sub_5m() {
     let cfg = Config::default_all_disabled();
     let yaml = serde_yaml::to_string(&cfg).unwrap();
     assert!(yaml.contains("name: pino"), "yaml was:\n{yaml}");
     assert!(yaml.contains("name: headroom"), "yaml was:\n{yaml}");
     assert!(yaml.contains("name: central"), "yaml was:\n{yaml}");
     assert!(
-        yaml.contains("5m"),
-        "tail_ttl should serialize as 5m; yaml was:\n{yaml}"
+        yaml.contains("main_ttl: 1h"),
+        "main_ttl should serialize as 1h; yaml was:\n{yaml}"
+    );
+    assert!(
+        yaml.contains("sub_ttl: 5m"),
+        "sub_ttl should serialize as 5m; yaml was:\n{yaml}"
     );
 }
 
@@ -90,7 +95,8 @@ fn untagged_settings_parse_pino_not_headroom() {
     // A mapping with pino-only fields must parse as Pino, never Headroom.
     let yaml = r#"
 auto_cache: false
-tail_ttl: 1h
+main_ttl: 1h
+sub_ttl: 5m
 drop_tools: ["Foo", "Bar"]
 strip_ansi: false
 model_override: claude-x
@@ -98,7 +104,8 @@ model_override: claude-x
     let s: ProxySettings = serde_yaml::from_str(yaml).unwrap();
     let p = pino_of(&s);
     assert_eq!(p.auto_cache, false);
-    assert_eq!(p.tail_ttl, TailTtl::OneHour);
+    assert_eq!(p.main_ttl, CacheTtl::OneHour);
+    assert_eq!(p.sub_ttl, CacheTtl::FiveMin);
     assert_eq!(p.drop_tools, vec!["Foo".to_string(), "Bar".to_string()]);
     assert_eq!(p.strip_ansi, false);
     assert_eq!(p.model_override, Some("claude-x".to_string()));
@@ -130,44 +137,57 @@ fn central_settings_default_when_fields_omitted() {
 }
 
 #[test]
-fn pino_settings_invalid_tail_ttl_falls_back_to_five_min_not_an_error() {
-    // R22/R23k: M1 defines `TailTtl` with a CUSTOM lenient `Deserialize` that maps
+fn pino_settings_invalid_cache_ttl_falls_back_to_five_min_not_an_error() {
+    // R22/R23k: M1 defines `CacheTtl` with a CUSTOM lenient `Deserialize` that maps
     // any unrecognized value to `FiveMin` (Node parseTailTtl parity) — it must NOT
     // hard-error. M2 asserts the fallback here (M4 relies on it). A pino settings
-    // mapping with `tail_ttl: 7m` therefore parses successfully with tail_ttl ==
-    // FiveMin (the rest of the pino fields parse normally).
+    // mapping with an invalid `sub_ttl: 7m` therefore parses successfully with
+    // sub_ttl == FiveMin (the rest of the pino fields parse normally).
     let yaml = r#"
 auto_cache: true
-tail_ttl: 7m
+main_ttl: 1h
+sub_ttl: 7m
 drop_tools: []
 strip_ansi: true
 model_override: null
 "#;
     let s: ProxySettings = serde_yaml::from_str(yaml)
-        .expect("invalid tail_ttl must NOT be a deserialization error (lenient parse)");
+        .expect("invalid cache TTL must NOT be a deserialization error (lenient parse)");
     let p = pino_of(&s);
+    assert_eq!(p.main_ttl, CacheTtl::OneHour);
     assert_eq!(
-        p.tail_ttl,
-        TailTtl::FiveMin,
-        "an unrecognized tail_ttl must fall back to FiveMin, not error"
+        p.sub_ttl,
+        CacheTtl::FiveMin,
+        "an unrecognized cache TTL must fall back to FiveMin, not error"
     );
 }
 
 #[test]
-fn tail_ttl_invalid_value_deserializes_to_five_min() {
-    // Direct check of the lenient TailTtl::Deserialize contract from M1 (R23k):
+fn cache_ttl_invalid_value_deserializes_to_five_min() {
+    // Direct check of the lenient CacheTtl::Deserialize contract from M1 (R23k):
     // a bare invalid scalar maps to FiveMin rather than failing.
-    let t: TailTtl = serde_yaml::from_str("nonsense\n")
-        .expect("invalid TailTtl must deserialize leniently to FiveMin");
-    assert_eq!(t, TailTtl::FiveMin);
+    let t: CacheTtl = serde_yaml::from_str("nonsense\n")
+        .expect("invalid CacheTtl must deserialize leniently to FiveMin");
+    assert_eq!(t, CacheTtl::FiveMin);
     // And the valid tokens still parse exactly.
     assert_eq!(
-        serde_yaml::from_str::<TailTtl>("5m\n").unwrap(),
-        TailTtl::FiveMin
+        serde_yaml::from_str::<CacheTtl>("5m\n").unwrap(),
+        CacheTtl::FiveMin
     );
     assert_eq!(
-        serde_yaml::from_str::<TailTtl>("1h\n").unwrap(),
-        TailTtl::OneHour
+        serde_yaml::from_str::<CacheTtl>("1h\n").unwrap(),
+        CacheTtl::OneHour
+    );
+}
+
+#[test]
+fn pino_settings_rejects_legacy_tail_ttl_key() {
+    let yaml =
+        "auto_cache: true\ntail_ttl: 5m\ndrop_tools: []\nstrip_ansi: true\nmodel_override: null\n";
+    let err = serde_yaml::from_str::<PinoSettings>(yaml).unwrap_err();
+    assert!(
+        err.to_string().contains("tail_ttl") || err.to_string().contains("unknown field"),
+        "legacy tail_ttl must be rejected by deny_unknown_fields, got: {err}"
     );
 }
 
@@ -201,14 +221,15 @@ fn load_or_create_is_idempotent_and_does_not_overwrite_user_edits() {
     // First call creates the default.
     let _ = Config::load_or_create().unwrap();
 
-    // User enables pino by hand (tail_ttl 1h).
+    // User enables pino by hand (main_ttl 1h).
     let edited = r#"version: 1
 proxies:
   - name: pino
     enabled: true
     settings:
       auto_cache: true
-      tail_ttl: 1h
+      main_ttl: 1h
+      sub_ttl: 5m
       drop_tools: []
       strip_ansi: true
       model_override: null
@@ -230,7 +251,7 @@ defaults:
     assert_eq!(cfg.proxies[0].name, ProxyName::Pino);
     assert_eq!(cfg.proxies[0].enabled, true);
     match &cfg.proxies[0].settings {
-        ProxySettings::Pino(p) => assert_eq!(p.tail_ttl, TailTtl::OneHour),
+        ProxySettings::Pino(p) => assert_eq!(p.main_ttl, CacheTtl::OneHour),
         other => panic!("expected pino, got {other:?}"),
     }
 }
@@ -276,7 +297,8 @@ proxies:
     enabled: true
     settings:
       auto_cache: true
-      tail_ttl: 5m
+      main_ttl: 1h
+      sub_ttl: 5m
       drop_tools: []
       strip_ansi: true
       model_override: null
@@ -442,7 +464,8 @@ fn resolve_cli_carries_settings_from_config_entry() {
     // Customize pino settings in the config.
     cfg.proxies[0].settings = ProxySettings::Pino(PinoSettings {
         auto_cache: false,
-        tail_ttl: TailTtl::OneHour,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: vec!["Bash".to_string()],
         strip_ansi: false,
         model_override: Some("claude-z".to_string()),
@@ -452,7 +475,7 @@ fn resolve_cli_carries_settings_from_config_entry() {
     match &chain[0].settings {
         ProxySettings::Pino(p) => {
             assert_eq!(p.auto_cache, false);
-            assert_eq!(p.tail_ttl, TailTtl::OneHour);
+            assert_eq!(p.main_ttl, CacheTtl::OneHour);
             assert_eq!(p.drop_tools, vec!["Bash".to_string()]);
             assert_eq!(p.strip_ansi, false);
             assert_eq!(p.model_override, Some("claude-z".to_string()));
@@ -568,6 +591,93 @@ fn resolve_file_source_rejects_settings_name_mismatch_invariant() {
 }
 
 #[test]
+fn save_resolved_chain_rewrites_order_and_enabled_set() {
+    // Start from a config where the file order is pino,headroom,central and only
+    // pino is enabled; persist a *resolved* chain of [headroom, central]. The
+    // on-disk config lists the enabled non-central chain members first (headroom),
+    // then the disabled remainder (pino), with central forced LAST so the
+    // central-last invariant holds. Exactly the chain members are enabled.
+    let _g = ConfigHomeGuard::new();
+    let mut cfg = Config::default_all_disabled();
+    cfg.proxies[0].enabled = true; // pino enabled in the original
+
+    let chain = cfg
+        .resolve_chain(Some(&[ProxyName::Headroom, ProxyName::Central]), None)
+        .unwrap();
+    cfg.save_full_state(cfg.entries_for_chain(&chain)).unwrap();
+
+    let reloaded = Config::load_or_create().unwrap();
+    let names: Vec<ProxyName> = reloaded.proxies.iter().map(|e| e.name).collect();
+    assert_eq!(
+        names,
+        vec![ProxyName::Headroom, ProxyName::Pino, ProxyName::Central]
+    );
+    let enabled: Vec<(ProxyName, bool)> = reloaded
+        .proxies
+        .iter()
+        .map(|e| (e.name, e.enabled))
+        .collect();
+    assert_eq!(
+        enabled,
+        vec![
+            (ProxyName::Headroom, true),
+            (ProxyName::Pino, false),
+            (ProxyName::Central, true),
+        ]
+    );
+    // central-last invariant holds, so the reload validated cleanly (above).
+    assert_eq!(reloaded.proxies.last().unwrap().name, ProxyName::Central);
+}
+
+#[test]
+fn save_resolved_chain_carries_resolved_settings_and_reloads_equal() {
+    let _g = ConfigHomeGuard::new();
+    let mut cfg = enabled_default();
+    cfg.proxies[0].settings = ProxySettings::Pino(PinoSettings {
+        auto_cache: false,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
+        drop_tools: vec!["Bash".to_string()],
+        strip_ansi: false,
+        model_override: Some("claude-z".to_string()),
+    });
+    let chain = cfg.resolve_chain(Some(&[ProxyName::Pino]), None).unwrap();
+    cfg.save_full_state(cfg.entries_for_chain(&chain)).unwrap();
+
+    let reloaded = Config::load_or_create().unwrap();
+    let pino = reloaded
+        .proxies
+        .iter()
+        .find(|e| e.name == ProxyName::Pino)
+        .unwrap();
+    assert_eq!(pino.enabled, true);
+    match &pino.settings {
+        ProxySettings::Pino(p) => {
+            assert_eq!(p.model_override, Some("claude-z".to_string()));
+            assert_eq!(p.main_ttl, CacheTtl::OneHour);
+        }
+        other => panic!("expected pino settings, got {other:?}"),
+    }
+    // The persisted file is valid (central-last holds) and reloads without error.
+    assert_eq!(reloaded, Config::load_or_create().unwrap());
+}
+
+#[test]
+fn save_resolved_chain_keeps_central_last() {
+    // A chain that ends in central must produce a central-last on-disk config that
+    // passes validation on reload.
+    let _g = ConfigHomeGuard::new();
+    let cfg = enabled_default();
+    let chain = cfg
+        .resolve_chain(Some(&[ProxyName::Pino, ProxyName::Central]), None)
+        .unwrap();
+    cfg.save_full_state(cfg.entries_for_chain(&chain)).unwrap();
+
+    let reloaded = Config::load_or_create().unwrap();
+    assert_eq!(reloaded.proxies.last().unwrap().name, ProxyName::Central);
+}
+
+#[test]
 fn characterization_default_yaml_has_spec_5_2_shape() {
     // Pure characterization guard (R12): pins the spec 5.2 first-run YAML so a
     // future serde-attribute drift in the shared settings structs is caught here.
@@ -593,7 +703,8 @@ fn characterization_default_yaml_has_spec_5_2_shape() {
 
     // Pino settings shape.
     assert!(yaml.contains("auto_cache: true"), "yaml:\n{yaml}");
-    assert!(yaml.contains("tail_ttl: 5m"), "yaml:\n{yaml}");
+    assert!(yaml.contains("main_ttl: 1h"), "yaml:\n{yaml}");
+    assert!(yaml.contains("sub_ttl: 5m"), "yaml:\n{yaml}");
     assert!(yaml.contains("strip_ansi: true"), "yaml:\n{yaml}");
     // Headroom + central settings shape.
     assert!(yaml.contains("compression: true"), "yaml:\n{yaml}");
@@ -655,7 +766,8 @@ fn with_overrides_applies_to_matching_entries_only() {
     let cfg = Config::default_all_disabled();
     let ov = Overrides {
         pino: PinoOverride {
-            tail_ttl: Some(TailTtl::OneHour),
+            main_ttl: Some(CacheTtl::FiveMin),
+            sub_ttl: Some(CacheTtl::OneHour),
             ..Default::default()
         },
         headroom: HeadroomOverride {
@@ -673,7 +785,8 @@ fn with_overrides_applies_to_matching_entries_only() {
         pino.settings,
         ProxySettings::Pino(PinoSettings {
             auto_cache: true,
-            tail_ttl: TailTtl::OneHour,
+            main_ttl: CacheTtl::FiveMin,
+            sub_ttl: CacheTtl::OneHour,
             drop_tools: vec![],
             strip_ansi: true,
             model_override: None
@@ -752,7 +865,8 @@ fn save_full_state_rejects_central_not_last() {
             enabled: false,
             settings: ProxySettings::Pino(PinoSettings {
                 auto_cache: true,
-                tail_ttl: TailTtl::FiveMin,
+                main_ttl: CacheTtl::OneHour,
+                sub_ttl: CacheTtl::FiveMin,
                 drop_tools: vec![],
                 strip_ansi: true,
                 model_override: None,
@@ -781,7 +895,8 @@ fn save_full_state_round_trips() {
             enabled: false,
             settings: ProxySettings::Pino(PinoSettings {
                 auto_cache: false,
-                tail_ttl: TailTtl::OneHour,
+                main_ttl: CacheTtl::OneHour,
+                sub_ttl: CacheTtl::FiveMin,
                 drop_tools: vec![],
                 strip_ansi: true,
                 model_override: None,
@@ -812,7 +927,8 @@ fn entries_for_chain_orders_enabled_then_disabled_central_last() {
                                                   // they are carried through rather than reset to defaults.
     cfg.proxies[0].settings = ProxySettings::Pino(PinoSettings {
         auto_cache: false,
-        tail_ttl: TailTtl::OneHour,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: vec!["Bash".to_string()],
         strip_ansi: false,
         model_override: Some("claude-z".to_string()),

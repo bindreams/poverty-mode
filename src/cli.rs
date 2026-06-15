@@ -15,7 +15,7 @@ use anyhow::Context as _;
 use clap::{Args, Parser, Subcommand};
 
 use crate::proxy::headroom::HeadroomSettings;
-use crate::proxy::pino::{PinoSettings, TailTtl};
+use crate::proxy::pino::{CacheTtl, PinoSettings};
 use crate::proxy::{self, EngineConfig, ProxyName, TransformKind, Upstream};
 
 /// Run an AI coding agent behind a user-chosen chain of local HTTP proxies.
@@ -244,9 +244,13 @@ pub struct PinoArgs {
     #[arg(long = "no-auto-cache", overrides_with = "auto_cache")]
     pub no_auto_cache: bool,
 
-    /// Rolling-tail cache TTL (`5m` default, or `1h`).
-    #[arg(long, value_name = "TTL", value_enum, default_value_t = TailTtlArg::FiveMin)]
-    pub tail_ttl: TailTtlArg,
+    /// Cache TTL for main-agent requests (`1h` default, or `5m`).
+    #[arg(long, value_name = "TTL", value_enum, default_value_t = CacheTtlArg::OneHour)]
+    pub main_ttl: CacheTtlArg,
+
+    /// Cache TTL for subagent requests (`5m` default, or `1h`).
+    #[arg(long, value_name = "TTL", value_enum, default_value_t = CacheTtlArg::FiveMin)]
+    pub sub_ttl: CacheTtlArg,
 
     /// Tool names to drop from `tools` and scrub from reminders.
     #[arg(long, value_delimiter = ',', value_name = "CSV")]
@@ -280,22 +284,22 @@ pub struct HeadroomArgs {
     pub no_compression: bool,
 }
 
-/// `--tail-ttl` value enum mapping to [`TailTtl`] (`5m` / `1h`).
+/// `--main-ttl` / `--sub-ttl` value enum mapping to [`CacheTtl`] (`5m` / `1h`).
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TailTtlArg {
-    /// 5-minute rolling tail (default).
+pub enum CacheTtlArg {
+    /// 5-minute cache TTL.
     #[value(name = "5m")]
     FiveMin,
-    /// 1-hour rolling tail.
+    /// 1-hour cache TTL.
     #[value(name = "1h")]
     OneHour,
 }
 
-impl From<TailTtlArg> for TailTtl {
-    fn from(a: TailTtlArg) -> Self {
+impl From<CacheTtlArg> for CacheTtl {
+    fn from(a: CacheTtlArg) -> Self {
         match a {
-            TailTtlArg::FiveMin => TailTtl::FiveMin,
-            TailTtlArg::OneHour => TailTtl::OneHour,
+            CacheTtlArg::FiveMin => CacheTtl::FiveMin,
+            CacheTtlArg::OneHour => CacheTtl::OneHour,
         }
     }
 }
@@ -311,8 +315,10 @@ pub struct RunSettingsArgs {
     pub pino_auto_cache: bool,
     #[arg(long = "pino-no-auto-cache", overrides_with = "pino_auto_cache")]
     pub pino_no_auto_cache: bool,
-    #[arg(long = "pino-tail-ttl", value_name = "TTL", value_enum)]
-    pub pino_tail_ttl: Option<TailTtlArg>,
+    #[arg(long = "pino-main-ttl", value_name = "TTL", value_enum)]
+    pub pino_main_ttl: Option<CacheTtlArg>,
+    #[arg(long = "pino-sub-ttl", value_name = "TTL", value_enum)]
+    pub pino_sub_ttl: Option<CacheTtlArg>,
     #[arg(long = "pino-drop-tools", value_delimiter = ',', value_name = "CSV")]
     pub pino_drop_tools: Option<Vec<String>>,
     #[arg(long = "pino-strip-ansi", overrides_with = "pino_no_strip_ansi")]
@@ -361,7 +367,8 @@ impl RunSettingsArgs {
         Overrides {
             pino: PinoOverride {
                 auto_cache: Self::tri(self.pino_auto_cache, self.pino_no_auto_cache),
-                tail_ttl: self.pino_tail_ttl.map(Into::into),
+                main_ttl: self.pino_main_ttl.map(Into::into),
+                sub_ttl: self.pino_sub_ttl.map(Into::into),
                 drop_tools: self
                     .pino_drop_tools
                     .as_ref()
@@ -407,7 +414,8 @@ pub fn transform_from_proxy_args(args: &ProxyArgs) -> TransformKind {
     match args.which {
         ProxyName::Pino => TransformKind::Pino(PinoSettings {
             auto_cache: args.auto_cache(),
-            tail_ttl: args.pino.tail_ttl.into(),
+            main_ttl: args.pino.main_ttl.into(),
+            sub_ttl: args.pino.sub_ttl.into(),
             drop_tools: args
                 .pino
                 .drop_tools

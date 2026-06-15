@@ -1,7 +1,7 @@
 use super::*;
 use crate::config::{CentralSettings, Config, Defaults, ProxyEntry, ProxySettings, ResolvedProxy};
 use crate::proxy::headroom::HeadroomSettings;
-use crate::proxy::pino::{PinoSettings, TailTtl};
+use crate::proxy::pino::{CacheTtl, PinoSettings};
 use crate::proxy::ProxyName;
 use focus::Focus;
 use settings::SettingId;
@@ -17,7 +17,8 @@ fn cfg_all_disabled() -> Config {
                 enabled: false,
                 settings: ProxySettings::Pino(PinoSettings {
                     auto_cache: true,
-                    tail_ttl: TailTtl::FiveMin,
+                    main_ttl: CacheTtl::OneHour,
+                    sub_ttl: CacheTtl::FiveMin,
                     drop_tools: vec![],
                     strip_ansi: true,
                     model_override: None,
@@ -239,8 +240,8 @@ fn activate_on_bool_toggles_in_place() {
 fn cycle_right_on_enum_changes_value() {
     let mut st = seeded();
     st.apply(TuiAction::Expand);
-    st.set_focus(Focus::Setting(ProxyName::Pino, SettingId::TailTtl));
-    assert_eq!(focused_value(&st), "‹ 5m ›");
+    st.set_focus(Focus::Setting(ProxyName::Pino, SettingId::SubTtl));
+    assert_eq!(focused_value(&st), "‹ 5m ›"); // seeded sub_ttl: 5m
     st.apply(TuiAction::CycleRight);
     assert_eq!(focused_value(&st), "‹ 1h ›");
     st.apply(TuiAction::CycleLeft);
@@ -261,12 +262,12 @@ fn cycle_on_bool_toggles() {
 fn expand_on_setting_collapses_back_to_proxy() {
     let mut st = seeded();
     st.apply(TuiAction::Expand);
-    st.set_focus(Focus::Setting(ProxyName::Pino, SettingId::TailTtl));
+    st.set_focus(Focus::Setting(ProxyName::Pino, SettingId::SubTtl));
     st.apply(TuiAction::Expand); // collapse from a setting
     assert_eq!(st.focus(), Focus::Proxy(ProxyName::Pino));
     assert!(!st
         .visible()
-        .contains(&Focus::Setting(ProxyName::Pino, SettingId::TailTtl)));
+        .contains(&Focus::Setting(ProxyName::Pino, SettingId::SubTtl)));
 }
 
 // Reorder =========================================================================
@@ -276,13 +277,13 @@ fn move_only_acts_on_proxy_headers() {
     // On a setting, MoveDown/MoveUp are no-ops (focus unchanged, no reorder).
     let mut st = seeded();
     st.apply(TuiAction::Expand);
-    st.set_focus(Focus::Setting(ProxyName::Pino, SettingId::TailTtl));
+    st.set_focus(Focus::Setting(ProxyName::Pino, SettingId::SubTtl));
     let before = st.rows_order();
     assert_eq!(st.apply(TuiAction::MoveDown), TuiOutcome::Continue);
     assert_eq!(st.rows_order(), before);
     assert_eq!(
         st.focus(),
-        Focus::Setting(ProxyName::Pino, SettingId::TailTtl)
+        Focus::Setting(ProxyName::Pino, SettingId::SubTtl)
     );
 }
 
