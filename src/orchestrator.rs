@@ -109,7 +109,7 @@ use anyhow::Context as _;
 /// Compose the base URL an agent points at (C1). When central is the tail, append
 /// the agent's wire-client segment to the agent-agnostic `head`; otherwise the
 /// agent talks native paths straight to the real upstream, so `head` is returned
-/// unchanged. The append is string-level (trim one trailing slash, then add
+/// unchanged. The append is string-level (trim trailing slashes, then add
 /// `/<segment>`) so it never clobbers the wire envelope's last segment the way a
 /// relative `Url::join` would.
 pub fn agent_base_for(
@@ -120,6 +120,13 @@ pub fn agent_base_for(
     if !central_is_tail {
         return Ok(head.clone());
     }
+    // The string-level append onto `head.as_str()` is only correct when `head`
+    // has no query and no fragment; otherwise the appended segment would land
+    // after them and corrupt the URL. Catch a non-bare head in debug/CI.
+    debug_assert!(
+        head.query().is_none() && head.fragment().is_none(),
+        "agent_base_for expects a bare head (no query/fragment): {head}"
+    );
     let trimmed = head.as_str().trim_end_matches('/');
     // Contract guard: `head` is the BARE agent-agnostic head; composing twice would
     // duplicate the client segment. Catch a double-apply in debug/CI.
