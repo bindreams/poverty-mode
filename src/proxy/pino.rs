@@ -40,7 +40,7 @@ impl<'de> Deserialize<'de> for CacheTtl {
             other => {
                 tracing::warn!(
                     value = other,
-                    "invalid tail_ttl; falling back to 5m (valid values: 5m, 1h)"
+                    "invalid cache TTL; falling back to 5m (valid values: 5m, 1h)"
                 );
                 Ok(CacheTtl::FiveMin)
             }
@@ -65,8 +65,10 @@ impl CacheTtl {
 pub struct PinoSettings {
     /// Enable cache-breakpoint injection.
     pub auto_cache: bool,
-    /// Rolling-tail cache TTL.
-    pub tail_ttl: CacheTtl,
+    /// Cache TTL applied to main-agent requests (all slots).
+    pub main_ttl: CacheTtl,
+    /// Cache TTL applied to subagent requests (all slots).
+    pub sub_ttl: CacheTtl,
     /// Tool names to drop from `tools` and scrub from reminders.
     pub drop_tools: Vec<String>,
     /// Strip ANSI escape sequences from text content.
@@ -175,7 +177,7 @@ impl BodyTransform for PinoTransform {
         Ok(Some(serde_json::to_vec(&body)?))
     }
 
-    fn transform(&self, body: &mut Value, _ctx: &RequestContext) -> Result<()> {
+    fn transform(&self, body: &mut Value, ctx: &RequestContext) -> Result<()> {
         // Only object bodies are mutable in any meaningful way; non-objects pass through.
         if !body.is_object() {
             return Ok(());
@@ -188,9 +190,15 @@ impl BodyTransform for PinoTransform {
         // 2. built-in default transform pipeline (drop_tools + reminder scrub +
         //    restructureV123 + strip_ansi), in the Node transforms/default.js order.
         apply_default_transform(body, &self.settings);
-        // 3. auto-cache: inject breakpoints within the 4-cap, force 1h except tail.
+        // 3. auto-cache: pick the per-agent TTL (subagent vs main) and apply it
+        //    uniformly to every injected/normalized cache slot.
         if self.settings.auto_cache {
-            apply_auto_cache(body, self.settings.tail_ttl);
+            let ttl = if ctx.is_subagent {
+                self.settings.sub_ttl
+            } else {
+                self.settings.main_ttl
+            };
+            apply_auto_cache(body, ttl);
         }
         Ok(())
     }
@@ -660,8 +668,8 @@ pub fn strip_intermediate_message_breakpoints(body: &mut Value) -> usize {
     stripped
 }
 
-fn one_hour_cc() -> Value {
-    json!({ "type": "ephemeral", "ttl": "1h" })
+fn cc(ttl: CacheTtl) -> Value {
+    json!({ "type": "ephemeral", "ttl": ttl.as_str() })
 }
 
 /// Normalizes `messages[idx].content` to an array if it is a non-empty string,
@@ -691,13 +699,13 @@ fn find_last_cacheable_index_in_message(message: &mut Value) -> Option<usize> {
 /// Injects cache breakpoints within the 4-cap. Returns the JSON-Pointer paths of
 /// the tail blocks placed (so the 1h-rewrite can skip them). Mirrors
 /// injectBreakpointIfAbsent (reference/pino/src/cache.js 124-181).
-pub fn inject_breakpoint_if_absent(body: &mut Value, tail_ttl: CacheTtl) -> Vec<String> {
+pub fn inject_breakpoint_if_absent(body: &mut Value, ttl: CacheTtl) -> Vec<String> {
     let mut tail_paths: Vec<String> = Vec::new();
 
     // 1. Reclaim wasted small-system slots.
     strip_small_system_breakpoints(body);
 
-    // 2. tools: last entry -> 1h, only if the array is non-empty and has no breakpoint.
+    // 2. tools: last entry -> ttl, only if the array is non-empty and has no breakpoint.
     let inject_tools = body
         .get("tools")
         .map(|t| t.as_array().map(|a| !a.is_empty()).unwrap_or(false) && !has_breakpoint(t))
@@ -706,13 +714,13 @@ pub fn inject_breakpoint_if_absent(body: &mut Value, tail_ttl: CacheTtl) -> Vec<
         if let Some(tools) = body.get_mut("tools").and_then(|t| t.as_array_mut()) {
             if let Some(last) = tools.last_mut() {
                 if let Some(obj) = last.as_object_mut() {
-                    obj.insert("cache_control".to_string(), one_hour_cc());
+                    obj.insert("cache_control".to_string(), cc(ttl));
                 }
             }
         }
     }
 
-    // 3. system: array -> last block 1h (no existing breakpoint); string -> cached array.
+    // 3. system: array -> last block ttl (no existing breakpoint); string -> cached array.
     //    Finding 6: compute the array-arm condition as a bool first to avoid a dead
     //    binding and a double-fetch of body["system"], mirroring the tools pattern.
     let inject_system_array = matches!(body.get("system"), Some(Value::Array(a)) if !a.is_empty())
@@ -724,7 +732,7 @@ pub fn inject_breakpoint_if_absent(body: &mut Value, tail_ttl: CacheTtl) -> Vec<
         if let Some(sys) = body.get_mut("system").and_then(|s| s.as_array_mut()) {
             if let Some(last) = sys.last_mut() {
                 if let Some(obj) = last.as_object_mut() {
-                    obj.insert("cache_control".to_string(), one_hour_cc());
+                    obj.insert("cache_control".to_string(), cc(ttl));
                 }
             }
         }
@@ -732,7 +740,7 @@ pub fn inject_breakpoint_if_absent(body: &mut Value, tail_ttl: CacheTtl) -> Vec<
         if !s.is_empty() {
             let text = s.clone();
             body["system"] = json!([
-                { "type": "text", "text": text, "cache_control": { "type": "ephemeral", "ttl": "1h" } }
+                { "type": "text", "text": text, "cache_control": cc(ttl) }
             ]);
         }
     }
@@ -750,7 +758,7 @@ pub fn inject_breakpoint_if_absent(body: &mut Value, tail_ttl: CacheTtl) -> Vec<
                     let block = &mut first["content"][idx];
                     if block.get("cache_control").is_none() {
                         if let Some(obj) = block.as_object_mut() {
-                            obj.insert("cache_control".to_string(), one_hour_cc());
+                            obj.insert("cache_control".to_string(), cc(ttl));
                         }
                     }
                 }
@@ -758,7 +766,7 @@ pub fn inject_breakpoint_if_absent(body: &mut Value, tail_ttl: CacheTtl) -> Vec<
         }
     }
 
-    // 5. Rolling tail: last cacheable block across ALL messages -> TAIL_TTL.
+    // 5. Rolling tail: last cacheable block across ALL messages -> ttl.
     if count_cache_breakpoints(body) < BREAKPOINT_CEILING {
         let msg_count = body
             .get("messages")
@@ -779,10 +787,7 @@ pub fn inject_breakpoint_if_absent(body: &mut Value, tail_ttl: CacheTtl) -> Vec<
             let block = &mut body["messages"][i]["content"][idx];
             if block.get("cache_control").is_none() {
                 if let Some(obj) = block.as_object_mut() {
-                    obj.insert(
-                        "cache_control".to_string(),
-                        json!({ "type": "ephemeral", "ttl": tail_ttl.as_str() }),
-                    );
+                    obj.insert("cache_control".to_string(), cc(ttl));
                 }
                 tail_paths.push(format!("/messages/{}/content/{}", i, idx));
             }
@@ -796,10 +801,10 @@ pub fn inject_breakpoint_if_absent(body: &mut Value, tail_ttl: CacheTtl) -> Vec<
 
 use std::collections::HashSet;
 
-/// Forces every ephemeral breakpoint inside the LAST message to `tail_ttl` and
+/// Forces every ephemeral breakpoint inside the LAST message to `ttl` and
 /// returns their JSON-Pointer (block) paths. Mirrors normalizeTailBreakpoints
 /// (reference/pino/src/cache.js 44-59).
-pub fn normalize_tail_breakpoints(body: &mut Value, tail_ttl: CacheTtl) -> Vec<String> {
+pub fn normalize_tail_breakpoints(body: &mut Value, ttl: CacheTtl) -> Vec<String> {
     let mut out = Vec::new();
     let msg_count = body
         .get("messages")
@@ -812,12 +817,12 @@ pub fn normalize_tail_breakpoints(body: &mut Value, tail_ttl: CacheTtl) -> Vec<S
     let last = msg_count - 1;
     let base = format!("/messages/{}", last);
     if let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) {
-        normalize_walk(&mut messages[last], &base, tail_ttl, &mut out);
+        normalize_walk(&mut messages[last], &base, ttl, &mut out);
     }
     out
 }
 
-fn normalize_walk(node: &mut Value, path: &str, tail_ttl: CacheTtl, out: &mut Vec<String>) {
+fn normalize_walk(node: &mut Value, path: &str, ttl: CacheTtl, out: &mut Vec<String>) {
     match node {
         Value::Object(map) => {
             let is_ephemeral = map
@@ -827,10 +832,7 @@ fn normalize_walk(node: &mut Value, path: &str, tail_ttl: CacheTtl, out: &mut Ve
                 == Some("ephemeral");
             if is_ephemeral {
                 if let Some(cc) = map.get_mut("cache_control").and_then(|c| c.as_object_mut()) {
-                    cc.insert(
-                        "ttl".to_string(),
-                        Value::String(tail_ttl.as_str().to_string()),
-                    );
+                    cc.insert("ttl".to_string(), Value::String(ttl.as_str().to_string()));
                 }
                 out.push(path.to_string());
             }
@@ -843,28 +845,28 @@ fn normalize_walk(node: &mut Value, path: &str, tail_ttl: CacheTtl, out: &mut Ve
             for k in keys {
                 let child_path = format!("{}/{}", path, k);
                 if let Some(child) = map.get_mut(&k) {
-                    normalize_walk(child, &child_path, tail_ttl, out);
+                    normalize_walk(child, &child_path, ttl, out);
                 }
             }
         }
         Value::Array(items) => {
             for (i, item) in items.iter_mut().enumerate() {
                 let child_path = format!("{}/{}", path, i);
-                normalize_walk(item, &child_path, tail_ttl, out);
+                normalize_walk(item, &child_path, ttl, out);
             }
         }
         _ => {}
     }
 }
 
-/// Recursively bumps every ephemeral `cache_control.ttl` to "1h" except nodes
+/// Recursively bumps every ephemeral `cache_control.ttl` to `ttl` except nodes
 /// whose JSON-Pointer (block) path is in `skip`. Mirrors rewriteCacheControl
 /// (reference/pino/src/cache.js 3-26).
-pub fn rewrite_cache_control(body: &mut Value, skip: &HashSet<String>) {
-    rewrite_walk(body, String::new(), skip);
+pub fn rewrite_cache_control(body: &mut Value, skip: &HashSet<String>, ttl: CacheTtl) {
+    rewrite_walk(body, String::new(), skip, ttl);
 }
 
-fn rewrite_walk(node: &mut Value, path: String, skip: &HashSet<String>) {
+fn rewrite_walk(node: &mut Value, path: String, skip: &HashSet<String>, ttl: CacheTtl) {
     match node {
         Value::Object(map) => {
             let is_ephemeral = map
@@ -874,36 +876,37 @@ fn rewrite_walk(node: &mut Value, path: String, skip: &HashSet<String>) {
                 == Some("ephemeral");
             if is_ephemeral && !skip.contains(&path) {
                 if let Some(cc) = map.get_mut("cache_control").and_then(|c| c.as_object_mut()) {
-                    cc.insert("ttl".to_string(), Value::String("1h".to_string()));
+                    cc.insert("ttl".to_string(), Value::String(ttl.as_str().to_string()));
                 }
             }
             let keys: Vec<String> = map.keys().cloned().collect();
             for k in keys {
                 let child_path = format!("{}/{}", path, k);
                 if let Some(child) = map.get_mut(&k) {
-                    rewrite_walk(child, child_path, skip);
+                    rewrite_walk(child, child_path, skip, ttl);
                 }
             }
         }
         Value::Array(items) => {
             for (i, item) in items.iter_mut().enumerate() {
                 let child_path = format!("{}/{}", path, i);
-                rewrite_walk(item, child_path, skip);
+                rewrite_walk(item, child_path, skip, ttl);
             }
         }
         _ => {}
     }
 }
 
-fn apply_auto_cache(body: &mut Value, tail_ttl: CacheTtl) {
+fn apply_auto_cache(body: &mut Value, ttl: CacheTtl) {
     // Mirrors the AUTO_CACHE block of reference/pino/src/server.js (lines 88-98).
+    // One TTL (selected per agent) is applied uniformly to every cache slot.
     strip_intermediate_message_breakpoints(body);
-    let injected_tail = inject_breakpoint_if_absent(body, tail_ttl);
-    let client_tail = normalize_tail_breakpoints(body, tail_ttl);
+    let injected_tail = inject_breakpoint_if_absent(body, ttl);
+    let client_tail = normalize_tail_breakpoints(body, ttl);
     let mut skip: HashSet<String> = HashSet::new();
     skip.extend(injected_tail);
     skip.extend(client_tail);
-    rewrite_cache_control(body, &skip);
+    rewrite_cache_control(body, &skip, ttl);
 }
 
 #[cfg(test)]

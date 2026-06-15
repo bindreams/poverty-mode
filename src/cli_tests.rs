@@ -63,8 +63,10 @@ fn parses_proxy_pino_with_transform_flags() {
         "--run-id",
         "01ARZ",
         "--auto-cache",
-        "--tail-ttl",
+        "--main-ttl",
         "1h",
+        "--sub-ttl",
+        "5m",
         "--drop-tools",
         "WebFetch,WebSearch",
         "--no-strip-ansi",
@@ -82,7 +84,8 @@ fn parses_proxy_pino_with_transform_flags() {
             assert_eq!(args.common.upstream.as_str(), "https://api.anthropic.com/");
             assert_eq!(args.common.run_id, "01ARZ");
             assert!(args.auto_cache());
-            assert_eq!(args.pino.tail_ttl, CacheTtlArg::OneHour);
+            assert_eq!(args.pino.main_ttl, CacheTtlArg::OneHour);
+            assert_eq!(args.pino.sub_ttl, CacheTtlArg::FiveMin);
             assert_eq!(
                 args.pino.drop_tools,
                 vec!["WebFetch".to_string(), "WebSearch".to_string()]
@@ -190,7 +193,7 @@ fn parses_central_and_config_subactions() {
 }
 
 #[test]
-fn rejects_invalid_tail_ttl() {
+fn rejects_invalid_main_ttl() {
     let err = Cli::try_parse_from([
         "poverty-mode",
         "proxy",
@@ -201,7 +204,26 @@ fn rejects_invalid_tail_ttl() {
         "https://api.anthropic.com",
         "--run-id",
         "x",
-        "--tail-ttl",
+        "--main-ttl",
+        "10m",
+    ])
+    .unwrap_err();
+    assert_eq!(err.kind(), clap::error::ErrorKind::InvalidValue);
+}
+
+#[test]
+fn rejects_invalid_sub_ttl() {
+    let err = Cli::try_parse_from([
+        "poverty-mode",
+        "proxy",
+        "pino",
+        "--listen",
+        "127.0.0.1:0",
+        "--upstream",
+        "https://api.anthropic.com",
+        "--run-id",
+        "x",
+        "--sub-ttl",
         "10m",
     ])
     .unwrap_err();
@@ -340,7 +362,7 @@ fn proxy_transform_kind_matches_chosen_proxy() {
         "--run-id",
         "r",
         "--auto-cache",
-        "--tail-ttl",
+        "--main-ttl",
         "1h",
         "--drop-tools",
         "NotebookEdit,CronList",

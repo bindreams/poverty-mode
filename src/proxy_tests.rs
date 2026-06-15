@@ -141,7 +141,8 @@ fn transform_kind_variants_exist() {
         TransformKind::None,
         TransformKind::Pino(PinoSettings {
             auto_cache: false,
-            tail_ttl: CacheTtl::FiveMin,
+            main_ttl: CacheTtl::OneHour,
+            sub_ttl: CacheTtl::FiveMin,
             drop_tools: vec![],
             strip_ansi: false,
             model_override: None,
@@ -257,7 +258,8 @@ fn engine_config_holds_run_id_and_transform_kind() {
     use crate::proxy::pino::{CacheTtl, PinoSettings};
     let settings = PinoSettings {
         auto_cache: false,
-        tail_ttl: CacheTtl::FiveMin,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: vec![],
         strip_ansi: false,
         model_override: None,
@@ -418,7 +420,8 @@ fn transform_kind_pino_yields_a_boxed_transform() {
     // hand back an Arc-shared transform (the engine decides what to do with an Err).
     let settings = PinoSettings {
         auto_cache: false,
-        tail_ttl: CacheTtl::FiveMin,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: vec![],
         strip_ansi: false,
         model_override: None,
@@ -438,7 +441,8 @@ fn transform_kind_pino_transform_succeeds_after_m4() {
     // with every feature off, is a byte-faithful no-op).
     let settings = PinoSettings {
         auto_cache: false,
-        tail_ttl: CacheTtl::FiveMin,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: vec![],
         strip_ansi: false,
         model_override: None,

@@ -4,11 +4,16 @@ fn main_ctx() -> crate::proxy::RequestContext {
     crate::proxy::RequestContext::default()
 }
 
+fn sub_ctx() -> crate::proxy::RequestContext {
+    crate::proxy::RequestContext { is_subagent: true }
+}
+
 #[test]
 fn pino_settings_default_round_trips_yaml() {
     let s = PinoSettings {
         auto_cache: true,
-        tail_ttl: CacheTtl::FiveMin,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: vec![],
         strip_ansi: true,
         model_override: None,
@@ -49,7 +54,7 @@ fn cache_ttl_invalid_value_falls_back_to_five_min() {
 
 #[test]
 fn pino_settings_rejects_unknown_fields() {
-    let yaml = "auto_cache: true\ntail_ttl: 5m\ndrop_tools: []\nstrip_ansi: true\nmodel_override: null\nbogus: 1\n";
+    let yaml = "auto_cache: true\nmain_ttl: 1h\nsub_ttl: 5m\ndrop_tools: []\nstrip_ansi: true\nmodel_override: null\nbogus: 1\n";
     let err = serde_yaml::from_str::<PinoSettings>(yaml).unwrap_err();
     assert!(
         err.to_string().contains("bogus") || err.to_string().contains("unknown field"),
@@ -58,13 +63,14 @@ fn pino_settings_rejects_unknown_fields() {
 }
 
 // M4.1 ===== lock the PinoSettings / CacheTtl serde wire shape + lenient
-// tail_ttl fallback (Node parseTailTtl parity). `PinoSettings`/`CacheTtl` are
+// cache-TTL fallback (Node parseTailTtl parity). `PinoSettings`/`CacheTtl` are
 // already in scope via `use super::*;` at the top of this file.
 
 fn sample_settings() -> PinoSettings {
     PinoSettings {
         auto_cache: true,
-        tail_ttl: CacheTtl::FiveMin,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: vec!["NotebookEdit".to_string(), "CronList".to_string()],
         strip_ansi: true,
         model_override: None,
@@ -99,12 +105,12 @@ fn pino_settings_round_trips_through_json() {
 #[test]
 fn pino_settings_yaml_shape_matches_config_file() {
     // Mirrors the config.yaml default block in the design doc (spec 5.2):
-    // settings: { auto_cache: true, tail_ttl: 5m, drop_tools: [], strip_ansi: true, model_override: null }
-    let yaml =
-        "auto_cache: true\ntail_ttl: 5m\ndrop_tools: []\nstrip_ansi: true\nmodel_override: null\n";
+    // settings: { auto_cache: true, main_ttl: 1h, sub_ttl: 5m, drop_tools: [], strip_ansi: true, model_override: null }
+    let yaml = "auto_cache: true\nmain_ttl: 1h\nsub_ttl: 5m\ndrop_tools: []\nstrip_ansi: true\nmodel_override: null\n";
     let s: PinoSettings = serde_yaml::from_str(yaml).unwrap();
     assert!(s.auto_cache);
-    assert_eq!(s.tail_ttl, CacheTtl::FiveMin);
+    assert_eq!(s.main_ttl, CacheTtl::OneHour);
+    assert_eq!(s.sub_ttl, CacheTtl::FiveMin);
     assert!(s.drop_tools.is_empty());
     assert!(s.strip_ansi);
     assert_eq!(s.model_override, None);
@@ -122,7 +128,7 @@ fn cache_ttl_invalid_value_falls_back_to_five_min_json() {
     assert_eq!(
         v,
         CacheTtl::FiveMin,
-        "unknown tail_ttl must degrade to 5m, not error"
+        "unknown cache TTL must degrade to 5m, not error"
     );
     let from_yaml: CacheTtl = serde_yaml::from_str("nonsense").unwrap();
     assert_eq!(from_yaml, CacheTtl::FiveMin);
@@ -149,7 +155,8 @@ use serde_json::json;
 fn no_op_settings() -> PinoSettings {
     PinoSettings {
         auto_cache: false,
-        tail_ttl: CacheTtl::FiveMin,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: vec![],
         strip_ansi: false,
         model_override: None,
@@ -201,7 +208,8 @@ fn non_object_body_is_left_untouched_and_ok() {
 fn model_override_settings(model: &str) -> PinoSettings {
     PinoSettings {
         auto_cache: false,
-        tail_ttl: CacheTtl::FiveMin,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: vec![],
         strip_ansi: false,
         model_override: Some(model.to_string()),
@@ -332,7 +340,8 @@ fn model_override_friendly_with_literal_dollar_is_not_treated_as_template() {
 fn strip_only_settings() -> PinoSettings {
     PinoSettings {
         auto_cache: false,
-        tail_ttl: CacheTtl::FiveMin,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: vec![],
         strip_ansi: true,
         model_override: None,
@@ -427,7 +436,8 @@ fn strip_ansi_only_matches_csi_sgr_form_not_arbitrary_text() {
 fn drop_settings(names: &[&str]) -> PinoSettings {
     PinoSettings {
         auto_cache: false,
-        tail_ttl: CacheTtl::FiveMin,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: names.iter().map(|s| s.to_string()).collect(),
         strip_ansi: false,
         model_override: None,
@@ -617,7 +627,8 @@ fn restructure_settings() -> PinoSettings {
     // no model override) so these tests isolate restructureV123.
     PinoSettings {
         auto_cache: false,
-        tail_ttl: CacheTtl::FiveMin,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: vec![],
         strip_ansi: false,
         model_override: None,
@@ -1023,24 +1034,25 @@ fn inject_places_tools_system_msg0_tail_within_cap() {
     });
     let tail_paths = inject_breakpoint_if_absent(&mut body, CacheTtl::FiveMin);
 
+    // Uniform TTL: every injected slot carries the passed ttl (5m).
     let tools = body["tools"].as_array().unwrap();
     assert_eq!(
         cc(&tools[1]).unwrap(),
-        &json!({ "type": "ephemeral", "ttl": "1h" })
+        &json!({ "type": "ephemeral", "ttl": "5m" })
     );
     assert!(cc(&tools[0]).is_none());
 
     let system = body["system"].as_array().unwrap();
     assert_eq!(
         cc(&system[1]).unwrap(),
-        &json!({ "type": "ephemeral", "ttl": "1h" })
+        &json!({ "type": "ephemeral", "ttl": "5m" })
     );
     assert!(cc(&system[0]).is_none());
 
     let msg0 = body["messages"][0]["content"].as_array().unwrap();
     assert_eq!(
         cc(&msg0[1]).unwrap(),
-        &json!({ "type": "ephemeral", "ttl": "1h" })
+        &json!({ "type": "ephemeral", "ttl": "5m" })
     );
 
     let last_block = &body["messages"][2]["content"][0];
@@ -1073,7 +1085,7 @@ fn inject_converts_string_system_to_cached_array() {
     assert_eq!(
         body["system"],
         json!([ { "type": "text", "text": "you are a helpful assistant",
-                  "cache_control": { "type": "ephemeral", "ttl": "1h" } } ])
+                  "cache_control": { "type": "ephemeral", "ttl": "5m" } } ])
     );
 }
 
@@ -1115,7 +1127,7 @@ fn inject_strips_small_system_breakpoint_then_reuses_slot() {
     inject_breakpoint_if_absent(&mut body, CacheTtl::FiveMin);
     assert_eq!(
         cc(&body["system"][0]).unwrap(),
-        &json!({ "type": "ephemeral", "ttl": "1h" })
+        &json!({ "type": "ephemeral", "ttl": "5m" })
     );
 }
 
@@ -1147,10 +1159,10 @@ fn inject_len_gt_one_only_msg0_cacheable_no_duplicate_tail() {
         ]
     });
     let tail_paths = inject_breakpoint_if_absent(&mut body, CacheTtl::FiveMin);
-    // msg0 block keeps its 1h (msg0 pass), tail pass adds nothing.
+    // msg0 block keeps its 5m (msg0 pass), tail pass adds nothing.
     assert_eq!(
         cc(&body["messages"][0]["content"][0]).unwrap(),
-        &json!({ "type": "ephemeral", "ttl": "1h" })
+        &json!({ "type": "ephemeral", "ttl": "5m" })
     );
     assert_eq!(
         count_cache_breakpoints(&body),
@@ -1159,7 +1171,7 @@ fn inject_len_gt_one_only_msg0_cacheable_no_duplicate_tail() {
     );
     assert!(
         tail_paths.is_empty(),
-        "no 5m tail added when the only cacheable block is msg0's"
+        "no extra tail added when the only cacheable block is msg0's"
     );
 }
 
@@ -1221,7 +1233,7 @@ fn normalize_tail_records_block_path_not_cache_control_path() {
 }
 
 #[test]
-fn rewrite_bumps_every_ephemeral_to_1h_except_skip() {
+fn rewrite_bumps_every_ephemeral_to_ttl_except_skip() {
     let mut body = json!({
         "tools": [ { "name": "x", "cache_control": { "type": "ephemeral", "ttl": "5m" } } ],
         "system": [ { "type": "text", "text": "s", "cache_control": { "type": "ephemeral" } } ],
@@ -1233,7 +1245,7 @@ fn rewrite_bumps_every_ephemeral_to_1h_except_skip() {
     });
     let mut skip: HashSet<String> = HashSet::new();
     skip.insert("/messages/0/content/0".to_string());
-    rewrite_cache_control(&mut body, &skip);
+    rewrite_cache_control(&mut body, &skip, CacheTtl::OneHour);
     assert_eq!(body["tools"][0]["cache_control"]["ttl"], json!("1h"));
     assert_eq!(body["system"][0]["cache_control"]["ttl"], json!("1h"));
     assert_eq!(
@@ -1247,27 +1259,121 @@ fn rewrite_leaves_non_ephemeral_alone() {
     let mut body = json!({
         "x": { "cache_control": { "type": "persistent", "ttl": "5m" } }
     });
-    rewrite_cache_control(&mut body, &HashSet::new());
+    rewrite_cache_control(&mut body, &HashSet::new(), CacheTtl::OneHour);
     assert_eq!(body["x"]["cache_control"]["ttl"], json!("5m"));
 }
 
 // M4.9 ===== apply_auto_cache pipeline (strip-intermediate -> inject -> normalize-tail
 // ===== -> rewrite). End-to-end through PinoTransform::transform (server.js 88-98).
 
-fn auto_cache_settings(tail: CacheTtl) -> PinoSettings {
+fn auto_cache_settings(main: CacheTtl, sub: CacheTtl) -> PinoSettings {
     PinoSettings {
         auto_cache: true,
-        tail_ttl: tail,
+        main_ttl: main,
+        sub_ttl: sub,
         drop_tools: vec![],
         strip_ansi: false,
         model_override: None,
     }
 }
 
+// M4.9b ===== per-agent uniform TTL: the selected ttl (main vs sub by ctx) is
+// applied to EVERY cache slot, not just the tail.
+
+fn main_sub_settings() -> PinoSettings {
+    PinoSettings {
+        auto_cache: true,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
+        drop_tools: vec![],
+        strip_ansi: false,
+        model_override: None,
+    }
+}
+
+fn ttl_at(body: &serde_json::Value, ptr: &str) -> String {
+    body.pointer(ptr)
+        .and_then(|b| b.get("cache_control"))
+        .and_then(|cc| cc.get("ttl"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("<none>")
+        .to_string()
+}
+
 #[test]
-fn auto_cache_end_to_end_caps_at_four_and_keeps_tail_at_configured_ttl() {
+fn main_request_applies_main_ttl_to_every_slot() {
     let t = PinoTransform {
-        settings: auto_cache_settings(CacheTtl::FiveMin),
+        settings: main_sub_settings(),
+    };
+    let mut body = json!({
+        "tools": [ { "name": "Bash" }, { "name": "Read" } ],
+        "system": [ { "type": "text", "text": "s".repeat(600) } ],
+        "messages": [
+            { "role": "user", "content": [ { "type": "text", "text": "r".repeat(600) } ] },
+            { "role": "assistant", "content": [ { "type": "text", "text": "mid" } ] },
+            { "role": "user", "content": [ { "type": "text", "text": "tail turn" } ] }
+        ]
+    });
+    t.transform(&mut body, &main_ctx()).unwrap();
+    assert_eq!(count_cache_breakpoints(&body), 4);
+    assert_eq!(ttl_at(&body, "/tools/1"), "1h");
+    assert_eq!(ttl_at(&body, "/system/0"), "1h");
+    assert_eq!(ttl_at(&body, "/messages/0/content/0"), "1h");
+    assert_eq!(ttl_at(&body, "/messages/2/content/0"), "1h"); // tail also 1h (uniform)
+}
+
+#[test]
+fn subagent_request_applies_sub_ttl_to_every_slot() {
+    let t = PinoTransform {
+        settings: main_sub_settings(),
+    };
+    let mut body = json!({
+        "tools": [ { "name": "Bash" }, { "name": "Read" } ],
+        "system": [ { "type": "text", "text": "s".repeat(600) } ],
+        "messages": [
+            { "role": "user", "content": [ { "type": "text", "text": "r".repeat(600) } ] },
+            { "role": "assistant", "content": [ { "type": "text", "text": "mid" } ] },
+            { "role": "user", "content": [ { "type": "text", "text": "tail turn" } ] }
+        ]
+    });
+    t.transform(&mut body, &sub_ctx()).unwrap();
+    assert_eq!(count_cache_breakpoints(&body), 4);
+    assert_eq!(ttl_at(&body, "/tools/1"), "5m"); // head slot is 5m for a subagent
+    assert_eq!(ttl_at(&body, "/system/0"), "5m");
+    assert_eq!(ttl_at(&body, "/messages/0/content/0"), "5m");
+    assert_eq!(ttl_at(&body, "/messages/2/content/0"), "5m");
+}
+
+#[test]
+fn settings_values_are_honored_per_agent_type() {
+    // Non-default: main=5m, sub=1h. Proves the value comes from settings, not a constant.
+    let t = PinoTransform {
+        settings: PinoSettings {
+            auto_cache: true,
+            main_ttl: CacheTtl::FiveMin,
+            sub_ttl: CacheTtl::OneHour,
+            drop_tools: vec![],
+            strip_ansi: false,
+            model_override: None,
+        },
+    };
+    let body0 = json!({
+        "system": [ { "type": "text", "text": "s".repeat(600) } ],
+        "messages": [ { "role": "user", "content": [ { "type": "text", "text": "hi" } ] } ]
+    });
+    let mut bmain = body0.clone();
+    t.transform(&mut bmain, &main_ctx()).unwrap();
+    assert_eq!(ttl_at(&bmain, "/system/0"), "5m");
+
+    let mut bsub = body0.clone();
+    t.transform(&mut bsub, &sub_ctx()).unwrap();
+    assert_eq!(ttl_at(&bsub, "/system/0"), "1h");
+}
+
+#[test]
+fn auto_cache_caps_at_four_and_strips_intermediate() {
+    let t = PinoTransform {
+        settings: auto_cache_settings(CacheTtl::OneHour, CacheTtl::FiveMin),
     };
     let mut body = json!({
         "tools": [ { "name": "Bash" }, { "name": "Read" } ],
@@ -1287,6 +1393,7 @@ fn auto_cache_end_to_end_caps_at_four_and_keeps_tail_at_configured_ttl() {
             .is_none(),
         "intermediate breakpoint stripped"
     );
+    // Uniform under main: every slot, including the tail, carries main_ttl (1h).
     assert_eq!(body["tools"][1]["cache_control"]["ttl"], json!("1h"));
     assert_eq!(body["system"][0]["cache_control"]["ttl"], json!("1h"));
     assert_eq!(
@@ -1295,14 +1402,14 @@ fn auto_cache_end_to_end_caps_at_four_and_keeps_tail_at_configured_ttl() {
     );
     assert_eq!(
         body["messages"][2]["content"][0]["cache_control"]["ttl"],
-        json!("5m")
+        json!("1h")
     );
 }
 
 #[test]
-fn auto_cache_rewrites_every_ephemeral_to_1h_except_client_tail() {
+fn auto_cache_main_rewrites_every_ephemeral_to_main_ttl() {
     let t = PinoTransform {
-        settings: auto_cache_settings(CacheTtl::FiveMin),
+        settings: auto_cache_settings(CacheTtl::OneHour, CacheTtl::FiveMin),
     };
     let mut body = json!({
         "system": [ { "type": "text", "text": "s".repeat(600), "cache_control": { "type": "ephemeral" } } ],
@@ -1312,17 +1419,18 @@ fn auto_cache_rewrites_every_ephemeral_to_1h_except_client_tail() {
         ]
     });
     t.transform(&mut body, &main_ctx()).unwrap();
+    // Uniform TTL: the client tail is no longer special-cased to a different value.
     assert_eq!(body["system"][0]["cache_control"]["ttl"], json!("1h"));
     assert_eq!(
         body["messages"][1]["content"][0]["cache_control"]["ttl"],
-        json!("5m")
+        json!("1h")
     );
 }
 
 #[test]
-fn auto_cache_tail_ttl_1h_keeps_tail_at_1h() {
+fn auto_cache_main_single_turn_uses_main_ttl() {
     let t = PinoTransform {
-        settings: auto_cache_settings(CacheTtl::OneHour),
+        settings: auto_cache_settings(CacheTtl::OneHour, CacheTtl::FiveMin),
     };
     let mut body = json!({
         "messages": [ { "role": "user", "content": [ { "type": "text", "text": "only turn" } ] } ]
@@ -1340,7 +1448,8 @@ fn auto_cache_disabled_does_not_inject_any_breakpoint() {
     let t = PinoTransform {
         settings: PinoSettings {
             auto_cache: false,
-            tail_ttl: CacheTtl::FiveMin,
+            main_ttl: CacheTtl::OneHour,
+            sub_ttl: CacheTtl::FiveMin,
             drop_tools: vec![],
             strip_ansi: false,
             model_override: None,
@@ -1361,7 +1470,7 @@ fn auto_cache_disabled_does_not_inject_any_breakpoint() {
 #[test]
 fn auto_cache_targets_restructured_layout_not_pre_restructure() {
     let t = PinoTransform {
-        settings: auto_cache_settings(CacheTtl::FiveMin),
+        settings: auto_cache_settings(CacheTtl::OneHour, CacheTtl::FiveMin),
     };
     let mut body = json!({
         "messages": [
@@ -1379,15 +1488,14 @@ fn auto_cache_targets_restructured_layout_not_pre_restructure() {
         body["messages"][0]["content"][0]["text"],
         json!("claudeMd core context block")
     );
-    // msg0 dedicated breakpoint goes on msg0's LAST cacheable block ("msg0 prose") at 1h.
+    // Uniform under main: msg0 dedicated breakpoint and the tail are both main_ttl (1h).
     assert_eq!(
         body["messages"][0]["content"][1]["cache_control"]["ttl"],
         json!("1h")
     );
-    // Tail breakpoint on the last message's only block at 5m.
     assert_eq!(
         body["messages"][2]["content"][0]["cache_control"]["ttl"],
-        json!("5m")
+        json!("1h")
     );
     assert_eq!(count_cache_breakpoints(&body), 2);
 }
@@ -1478,7 +1586,8 @@ fn apply_headers_sets_beta_when_auto_cache_on() {
     let t = PinoTransform {
         settings: PinoSettings {
             auto_cache: true,
-            tail_ttl: CacheTtl::FiveMin,
+            main_ttl: CacheTtl::OneHour,
+            sub_ttl: CacheTtl::FiveMin,
             drop_tools: vec![],
             strip_ansi: false,
             model_override: None,
@@ -1515,7 +1624,8 @@ fn full_pipeline_parity_realistic_body() {
     let t = PinoTransform {
         settings: PinoSettings {
             auto_cache: true,
-            tail_ttl: CacheTtl::FiveMin,
+            main_ttl: CacheTtl::OneHour,
+            sub_ttl: CacheTtl::FiveMin,
             drop_tools: vec!["NotebookEdit".to_string()],
             strip_ansi: true,
             model_override: Some("claude-opus-4-6".to_string()),
@@ -1597,7 +1707,7 @@ fn full_pipeline_parity_realistic_body() {
     assert!(!rem_text.contains("NotebookEdit"));
     assert!(rem_text.contains("Glob"));
 
-    // --- caching: 4-cap respected; tools/system/msg0 at 1h; tail at 5m ---
+    // --- caching: 4-cap respected; uniform under main => every slot at 1h ---
     assert_eq!(count_cache_breakpoints(&body), 4);
     assert_eq!(body["tools"][1]["cache_control"]["ttl"], json!("1h")); // last remaining tool = Read
     assert_eq!(body["system"][0]["cache_control"]["ttl"], json!("1h"));
@@ -1608,11 +1718,11 @@ fn full_pipeline_parity_realistic_body() {
         body["messages"][0]["content"][msg0_last]["cache_control"]["ttl"],
         json!("1h")
     );
-    // tail breakpoint at 5m on the last message's last cacheable block.
+    // tail breakpoint also at 1h (uniform main_ttl) on the last message's last cacheable block.
     let tail_last = tail_content.len() - 1;
     assert_eq!(
         body["messages"][last]["content"][tail_last]["cache_control"]["ttl"],
-        json!("5m")
+        json!("1h")
     );
 
     // --- apply_headers emits the beta flag (engine hook) ---
@@ -1634,7 +1744,8 @@ fn full_pipeline_parity_realistic_body() {
 fn all_off_settings() -> PinoSettings {
     PinoSettings {
         auto_cache: false,
-        tail_ttl: CacheTtl::FiveMin,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
         drop_tools: vec![],
         strip_ansi: false,
         model_override: None,

@@ -223,9 +223,13 @@ pub struct PinoArgs {
     #[arg(long = "no-auto-cache", overrides_with = "auto_cache")]
     pub no_auto_cache: bool,
 
-    /// Rolling-tail cache TTL (`5m` default, or `1h`).
+    /// Cache TTL for main-agent requests (`1h` default, or `5m`).
+    #[arg(long, value_name = "TTL", value_enum, default_value_t = CacheTtlArg::OneHour)]
+    pub main_ttl: CacheTtlArg,
+
+    /// Cache TTL for subagent requests (`5m` default, or `1h`).
     #[arg(long, value_name = "TTL", value_enum, default_value_t = CacheTtlArg::FiveMin)]
-    pub tail_ttl: CacheTtlArg,
+    pub sub_ttl: CacheTtlArg,
 
     /// Tool names to drop from `tools` and scrub from reminders.
     #[arg(long, value_delimiter = ',', value_name = "CSV")]
@@ -259,7 +263,7 @@ pub struct HeadroomArgs {
     pub no_compression: bool,
 }
 
-/// `--tail-ttl` value enum mapping to [`CacheTtl`] (`5m` / `1h`).
+/// `--main-ttl` / `--sub-ttl` value enum mapping to [`CacheTtl`] (`5m` / `1h`).
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CacheTtlArg {
     /// 5-minute cache TTL (default).
@@ -306,7 +310,8 @@ pub fn transform_from_proxy_args(args: &ProxyArgs) -> TransformKind {
     match args.which {
         ProxyName::Pino => TransformKind::Pino(PinoSettings {
             auto_cache: args.auto_cache(),
-            tail_ttl: args.pino.tail_ttl.into(),
+            main_ttl: args.pino.main_ttl.into(),
+            sub_ttl: args.pino.sub_ttl.into(),
             drop_tools: args
                 .pino
                 .drop_tools

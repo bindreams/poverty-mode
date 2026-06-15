@@ -100,7 +100,8 @@ impl Config {
                     enabled: false,
                     settings: ProxySettings::Pino(PinoSettings {
                         auto_cache: true,
-                        tail_ttl: CacheTtl::FiveMin,
+                        main_ttl: CacheTtl::OneHour,
+                        sub_ttl: CacheTtl::FiveMin,
                         drop_tools: Vec::new(),
                         strip_ansi: true,
                         model_override: None,

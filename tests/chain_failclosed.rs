@@ -17,7 +17,8 @@ fn pino_passthrough() -> ResolvedProxy {
         name: ProxyName::Pino,
         settings: ProxySettings::Pino(PinoSettings {
             auto_cache: false,
-            tail_ttl: CacheTtl::FiveMin,
+            main_ttl: CacheTtl::OneHour,
+            sub_ttl: CacheTtl::FiveMin,
             drop_tools: vec![],
             strip_ansi: false,
             model_override: None,

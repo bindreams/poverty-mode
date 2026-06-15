@@ -9,7 +9,8 @@ pub(crate) fn pino_rp() -> ResolvedProxy {
         name: ProxyName::Pino,
         settings: ProxySettings::Pino(PinoSettings {
             auto_cache: true,
-            tail_ttl: CacheTtl::FiveMin,
+            main_ttl: CacheTtl::OneHour,
+            sub_ttl: CacheTtl::FiveMin,
             drop_tools: vec![],
             strip_ansi: true,
             model_override: None,
@@ -240,7 +241,8 @@ fn pino_custom() -> ResolvedProxy {
         name: ProxyName::Pino,
         settings: ProxySettings::Pino(PinoSettings {
             auto_cache: true,
-            tail_ttl: CacheTtl::OneHour,
+            main_ttl: CacheTtl::OneHour,
+            sub_ttl: CacheTtl::FiveMin,
             drop_tools: vec!["WebFetch".to_string(), "WebSearch".to_string()],
             strip_ansi: false,
             model_override: Some("claude-3-5-haiku".to_string()),
@@ -272,8 +274,10 @@ fn proxy_child_args_pino_full_flags() {
             "--body-log-file".to_string(),
             "/runs/r1/pino-0.log".to_string(),
             "--auto-cache".to_string(),
-            "--tail-ttl".to_string(),
+            "--main-ttl".to_string(),
             "1h".to_string(),
+            "--sub-ttl".to_string(),
+            "5m".to_string(),
             "--drop-tools".to_string(),
             "WebFetch,WebSearch".to_string(),
             "--no-strip-ansi".to_string(),
@@ -293,11 +297,14 @@ fn proxy_child_args_pino_minimal_flags_omits_optional() {
         log_file: PathBuf::from("/x/pino-0.log"),
     };
     let args = proxy_child_args(&spec);
-    // pino_rp(): auto_cache=true, tail_ttl=5m, drop_tools=[], strip_ansi=true, model_override=None
+    // pino_rp(): auto_cache=true, main_ttl=1h, sub_ttl=5m, drop_tools=[], strip_ansi=true, model_override=None
     assert!(args.contains(&"--auto-cache".to_string()));
     assert!(args
         .windows(2)
-        .any(|w| w == ["--tail-ttl".to_string(), "5m".to_string()]));
+        .any(|w| w == ["--main-ttl".to_string(), "1h".to_string()]));
+    assert!(args
+        .windows(2)
+        .any(|w| w == ["--sub-ttl".to_string(), "5m".to_string()]));
     assert!(
         !args.contains(&"--drop-tools".to_string()),
         "empty drop_tools omitted: {args:?}"
@@ -320,7 +327,8 @@ fn proxy_child_args_pino_no_auto_cache_omits_flag() {
         name: ProxyName::Pino,
         settings: ProxySettings::Pino(PinoSettings {
             auto_cache: false,
-            tail_ttl: CacheTtl::FiveMin,
+            main_ttl: CacheTtl::OneHour,
+            sub_ttl: CacheTtl::FiveMin,
             drop_tools: vec![],
             strip_ansi: true,
             model_override: None,
@@ -403,7 +411,8 @@ fn reparse(args: &[String]) -> ResolvedProxy {
     let settings = match pargs.which {
         ProxyName::Pino => ProxySettings::Pino(PinoSettings {
             auto_cache: pargs.auto_cache(),
-            tail_ttl: pargs.pino.tail_ttl.into(),
+            main_ttl: pargs.pino.main_ttl.into(),
+            sub_ttl: pargs.pino.sub_ttl.into(),
             drop_tools: pargs
                 .pino
                 .drop_tools
@@ -435,7 +444,8 @@ fn proxy_child_args_round_trips_through_clap() {
             name: ProxyName::Pino,
             settings: ProxySettings::Pino(PinoSettings {
                 auto_cache: false,
-                tail_ttl: CacheTtl::FiveMin,
+                main_ttl: CacheTtl::OneHour,
+                sub_ttl: CacheTtl::FiveMin,
                 drop_tools: vec![],
                 strip_ansi: true,
                 model_override: None,
