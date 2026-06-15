@@ -299,10 +299,13 @@ impl RequestContext {
 /// only on a transformed POST `/v1/messages` (R6). The default is a no-op;
 /// `PinoTransform` overrides it.
 pub trait BodyTransform: Send + Sync {
-    /// Mutate the parsed JSON request body in place.
+    /// Mutate the parsed JSON request body in place. `ctx` classifies the request
+    /// (e.g. subagent vs main) so a transform may vary behavior by origin — see
+    /// [`RequestContext`].
     fn transform(&self, body: &mut serde_json::Value, ctx: &RequestContext) -> anyhow::Result<()>;
 
-    /// Transform the ORIGINAL request bytes (FIX-B).
+    /// Transform the ORIGINAL request bytes (FIX-B). `ctx` classifies the request
+    /// (see [`RequestContext`]) and is forwarded to [`BodyTransform::transform`].
     ///
     /// Returns `Ok(None)` when there is NO change — the engine forwards the
     /// original request bytes verbatim (byte-faithful, prompt-cache-preserving).
