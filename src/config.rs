@@ -1,5 +1,5 @@
 use crate::proxy::headroom::HeadroomSettings;
-use crate::proxy::pino::{PinoSettings, TailTtl};
+use crate::proxy::pino::{CacheTtl, PinoSettings};
 use crate::proxy::ProxyName;
 
 /// The whole config file. `proxies` order is the default chain order.
@@ -100,7 +100,7 @@ impl Config {
                     enabled: false,
                     settings: ProxySettings::Pino(PinoSettings {
                         auto_cache: true,
-                        tail_ttl: TailTtl::FiveMin,
+                        tail_ttl: CacheTtl::FiveMin,
                         drop_tools: Vec::new(),
                         strip_ansi: true,
                         model_override: None,

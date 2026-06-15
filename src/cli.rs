@@ -15,7 +15,7 @@ use anyhow::Context as _;
 use clap::{Args, Parser, Subcommand};
 
 use crate::proxy::headroom::HeadroomSettings;
-use crate::proxy::pino::{PinoSettings, TailTtl};
+use crate::proxy::pino::{CacheTtl, PinoSettings};
 use crate::proxy::{self, EngineConfig, ProxyName, TransformKind, Upstream};
 
 /// Run an AI coding agent behind a user-chosen chain of local HTTP proxies.
@@ -224,8 +224,8 @@ pub struct PinoArgs {
     pub no_auto_cache: bool,
 
     /// Rolling-tail cache TTL (`5m` default, or `1h`).
-    #[arg(long, value_name = "TTL", value_enum, default_value_t = TailTtlArg::FiveMin)]
-    pub tail_ttl: TailTtlArg,
+    #[arg(long, value_name = "TTL", value_enum, default_value_t = CacheTtlArg::FiveMin)]
+    pub tail_ttl: CacheTtlArg,
 
     /// Tool names to drop from `tools` and scrub from reminders.
     #[arg(long, value_delimiter = ',', value_name = "CSV")]
@@ -259,22 +259,22 @@ pub struct HeadroomArgs {
     pub no_compression: bool,
 }
 
-/// `--tail-ttl` value enum mapping to [`TailTtl`] (`5m` / `1h`).
+/// `--tail-ttl` value enum mapping to [`CacheTtl`] (`5m` / `1h`).
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TailTtlArg {
-    /// 5-minute rolling tail (default).
+pub enum CacheTtlArg {
+    /// 5-minute cache TTL (default).
     #[value(name = "5m")]
     FiveMin,
-    /// 1-hour rolling tail.
+    /// 1-hour cache TTL.
     #[value(name = "1h")]
     OneHour,
 }
 
-impl From<TailTtlArg> for TailTtl {
-    fn from(a: TailTtlArg) -> Self {
+impl From<CacheTtlArg> for CacheTtl {
+    fn from(a: CacheTtlArg) -> Self {
         match a {
-            TailTtlArg::FiveMin => TailTtl::FiveMin,
-            TailTtlArg::OneHour => TailTtl::OneHour,
+            CacheTtlArg::FiveMin => CacheTtl::FiveMin,
+            CacheTtlArg::OneHour => CacheTtl::OneHour,
         }
     }
 }

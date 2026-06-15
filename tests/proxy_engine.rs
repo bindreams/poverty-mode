@@ -335,7 +335,7 @@ async fn forward_post_messages_recomputes_content_length() {
 // reference pino's `mutate=false` arm).
 #[tokio::test]
 async fn pino_all_features_off_forwards_bytes_verbatim_no_beta() {
-    use poverty_mode::proxy::pino::{PinoSettings, TailTtl};
+    use poverty_mode::proxy::pino::{CacheTtl, PinoSettings};
 
     let stub = start_stub_async(r#"{"ok":true}"#).await;
     let shutdown = std::sync::Arc::new(Notify::new());
@@ -351,7 +351,7 @@ async fn pino_all_features_off_forwards_bytes_verbatim_no_beta() {
         log_file: None,
         transform: TransformKind::Pino(PinoSettings {
             auto_cache: false,
-            tail_ttl: TailTtl::FiveMin,
+            tail_ttl: CacheTtl::FiveMin,
             drop_tools: vec![],
             strip_ansi: false,
             model_override: None,
@@ -390,7 +390,7 @@ async fn pino_all_features_off_forwards_bytes_verbatim_no_beta() {
 // applies the 1h-cache beta header (apply_headers fires on the active transform).
 #[tokio::test]
 async fn pino_auto_cache_on_injects_and_applies_beta() {
-    use poverty_mode::proxy::pino::{PinoSettings, TailTtl, BETA_FLAG};
+    use poverty_mode::proxy::pino::{CacheTtl, PinoSettings, BETA_FLAG};
 
     let stub = start_stub_async(r#"{"ok":true}"#).await;
     let shutdown = std::sync::Arc::new(Notify::new());
@@ -406,7 +406,7 @@ async fn pino_auto_cache_on_injects_and_applies_beta() {
         log_file: None,
         transform: TransformKind::Pino(PinoSettings {
             auto_cache: true,
-            tail_ttl: TailTtl::FiveMin,
+            tail_ttl: CacheTtl::FiveMin,
             drop_tools: vec![],
             strip_ansi: false,
             model_override: None,

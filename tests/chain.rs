@@ -9,7 +9,7 @@ use poverty_mode::agent::Agent;
 use poverty_mode::config::{CentralSettings, ProxySettings, ResolvedProxy};
 use poverty_mode::orchestrator;
 use poverty_mode::proxy::headroom::HeadroomSettings;
-use poverty_mode::proxy::pino::{PinoSettings, TailTtl};
+use poverty_mode::proxy::pino::{CacheTtl, PinoSettings};
 use poverty_mode::proxy::{ProxyName, Upstream};
 use url::Url;
 
@@ -33,7 +33,7 @@ pub fn pino_passthrough() -> ResolvedProxy {
         name: ProxyName::Pino,
         settings: ProxySettings::Pino(PinoSettings {
             auto_cache: false,
-            tail_ttl: TailTtl::FiveMin,
+            tail_ttl: CacheTtl::FiveMin,
             drop_tools: vec![],
             strip_ansi: false,
             model_override: None,

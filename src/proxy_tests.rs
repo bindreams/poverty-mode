@@ -136,12 +136,12 @@ fn path_prefix_root_is_empty() {
 #[test]
 fn transform_kind_variants_exist() {
     use crate::proxy::headroom::HeadroomSettings;
-    use crate::proxy::pino::{PinoSettings, TailTtl};
+    use crate::proxy::pino::{CacheTtl, PinoSettings};
     let kinds = [
         TransformKind::None,
         TransformKind::Pino(PinoSettings {
             auto_cache: false,
-            tail_ttl: TailTtl::FiveMin,
+            tail_ttl: CacheTtl::FiveMin,
             drop_tools: vec![],
             strip_ansi: false,
             model_override: None,
@@ -250,10 +250,10 @@ fn health_body_round_trips_with_run_id() {
 
 #[test]
 fn engine_config_holds_run_id_and_transform_kind() {
-    use crate::proxy::pino::{PinoSettings, TailTtl};
+    use crate::proxy::pino::{CacheTtl, PinoSettings};
     let settings = PinoSettings {
         auto_cache: false,
-        tail_ttl: TailTtl::FiveMin,
+        tail_ttl: CacheTtl::FiveMin,
         drop_tools: vec![],
         strip_ansi: false,
         model_override: None,
@@ -409,12 +409,12 @@ fn transform_kind_none_yields_no_transform() {
 
 #[test]
 fn transform_kind_pino_yields_a_boxed_transform() {
-    use crate::proxy::pino::{PinoSettings, TailTtl};
+    use crate::proxy::pino::{CacheTtl, PinoSettings};
     // M1's PinoTransform stub fails loud until M4; the materializer must still
     // hand back an Arc-shared transform (the engine decides what to do with an Err).
     let settings = PinoSettings {
         auto_cache: false,
-        tail_ttl: TailTtl::FiveMin,
+        tail_ttl: CacheTtl::FiveMin,
         drop_tools: vec![],
         strip_ansi: false,
         model_override: None,
@@ -428,13 +428,13 @@ fn transform_kind_pino_yields_a_boxed_transform() {
 
 #[test]
 fn transform_kind_pino_transform_succeeds_after_m4() {
-    use crate::proxy::pino::{PinoSettings, TailTtl};
+    use crate::proxy::pino::{CacheTtl, PinoSettings};
     // R9's M1 stub returned an explicit Err; M4.2 replaced it with the real
     // dispatch skeleton, so the materialized pino transform now returns Ok (and,
     // with every feature off, is a byte-faithful no-op).
     let settings = PinoSettings {
         auto_cache: false,
-        tail_ttl: TailTtl::FiveMin,
+        tail_ttl: CacheTtl::FiveMin,
         drop_tools: vec![],
         strip_ansi: false,
         model_override: None,

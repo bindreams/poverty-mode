@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::proxy::headroom::HeadroomSettings;
-use crate::proxy::pino::{PinoSettings, TailTtl};
+use crate::proxy::pino::{CacheTtl, PinoSettings};
 use crate::proxy::ProxyName;
 
 fn pino_of(s: &ProxySettings) -> &PinoSettings {
@@ -50,7 +50,7 @@ fn default_all_disabled_has_expected_per_proxy_settings() {
 
     let pino = pino_of(&cfg.proxies[0].settings);
     assert_eq!(pino.auto_cache, true);
-    assert_eq!(pino.tail_ttl, TailTtl::FiveMin);
+    assert_eq!(pino.tail_ttl, CacheTtl::FiveMin);
     assert_eq!(pino.drop_tools, Vec::<String>::new());
     assert_eq!(pino.strip_ansi, true);
     assert_eq!(pino.model_override, None);
@@ -98,7 +98,7 @@ model_override: claude-x
     let s: ProxySettings = serde_yaml::from_str(yaml).unwrap();
     let p = pino_of(&s);
     assert_eq!(p.auto_cache, false);
-    assert_eq!(p.tail_ttl, TailTtl::OneHour);
+    assert_eq!(p.tail_ttl, CacheTtl::OneHour);
     assert_eq!(p.drop_tools, vec!["Foo".to_string(), "Bar".to_string()]);
     assert_eq!(p.strip_ansi, false);
     assert_eq!(p.model_override, Some("claude-x".to_string()));
@@ -131,7 +131,7 @@ fn central_settings_default_when_fields_omitted() {
 
 #[test]
 fn pino_settings_invalid_tail_ttl_falls_back_to_five_min_not_an_error() {
-    // R22/R23k: M1 defines `TailTtl` with a CUSTOM lenient `Deserialize` that maps
+    // R22/R23k: M1 defines `CacheTtl` with a CUSTOM lenient `Deserialize` that maps
     // any unrecognized value to `FiveMin` (Node parseTailTtl parity) — it must NOT
     // hard-error. M2 asserts the fallback here (M4 relies on it). A pino settings
     // mapping with `tail_ttl: 7m` therefore parses successfully with tail_ttl ==
@@ -148,26 +148,26 @@ model_override: null
     let p = pino_of(&s);
     assert_eq!(
         p.tail_ttl,
-        TailTtl::FiveMin,
+        CacheTtl::FiveMin,
         "an unrecognized tail_ttl must fall back to FiveMin, not error"
     );
 }
 
 #[test]
 fn tail_ttl_invalid_value_deserializes_to_five_min() {
-    // Direct check of the lenient TailTtl::Deserialize contract from M1 (R23k):
+    // Direct check of the lenient CacheTtl::Deserialize contract from M1 (R23k):
     // a bare invalid scalar maps to FiveMin rather than failing.
-    let t: TailTtl = serde_yaml::from_str("nonsense\n")
-        .expect("invalid TailTtl must deserialize leniently to FiveMin");
-    assert_eq!(t, TailTtl::FiveMin);
+    let t: CacheTtl = serde_yaml::from_str("nonsense\n")
+        .expect("invalid CacheTtl must deserialize leniently to FiveMin");
+    assert_eq!(t, CacheTtl::FiveMin);
     // And the valid tokens still parse exactly.
     assert_eq!(
-        serde_yaml::from_str::<TailTtl>("5m\n").unwrap(),
-        TailTtl::FiveMin
+        serde_yaml::from_str::<CacheTtl>("5m\n").unwrap(),
+        CacheTtl::FiveMin
     );
     assert_eq!(
-        serde_yaml::from_str::<TailTtl>("1h\n").unwrap(),
-        TailTtl::OneHour
+        serde_yaml::from_str::<CacheTtl>("1h\n").unwrap(),
+        CacheTtl::OneHour
     );
 }
 
@@ -230,7 +230,7 @@ defaults:
     assert_eq!(cfg.proxies[0].name, ProxyName::Pino);
     assert_eq!(cfg.proxies[0].enabled, true);
     match &cfg.proxies[0].settings {
-        ProxySettings::Pino(p) => assert_eq!(p.tail_ttl, TailTtl::OneHour),
+        ProxySettings::Pino(p) => assert_eq!(p.tail_ttl, CacheTtl::OneHour),
         other => panic!("expected pino, got {other:?}"),
     }
 }
@@ -442,7 +442,7 @@ fn resolve_cli_carries_settings_from_config_entry() {
     // Customize pino settings in the config.
     cfg.proxies[0].settings = ProxySettings::Pino(PinoSettings {
         auto_cache: false,
-        tail_ttl: TailTtl::OneHour,
+        tail_ttl: CacheTtl::OneHour,
         drop_tools: vec!["Bash".to_string()],
         strip_ansi: false,
         model_override: Some("claude-z".to_string()),
@@ -452,7 +452,7 @@ fn resolve_cli_carries_settings_from_config_entry() {
     match &chain[0].settings {
         ProxySettings::Pino(p) => {
             assert_eq!(p.auto_cache, false);
-            assert_eq!(p.tail_ttl, TailTtl::OneHour);
+            assert_eq!(p.tail_ttl, CacheTtl::OneHour);
             assert_eq!(p.drop_tools, vec!["Bash".to_string()]);
             assert_eq!(p.strip_ansi, false);
             assert_eq!(p.model_override, Some("claude-z".to_string()));
@@ -612,7 +612,7 @@ fn save_resolved_chain_carries_resolved_settings_and_reloads_equal() {
     let mut cfg = enabled_default();
     cfg.proxies[0].settings = ProxySettings::Pino(PinoSettings {
         auto_cache: false,
-        tail_ttl: TailTtl::OneHour,
+        tail_ttl: CacheTtl::OneHour,
         drop_tools: vec!["Bash".to_string()],
         strip_ansi: false,
         model_override: Some("claude-z".to_string()),
@@ -630,7 +630,7 @@ fn save_resolved_chain_carries_resolved_settings_and_reloads_equal() {
     match &pino.settings {
         ProxySettings::Pino(p) => {
             assert_eq!(p.model_override, Some("claude-z".to_string()));
-            assert_eq!(p.tail_ttl, TailTtl::OneHour);
+            assert_eq!(p.tail_ttl, CacheTtl::OneHour);
         }
         other => panic!("expected pino settings, got {other:?}"),
     }

@@ -15,7 +15,7 @@ fn seed_all_disabled() -> TuiState {
             },
             ProxySettings::Pino(PinoSettings {
                 auto_cache: true,
-                tail_ttl: crate::proxy::pino::TailTtl::FiveMin,
+                tail_ttl: crate::proxy::pino::CacheTtl::FiveMin,
                 drop_tools: vec![],
                 strip_ansi: true,
                 model_override: None,
@@ -170,7 +170,7 @@ fn move_down_at_bottom_is_noop() {
             },
             ProxySettings::Pino(PinoSettings {
                 auto_cache: true,
-                tail_ttl: crate::proxy::pino::TailTtl::FiveMin,
+                tail_ttl: crate::proxy::pino::CacheTtl::FiveMin,
                 drop_tools: vec![],
                 strip_ansi: true,
                 model_override: None,
@@ -202,7 +202,7 @@ fn reorder_carries_settings_with_the_row() {
             },
             ProxySettings::Pino(PinoSettings {
                 auto_cache: true,
-                tail_ttl: crate::proxy::pino::TailTtl::FiveMin,
+                tail_ttl: crate::proxy::pino::CacheTtl::FiveMin,
                 drop_tools: vec![],
                 strip_ansi: true,
                 model_override: Some("sonnet-test".to_string()),
@@ -308,7 +308,7 @@ fn no_central_present_reorder_is_unconstrained() {
             },
             ProxySettings::Pino(PinoSettings {
                 auto_cache: true,
-                tail_ttl: crate::proxy::pino::TailTtl::FiveMin,
+                tail_ttl: crate::proxy::pino::CacheTtl::FiveMin,
                 drop_tools: vec![],
                 strip_ansi: true,
                 model_override: None,
@@ -464,7 +464,7 @@ fn cfg_pino_headroom_central(pino_on: bool, central_on: bool) -> Config {
                 enabled: pino_on,
                 settings: ProxySettings::Pino(PinoSettings {
                     auto_cache: true,
-                    tail_ttl: crate::proxy::pino::TailTtl::FiveMin,
+                    tail_ttl: crate::proxy::pino::CacheTtl::FiveMin,
                     drop_tools: vec![],
                     strip_ansi: true,
                     model_override: None,
@@ -508,7 +508,7 @@ fn from_resolved_enables_and_orders_resolved_members_first() {
             name: ProxyName::Pino,
             settings: ProxySettings::Pino(PinoSettings {
                 auto_cache: true,
-                tail_ttl: crate::proxy::pino::TailTtl::FiveMin,
+                tail_ttl: crate::proxy::pino::CacheTtl::FiveMin,
                 drop_tools: vec![],
                 strip_ansi: true,
                 model_override: None,
@@ -552,7 +552,7 @@ fn from_resolved_central_forced_last_even_if_not_tail_of_resolved() {
             name: ProxyName::Pino,
             settings: ProxySettings::Pino(PinoSettings {
                 auto_cache: true,
-                tail_ttl: crate::proxy::pino::TailTtl::FiveMin,
+                tail_ttl: crate::proxy::pino::CacheTtl::FiveMin,
                 drop_tools: vec![],
                 strip_ansi: true,
                 model_override: None,
@@ -586,7 +586,7 @@ fn from_resolved_then_confirm_yields_the_resolved_chain() {
             name: ProxyName::Pino,
             settings: ProxySettings::Pino(PinoSettings {
                 auto_cache: true,
-                tail_ttl: crate::proxy::pino::TailTtl::FiveMin,
+                tail_ttl: crate::proxy::pino::CacheTtl::FiveMin,
                 drop_tools: vec![],
                 strip_ansi: true,
                 model_override: Some("seed-model".to_string()),

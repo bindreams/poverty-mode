@@ -1,7 +1,7 @@
 use super::*;
 use crate::config::{CentralSettings, ProxySettings, ResolvedProxy};
 use crate::proxy::headroom::HeadroomSettings;
-use crate::proxy::pino::{PinoSettings, TailTtl};
+use crate::proxy::pino::{CacheTtl, PinoSettings};
 use crate::proxy::ProxyName;
 
 pub(crate) fn pino_rp() -> ResolvedProxy {
@@ -9,7 +9,7 @@ pub(crate) fn pino_rp() -> ResolvedProxy {
         name: ProxyName::Pino,
         settings: ProxySettings::Pino(PinoSettings {
             auto_cache: true,
-            tail_ttl: TailTtl::FiveMin,
+            tail_ttl: CacheTtl::FiveMin,
             drop_tools: vec![],
             strip_ansi: true,
             model_override: None,
@@ -240,7 +240,7 @@ fn pino_custom() -> ResolvedProxy {
         name: ProxyName::Pino,
         settings: ProxySettings::Pino(PinoSettings {
             auto_cache: true,
-            tail_ttl: TailTtl::OneHour,
+            tail_ttl: CacheTtl::OneHour,
             drop_tools: vec!["WebFetch".to_string(), "WebSearch".to_string()],
             strip_ansi: false,
             model_override: Some("claude-3-5-haiku".to_string()),
@@ -320,7 +320,7 @@ fn proxy_child_args_pino_no_auto_cache_omits_flag() {
         name: ProxyName::Pino,
         settings: ProxySettings::Pino(PinoSettings {
             auto_cache: false,
-            tail_ttl: TailTtl::FiveMin,
+            tail_ttl: CacheTtl::FiveMin,
             drop_tools: vec![],
             strip_ansi: true,
             model_override: None,
@@ -435,7 +435,7 @@ fn proxy_child_args_round_trips_through_clap() {
             name: ProxyName::Pino,
             settings: ProxySettings::Pino(PinoSettings {
                 auto_cache: false,
-                tail_ttl: TailTtl::FiveMin,
+                tail_ttl: CacheTtl::FiveMin,
                 drop_tools: vec![],
                 strip_ansi: true,
                 model_override: None,

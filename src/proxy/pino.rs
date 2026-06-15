@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 
 use crate::proxy::BodyTransform;
 
-/// Rolling-tail cache TTL. Serializes to the short forms `"5m"` / `"1h"`.
+/// Cache TTL (`5m`/`1h`). Serializes to the short forms `"5m"` / `"1h"`.
 ///
 /// Deserialization is **lenient** (R22/R23k — Node `parseTailTtl` parity,
 /// `reference/pino/src/config.js` lines 36-44): the raw value is trimmed and
@@ -19,14 +19,14 @@ use crate::proxy::BodyTransform;
 /// string falls back to `FiveMin` with a logged `warn!` rather than erroring.
 /// M2's config tests assert the fallback; M4 relies on it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-pub enum TailTtl {
+pub enum CacheTtl {
     #[serde(rename = "5m")]
     FiveMin,
     #[serde(rename = "1h")]
     OneHour,
 }
 
-impl<'de> Deserialize<'de> for TailTtl {
+impl<'de> Deserialize<'de> for CacheTtl {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -34,26 +34,26 @@ impl<'de> Deserialize<'de> for TailTtl {
         let raw = String::deserialize(deserializer)?;
         // Node parseTailTtl: String(raw).trim().toLowerCase() before matching.
         match raw.trim().to_ascii_lowercase().as_str() {
-            "1h" => Ok(TailTtl::OneHour),
+            "1h" => Ok(CacheTtl::OneHour),
             // "5m" and every unrecognized value degrade to 5m (Node behavior).
-            "5m" => Ok(TailTtl::FiveMin),
+            "5m" => Ok(CacheTtl::FiveMin),
             other => {
                 tracing::warn!(
                     value = other,
                     "invalid tail_ttl; falling back to 5m (valid values: 5m, 1h)"
                 );
-                Ok(TailTtl::FiveMin)
+                Ok(CacheTtl::FiveMin)
             }
         }
     }
 }
 
-impl TailTtl {
+impl CacheTtl {
     /// Wire value written into `cache_control.ttl`.
     pub fn as_str(&self) -> &'static str {
         match self {
-            TailTtl::FiveMin => "5m",
-            TailTtl::OneHour => "1h",
+            CacheTtl::FiveMin => "5m",
+            CacheTtl::OneHour => "1h",
         }
     }
 }
@@ -66,7 +66,7 @@ pub struct PinoSettings {
     /// Enable cache-breakpoint injection.
     pub auto_cache: bool,
     /// Rolling-tail cache TTL.
-    pub tail_ttl: TailTtl,
+    pub tail_ttl: CacheTtl,
     /// Tool names to drop from `tools` and scrub from reminders.
     pub drop_tools: Vec<String>,
     /// Strip ANSI escape sequences from text content.
@@ -691,7 +691,7 @@ fn find_last_cacheable_index_in_message(message: &mut Value) -> Option<usize> {
 /// Injects cache breakpoints within the 4-cap. Returns the JSON-Pointer paths of
 /// the tail blocks placed (so the 1h-rewrite can skip them). Mirrors
 /// injectBreakpointIfAbsent (reference/pino/src/cache.js 124-181).
-pub fn inject_breakpoint_if_absent(body: &mut Value, tail_ttl: TailTtl) -> Vec<String> {
+pub fn inject_breakpoint_if_absent(body: &mut Value, tail_ttl: CacheTtl) -> Vec<String> {
     let mut tail_paths: Vec<String> = Vec::new();
 
     // 1. Reclaim wasted small-system slots.
@@ -799,7 +799,7 @@ use std::collections::HashSet;
 /// Forces every ephemeral breakpoint inside the LAST message to `tail_ttl` and
 /// returns their JSON-Pointer (block) paths. Mirrors normalizeTailBreakpoints
 /// (reference/pino/src/cache.js 44-59).
-pub fn normalize_tail_breakpoints(body: &mut Value, tail_ttl: TailTtl) -> Vec<String> {
+pub fn normalize_tail_breakpoints(body: &mut Value, tail_ttl: CacheTtl) -> Vec<String> {
     let mut out = Vec::new();
     let msg_count = body
         .get("messages")
@@ -817,7 +817,7 @@ pub fn normalize_tail_breakpoints(body: &mut Value, tail_ttl: TailTtl) -> Vec<St
     out
 }
 
-fn normalize_walk(node: &mut Value, path: &str, tail_ttl: TailTtl, out: &mut Vec<String>) {
+fn normalize_walk(node: &mut Value, path: &str, tail_ttl: CacheTtl, out: &mut Vec<String>) {
     match node {
         Value::Object(map) => {
             let is_ephemeral = map
@@ -895,7 +895,7 @@ fn rewrite_walk(node: &mut Value, path: String, skip: &HashSet<String>) {
     }
 }
 
-fn apply_auto_cache(body: &mut Value, tail_ttl: TailTtl) {
+fn apply_auto_cache(body: &mut Value, tail_ttl: CacheTtl) {
     // Mirrors the AUTO_CACHE block of reference/pino/src/server.js (lines 88-98).
     strip_intermediate_message_breakpoints(body);
     let injected_tail = inject_breakpoint_if_absent(body, tail_ttl);

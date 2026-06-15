@@ -82,7 +82,7 @@ fn parses_proxy_pino_with_transform_flags() {
             assert_eq!(args.common.upstream.as_str(), "https://api.anthropic.com/");
             assert_eq!(args.common.run_id, "01ARZ");
             assert!(args.auto_cache());
-            assert_eq!(args.pino.tail_ttl, TailTtlArg::OneHour);
+            assert_eq!(args.pino.tail_ttl, CacheTtlArg::OneHour);
             assert_eq!(
                 args.pino.drop_tools,
                 vec!["WebFetch".to_string(), "WebSearch".to_string()]
