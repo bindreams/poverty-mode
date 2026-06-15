@@ -65,10 +65,7 @@ pub fn is_json_content_type(headers: &http::HeaderMap) -> bool {
 /// `Upstream` only ever wraps a wire URL (`http://127.0.0.1:<port>/wire/<secret>/…`)
 /// or `https://api.anthropic.com`; neither carries userinfo/query. Validating
 /// here guarantees the string composition below cannot produce a malformed URI.
-pub fn upstream_target_uri(
-    upstream: &Upstream,
-    inbound_path_and_query: &str,
-) -> anyhow::Result<http::Uri> {
+pub fn upstream_target_uri(upstream: &Upstream, inbound_path_and_query: &str) -> anyhow::Result<http::Uri> {
     if !upstream.url.username().is_empty() || upstream.url.password().is_some() {
         anyhow::bail!("upstream URL must not contain userinfo");
     }
@@ -76,9 +73,7 @@ pub fn upstream_target_uri(
         anyhow::bail!("upstream URL must not contain a query string");
     }
     debug_assert!(
-        upstream.url.username().is_empty()
-            && upstream.url.password().is_none()
-            && upstream.url.query().is_none(),
+        upstream.url.username().is_empty() && upstream.url.password().is_none() && upstream.url.query().is_none(),
         "Upstream invariant: no userinfo / no query"
     );
 
@@ -252,11 +247,9 @@ impl TransformKind {
             TransformKind::Pino(settings) => Some(std::sync::Arc::new(pino::PinoTransform {
                 settings: settings.clone(),
             })),
-            TransformKind::Headroom(settings) => {
-                Some(std::sync::Arc::new(headroom::HeadroomTransform {
-                    settings: settings.clone(),
-                }))
-            }
+            TransformKind::Headroom(settings) => Some(std::sync::Arc::new(headroom::HeadroomTransform {
+                settings: settings.clone(),
+            })),
         }
     }
 }
@@ -590,10 +583,7 @@ fn stream_request_body(body: Incoming) -> reqwest::Body {
 /// requires `S::Error: Into<Box<dyn std::error::Error + Send + Sync>>`, which
 /// `anyhow::Error` does NOT satisfy. Every internal failure is converted to a
 /// local 502 response, never propagated as the service error.
-async fn handle_request(
-    state: Arc<EngineState>,
-    req: Request<Incoming>,
-) -> Result<Response<EngineBody>, Infallible> {
+async fn handle_request(state: Arc<EngineState>, req: Request<Incoming>) -> Result<Response<EngineBody>, Infallible> {
     if req.method() == hyper::Method::GET && is_health_path(req.uri().path(), state.name) {
         return Ok(health_response(&state));
     }
@@ -629,9 +619,7 @@ fn bad_gateway(detail: impl std::fmt::Display) -> Response<EngineBody> {
     Response::builder()
         .status(StatusCode::BAD_GATEWAY)
         .header("content-type", "text/plain")
-        .body(full_body(Bytes::from(format!(
-            "proxy upstream error: {detail}"
-        ))))
+        .body(full_body(Bytes::from(format!("proxy upstream error: {detail}"))))
         .unwrap()
 }
 
@@ -641,10 +629,7 @@ fn bad_gateway(detail: impl std::fmt::Display) -> Response<EngineBody> {
 /// and recomputes Content-Length. Host is rewritten and auth headers pass through
 /// verbatim. Every internal error becomes a local 502 (R23e) — nothing is
 /// `?`-propagated as the hyper service error.
-async fn forward(
-    state: Arc<EngineState>,
-    req: Request<Incoming>,
-) -> Result<Response<EngineBody>, Infallible> {
+async fn forward(state: Arc<EngineState>, req: Request<Incoming>) -> Result<Response<EngineBody>, Infallible> {
     let method = req.method().clone();
     let path_and_query = req
         .uri()
@@ -654,9 +639,8 @@ async fn forward(
     let inbound_headers = req.headers().clone();
     let req_ctx = RequestContext::from_headers(&inbound_headers);
 
-    let should_transform = method == hyper::Method::POST
-        && is_messages_path(&path_and_query)
-        && is_json_content_type(&inbound_headers);
+    let should_transform =
+        method == hyper::Method::POST && is_messages_path(&path_and_query) && is_json_content_type(&inbound_headers);
 
     // Convert each fallible step into a local 502 (R23e); never `?`-propagate.
     let target = match upstream_target_uri(&state.upstream, &path_and_query) {
@@ -702,9 +686,7 @@ async fn forward(
                 let transform = transform.clone();
                 let raw = out_body.clone();
                 let ctx = req_ctx;
-                let outcome =
-                    tokio::task::spawn_blocking(move || transform.transform_bytes(&raw, &ctx))
-                        .await;
+                let outcome = tokio::task::spawn_blocking(move || transform.transform_bytes(&raw, &ctx)).await;
                 match outcome {
                     Ok(Ok(Some(bytes))) => {
                         out_body = bytes;
@@ -742,10 +724,7 @@ async fn forward(
             }
         }
 
-        let mut b = state
-            .client
-            .request(reqwest_method, target.to_string())
-            .body(out_body);
+        let mut b = state.client.request(reqwest_method, target.to_string()).body(out_body);
         for (name, value) in headers.iter() {
             b = b.header(name.as_str(), value.as_bytes());
         }
@@ -756,10 +735,7 @@ async fn forward(
         // the streamed body (it may be chunked).
         headers.remove(http::header::CONTENT_LENGTH);
         let streamed = stream_request_body(req.into_body());
-        let mut b = state
-            .client
-            .request(reqwest_method, target.to_string())
-            .body(streamed);
+        let mut b = state.client.request(reqwest_method, target.to_string()).body(streamed);
         for (name, value) in headers.iter() {
             b = b.header(name.as_str(), value.as_bytes());
         }
@@ -779,10 +755,7 @@ async fn forward(
 /// response headers verbatim (reference server.js:149) and streaming the body
 /// (SSE-safe). Infallible: a malformed status/header is logged and skipped, never
 /// `?`-propagated (R23e). Async so M3.11 can open the optional log-tee file here.
-async fn build_downstream_response(
-    state: Arc<EngineState>,
-    up_resp: reqwest::Response,
-) -> Response<EngineBody> {
+async fn build_downstream_response(state: Arc<EngineState>, up_resp: reqwest::Response) -> Response<EngineBody> {
     let status = up_resp.status();
     let resp_headers = up_resp.headers().clone();
 

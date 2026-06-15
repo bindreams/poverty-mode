@@ -32,9 +32,7 @@ pub fn make_tar_gz_fixture(file_rel: &str, contents: &[u8]) -> Vec<u8> {
         header.set_size(contents.len() as u64);
         header.set_mode(0o755);
         header.set_cksum();
-        builder
-            .append_data(&mut header, file_rel, contents)
-            .unwrap();
+        builder.append_data(&mut header, file_rel, contents).unwrap();
         builder.finish().unwrap();
     }
     let mut gz = GzEncoder::new(Vec::new(), Compression::default());
@@ -58,9 +56,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 /// bound port. The port is learned from `local_addr()` after `bind` returns — a real readiness
 /// primitive, no sleep/poll.
 pub async fn serve_bytes(body: Vec<u8>) -> u16 {
-    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
-        .await
-        .unwrap();
+    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let body = Arc::new(body);
     tokio::spawn(async move {
@@ -74,9 +70,7 @@ pub async fn serve_bytes(body: Vec<u8>) -> u16 {
             tokio::spawn(async move {
                 let svc = service_fn(move |_req: Request<hyper::body::Incoming>| {
                     let body = body.clone();
-                    async move {
-                        Ok::<_, Infallible>(Response::new(Full::new(Bytes::from((*body).clone()))))
-                    }
+                    async move { Ok::<_, Infallible>(Response::new(Full::new(Bytes::from((*body).clone())))) }
                 });
                 let _ = hyper::server::conn::http1::Builder::new()
                     .serve_connection(io, svc)

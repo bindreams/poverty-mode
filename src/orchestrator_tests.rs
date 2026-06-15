@@ -152,9 +152,7 @@ fn tail_errors_on_unparseable_preexisting_base_url() {
     };
     let err = resolve_tail_upstream(&inputs).unwrap_err();
     assert!(
-        err.to_string()
-            .to_lowercase()
-            .contains("anthropic_base_url"),
+        err.to_string().to_lowercase().contains("anthropic_base_url"),
         "error should name the offending env var: {err}"
     );
 }
@@ -470,10 +468,7 @@ fn proxy_child_args_round_trips_through_clap() {
         };
         let args = proxy_child_args(&spec);
         let reparsed = reparse(&args);
-        assert_eq!(
-            reparsed, rp,
-            "argv did not round-trip for {rp:?} -> {args:?}"
-        );
+        assert_eq!(reparsed, rp, "argv did not round-trip for {rp:?} -> {args:?}");
     }
 }
 
@@ -485,9 +480,7 @@ use tokio::io::BufReader;
 async fn read_ready_line_parses_valid_line() {
     let line = r#"{"ready":true,"port":54321,"proxy":"pino","run_id":"rid-1"}"#.to_string() + "\n";
     let mut reader = BufReader::new(line.as_bytes());
-    let rl = read_ready_line(&mut reader, ProxyName::Pino, "rid-1")
-        .await
-        .unwrap();
+    let rl = read_ready_line(&mut reader, ProxyName::Pino, "rid-1").await.unwrap();
     assert_eq!(rl.port, 54321);
     assert_eq!(rl.proxy, "pino");
     assert_eq!(rl.run_id, "rid-1");
@@ -498,13 +491,10 @@ async fn read_ready_line_parses_valid_line() {
 async fn read_ready_line_ignores_non_json_noise_until_json() {
     // A child might print a stray plain-text log line before the READY line; we
     // skip non-JSON-object lines and take the first parseable ReadyLine.
-    let s = "starting up\nwarming\n".to_string()
-        + r#"{"ready":true,"port":7000,"proxy":"headroom","run_id":"x"}"#
-        + "\n";
+    let s =
+        "starting up\nwarming\n".to_string() + r#"{"ready":true,"port":7000,"proxy":"headroom","run_id":"x"}"# + "\n";
     let mut reader = BufReader::new(s.as_bytes());
-    let rl = read_ready_line(&mut reader, ProxyName::Headroom, "x")
-        .await
-        .unwrap();
+    let rl = read_ready_line(&mut reader, ProxyName::Headroom, "x").await.unwrap();
     assert_eq!(rl.port, 7000);
 }
 
@@ -512,9 +502,7 @@ async fn read_ready_line_ignores_non_json_noise_until_json() {
 async fn read_ready_line_errors_on_eof_without_ready() {
     let s = "some log\nmore log\n";
     let mut reader = BufReader::new(s.as_bytes());
-    let err = read_ready_line(&mut reader, ProxyName::Pino, "rid")
-        .await
-        .unwrap_err();
+    let err = read_ready_line(&mut reader, ProxyName::Pino, "rid").await.unwrap_err();
     assert!(
         err.to_string().to_lowercase().contains("ready"),
         "EOF before READY must error: {err}"
@@ -527,28 +515,21 @@ async fn read_ready_line_surfaces_malformed_ready_object_not_silent_skip() {
     // must surface a parse error, NOT be skipped and re-reported later as EOF.
     let line = r#"{"ready":true,"proxy":"pino"}"#.to_string() + "\n";
     let mut reader = BufReader::new(line.as_bytes());
-    let err = read_ready_line(&mut reader, ProxyName::Pino, "rid")
-        .await
-        .unwrap_err();
+    let err = read_ready_line(&mut reader, ProxyName::Pino, "rid").await.unwrap_err();
     let m = err.to_string().to_lowercase();
     assert!(
         m.contains("malformed") || m.contains("parse") || m.contains("ready line"),
         "malformed READY object must be diagnosed, not swallowed: {m}"
     );
     // And it must NOT degrade into the generic EOF message.
-    assert!(
-        !m.contains("closed its stdout"),
-        "must not masquerade as EOF: {m}"
-    );
+    assert!(!m.contains("closed its stdout"), "must not masquerade as EOF: {m}");
 }
 
 #[tokio::test]
 async fn read_ready_line_errors_on_proxy_name_mismatch() {
     let line = r#"{"ready":true,"port":1,"proxy":"headroom","run_id":"rid"}"#.to_string() + "\n";
     let mut reader = BufReader::new(line.as_bytes());
-    let err = read_ready_line(&mut reader, ProxyName::Pino, "rid")
-        .await
-        .unwrap_err();
+    let err = read_ready_line(&mut reader, ProxyName::Pino, "rid").await.unwrap_err();
     let m = err.to_string().to_lowercase();
     assert!(
         m.contains("proxy") && (m.contains("pino") || m.contains("headroom")),
@@ -564,8 +545,7 @@ async fn read_ready_line_errors_on_run_id_mismatch() {
         .await
         .unwrap_err();
     assert!(
-        err.to_string().to_lowercase().contains("run id")
-            || err.to_string().to_lowercase().contains("run_id"),
+        err.to_string().to_lowercase().contains("run id") || err.to_string().to_lowercase().contains("run_id"),
         "{err}"
     );
 }
@@ -574,9 +554,7 @@ async fn read_ready_line_errors_on_run_id_mismatch() {
 async fn read_ready_line_errors_when_ready_false() {
     let line = r#"{"ready":false,"port":1,"proxy":"pino","run_id":"rid"}"#.to_string() + "\n";
     let mut reader = BufReader::new(line.as_bytes());
-    let err = read_ready_line(&mut reader, ProxyName::Pino, "rid")
-        .await
-        .unwrap_err();
+    let err = read_ready_line(&mut reader, ProxyName::Pino, "rid").await.unwrap_err();
     assert!(err.to_string().to_lowercase().contains("ready"), "{err}");
 }
 
@@ -593,21 +571,13 @@ fn nested_reuse_decision_some_when_sig_matches_and_live() {
         Some("http://127.0.0.1:4100".to_string()), // env ANTHROPIC_BASE_URL
         live,
     );
-    assert_eq!(
-        got.map(|u| u.to_string()),
-        Some("http://127.0.0.1:4100/".to_string())
-    );
+    assert_eq!(got.map(|u| u.to_string()), Some("http://127.0.0.1:4100/".to_string()));
 }
 
 #[test]
 fn nested_reuse_decision_none_when_chain_env_unset() {
     let live = |_u: &Url| true;
-    let got = nested_reuse_decision(
-        "pino",
-        None,
-        Some("http://127.0.0.1:4100".to_string()),
-        live,
-    );
+    let got = nested_reuse_decision("pino", None, Some("http://127.0.0.1:4100".to_string()), live);
     assert!(got.is_none());
 }
 
@@ -811,14 +781,8 @@ fn ensure_central_started_drives_real_central_pipeline_in_order() {
     );
     // R4: version is resolved from the entry's pinned_version (live-or-fallback),
     // then threaded unchanged into install and start.
-    assert_eq!(
-        ops.seen_pinned.borrow().clone(),
-        Some(Some("9.9.9".to_string()))
-    );
-    assert_eq!(
-        ops.seen_install_version.borrow().clone(),
-        Some("0.2.9".to_string())
-    );
+    assert_eq!(ops.seen_pinned.borrow().clone(), Some(Some("9.9.9".to_string())));
+    assert_eq!(ops.seen_install_version.borrow().clone(), Some("0.2.9".to_string()));
     // The Central entry's port is threaded into `start`; health probes the
     // LIVE daemon's port from the returned CentralInfo (not the requested one).
     assert_eq!(
@@ -844,10 +808,7 @@ fn ensure_central_started_threads_default_when_unpinned_and_no_port() {
     ensure_central_started_with(&chain, &ops).unwrap();
 
     assert_eq!(ops.seen_pinned.borrow().clone(), Some(None));
-    assert_eq!(
-        ops.seen_start.borrow().clone(),
-        Some((None, "0.2.9".to_string()))
-    );
+    assert_eq!(ops.seen_start.borrow().clone(), Some((None, "0.2.9".to_string())));
 }
 
 #[test]
@@ -926,10 +887,7 @@ fn agent_base_for_central_appends_to_wire_envelope_without_clobbering_secret() {
     // replace the last path segment (a naive Url::join would eat `SECRET`).
     let head = url::Url::parse("http://127.0.0.1:9000/wire/SECRET").unwrap();
     let got = agent_base_for(&head, &crate::agent::claude::ClaudeAgent, true).unwrap();
-    assert_eq!(
-        got.as_str(),
-        "http://127.0.0.1:9000/wire/SECRET/claude-code/anthropic"
-    );
+    assert_eq!(got.as_str(), "http://127.0.0.1:9000/wire/SECRET/claude-code/anthropic");
 }
 
 #[test]
@@ -939,16 +897,9 @@ fn agent_base_for_preserves_percent_encoded_secret_segment() {
     // fragment, or split the path.
     let head = url::Url::parse("http://127.0.0.1:9000/wire/a%23b%3Fc%2Fd").unwrap();
     let got = agent_base_for(&head, &crate::agent::codex::CodexAgent, true).unwrap();
-    assert_eq!(
-        got.as_str(),
-        "http://127.0.0.1:9000/wire/a%23b%3Fc%2Fd/codex/openai"
-    );
+    assert_eq!(got.as_str(), "http://127.0.0.1:9000/wire/a%23b%3Fc%2Fd/codex/openai");
     assert_eq!(got.query(), None, "secret must not leak into the query");
-    assert_eq!(
-        got.fragment(),
-        None,
-        "secret must not leak into the fragment"
-    );
+    assert_eq!(got.fragment(), None, "secret must not leak into the fragment");
 }
 
 #[test]
@@ -956,8 +907,5 @@ fn agent_env_includes_poverty_proxy_head() {
     let chain = vec![pino_rp(), headroom_rp()];
     let head = url::Url::parse("http://127.0.0.1:4100").unwrap();
     let env = compute_agent_env(&chain, false, true, &head);
-    assert_eq!(
-        get(&env, "POVERTY_PROXY_HEAD"),
-        Some("http://127.0.0.1:4100/")
-    );
+    assert_eq!(get(&env, "POVERTY_PROXY_HEAD"), Some("http://127.0.0.1:4100/"));
 }

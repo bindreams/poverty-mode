@@ -54,10 +54,7 @@ fn enumerate_runs_collects_proxy_logs_sorted_by_run_id() {
     assert_eq!(runs[0].proxies.len(), 1);
     assert_eq!(runs[0].proxies[0].name, "central");
     assert_eq!(runs[0].proxies[0].port, 9100);
-    assert_eq!(
-        runs[0].proxies[0].log,
-        runs_root.join(OLDER).join("central-9100.log")
-    );
+    assert_eq!(runs[0].proxies[0].log, runs_root.join(OLDER).join("central-9100.log"));
 
     // newer run: two proxy logs, sorted by name within the run.
     assert_eq!(runs[1].proxies.len(), 2);
@@ -105,11 +102,7 @@ fn enumerate_runs_skips_non_ulid_directories() {
 }
 
 fn probe(running: bool, login: CentralLogin, port: Option<u16>) -> CentralProbe {
-    CentralProbe {
-        running,
-        login,
-        port,
-    }
+    CentralProbe { running, login, port }
 }
 
 #[test]
@@ -243,10 +236,7 @@ fn first_party_components_always_compiled_in() {
     )
     .unwrap();
     // pino + headroom are compiled into the binary -> always "Builtin".
-    assert_eq!(
-        report.first_party,
-        vec!["pino".to_string(), "headroom".to_string()]
-    );
+    assert_eq!(report.first_party, vec!["pino".to_string(), "headroom".to_string()]);
 }
 
 #[test]
@@ -256,12 +246,7 @@ fn report_includes_live_runs() {
     let runs_root = tmp.path().join("runs");
     touch(&runs_root.join(NEWER).join("pino-40001.log"), "x");
 
-    let report = build_status_report(
-        &cache,
-        &runs_root,
-        &probe(false, CentralLogin::Unknown, None),
-    )
-    .unwrap();
+    let report = build_status_report(&cache, &runs_root, &probe(false, CentralLogin::Unknown, None)).unwrap();
     assert_eq!(report.runs.len(), 1);
     assert_eq!(report.runs[0].run_id, NEWER);
 }
@@ -285,9 +270,7 @@ fn render_status_lists_components_central_and_runs() {
             proxies: vec![ProxyLog {
                 name: "pino".to_string(),
                 port: 40001,
-                log: PathBuf::from("/state/runs")
-                    .join(NEWER)
-                    .join("pino-40001.log"),
+                log: PathBuf::from("/state/runs").join(NEWER).join("pino-40001.log"),
             }],
         }],
     };
@@ -330,10 +313,7 @@ fn parse_wire_config_port_reads_numeric_port() {
 
 #[test]
 fn parse_wire_config_port_coerces_string_port() {
-    assert_eq!(
-        parse_wire_config_port(r#"{"proxy_port": "53117"}"#),
-        Some(53117)
-    );
+    assert_eq!(parse_wire_config_port(r#"{"proxy_port": "53117"}"#), Some(53117));
 }
 
 #[test]
@@ -412,8 +392,7 @@ async fn run_status_async_entry_does_not_panic_on_blocking_probe() {
         if let Ok((mut sock, _)) = listener.accept() {
             let mut buf = [0u8; 1024];
             let _ = sock.read(&mut buf);
-            let _ = sock
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+            let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
         }
     });
 

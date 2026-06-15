@@ -21,18 +21,11 @@ async fn raw_post(port: u16, path: &str, body: &str) -> (StatusCode, String) {
     raw_post_with_header(port, path, body, None).await
 }
 
-async fn raw_post_with_header(
-    port: u16,
-    path: &str,
-    body: &str,
-    header: Option<(&str, &str)>,
-) -> (StatusCode, String) {
+async fn raw_post_with_header(port: u16, path: &str, body: &str, header: Option<(&str, &str)>) -> (StatusCode, String) {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let stream = TcpStream::connect(addr).await.expect("connect stub");
     let io = TokioIo::new(stream);
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
-        .await
-        .expect("handshake");
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await.expect("handshake");
     tokio::spawn(async move {
         let _ = conn.await;
     });
@@ -82,22 +75,13 @@ async fn forward_classifies_subagent_by_header_and_picks_sub_ttl() {
     let body = r#"{"model":"claude-x","system":[{"type":"text","text":"hi"}],"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}"#;
 
     // Subagent header present -> every injected breakpoint uses sub_ttl (5m).
-    let (status, _) = raw_post_with_header(
-        port,
-        "/v1/messages",
-        body,
-        Some(("x-claude-code-agent-id", "agent_x")),
-    )
-    .await;
+    let (status, _) =
+        raw_post_with_header(port, "/v1/messages", body, Some(("x-claude-code-agent-id", "agent_x"))).await;
     assert_eq!(status, StatusCode::OK);
-    let sub_body = serde_json::to_string(
-        &serde_json::from_slice::<serde_json::Value>(&stub.last().unwrap().body).unwrap(),
-    )
-    .unwrap();
-    assert!(
-        sub_body.contains("\"ttl\":\"5m\""),
-        "subagent body: {sub_body}"
-    );
+    let sub_body =
+        serde_json::to_string(&serde_json::from_slice::<serde_json::Value>(&stub.last().unwrap().body).unwrap())
+            .unwrap();
+    assert!(sub_body.contains("\"ttl\":\"5m\""), "subagent body: {sub_body}");
     assert!(
         !sub_body.contains("\"ttl\":\"1h\""),
         "no 1h slot for subagent: {sub_body}"
@@ -106,14 +90,10 @@ async fn forward_classifies_subagent_by_header_and_picks_sub_ttl() {
     // No header -> main_ttl (1h).
     let (status, _) = raw_post_with_header(port, "/v1/messages", body, None).await;
     assert_eq!(status, StatusCode::OK);
-    let main_body = serde_json::to_string(
-        &serde_json::from_slice::<serde_json::Value>(&stub.last().unwrap().body).unwrap(),
-    )
-    .unwrap();
-    assert!(
-        main_body.contains("\"ttl\":\"1h\""),
-        "main body: {main_body}"
-    );
+    let main_body =
+        serde_json::to_string(&serde_json::from_slice::<serde_json::Value>(&stub.last().unwrap().body).unwrap())
+            .unwrap();
+    assert!(main_body.contains("\"ttl\":\"1h\""), "main body: {main_body}");
     assert!(
         !main_body.contains("\"ttl\":\"5m\""),
         "no 5m slot for main: {main_body}"
@@ -173,9 +153,7 @@ async fn raw_get(port: u16, path: &str) -> (StatusCode, Option<String>, String) 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let stream = TcpStream::connect(addr).await.expect("connect");
     let io = TokioIo::new(stream);
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
-        .await
-        .expect("handshake");
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await.expect("handshake");
     tokio::spawn(async move {
         let _ = conn.await;
     });
@@ -234,18 +212,11 @@ async fn health_is_answered_locally_with_identity_and_not_forwarded() {
     bound.handle.await.expect("join").expect("engine ok");
 }
 
-async fn raw_get_with_auth(
-    port: u16,
-    path: &str,
-    api_key: &str,
-    authorization: &str,
-) -> StatusCode {
+async fn raw_get_with_auth(port: u16, path: &str, api_key: &str, authorization: &str) -> StatusCode {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let stream = TcpStream::connect(addr).await.expect("connect");
     let io = TokioIo::new(stream);
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
-        .await
-        .expect("handshake");
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await.expect("handshake");
     tokio::spawn(async move {
         let _ = conn.await;
     });
@@ -272,9 +243,7 @@ async fn raw_post_with_resp_header(
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let stream = TcpStream::connect(addr).await.expect("connect");
     let io = TokioIo::new(stream);
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
-        .await
-        .expect("handshake");
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await.expect("handshake");
     tokio::spawn(async move {
         let _ = conn.await;
     });
@@ -315,10 +284,7 @@ async fn forward_streams_get_applies_prefix_rewrites_host_passes_auth() {
         let s = shutdown.clone();
         async move { s.notified().await }
     };
-    let secret = format!(
-        "http://127.0.0.1:{}/wire/SECRET/claude-code/anthropic",
-        stub.port
-    );
+    let secret = format!("http://127.0.0.1:{}/wire/SECRET/claude-code/anthropic", stub.port);
     let bound = bind_engine(fwd_cfg(ProxyName::Pino, "01J0FWD", &secret), shutdown_fut)
         .await
         .expect("bind");
@@ -330,10 +296,7 @@ async fn forward_streams_get_applies_prefix_rewrites_host_passes_auth() {
 
     let cap = stub.last().expect("captured");
     assert_eq!(cap.uri, "/wire/SECRET/claude-code/anthropic/v1/models");
-    assert_eq!(
-        cap.host.as_deref(),
-        Some(format!("127.0.0.1:{}", stub.port).as_str())
-    );
+    assert_eq!(cap.host.as_deref(), Some(format!("127.0.0.1:{}", stub.port).as_str()));
     assert_eq!(cap.x_api_key.as_deref(), Some("sk-ant-test-key"));
     assert_eq!(cap.authorization.as_deref(), Some("Bearer tok-123"));
 
@@ -350,11 +313,7 @@ async fn forward_count_tokens_reaches_upstream() {
         async move { s.notified().await }
     };
     let bound = bind_engine(
-        fwd_cfg(
-            ProxyName::Pino,
-            "01J0CT",
-            &format!("http://127.0.0.1:{}", stub.port),
-        ),
+        fwd_cfg(ProxyName::Pino, "01J0CT", &format!("http://127.0.0.1:{}", stub.port)),
         shutdown_fut,
     )
     .await
@@ -382,11 +341,7 @@ async fn forward_post_messages_recomputes_content_length() {
         async move { s.notified().await }
     };
     let bound = bind_engine(
-        fwd_cfg(
-            ProxyName::Pino,
-            "01J0CL",
-            &format!("http://127.0.0.1:{}", stub.port),
-        ),
+        fwd_cfg(ProxyName::Pino, "01J0CL", &format!("http://127.0.0.1:{}", stub.port)),
         shutdown_fut,
     )
     .await
@@ -446,8 +401,7 @@ async fn pino_all_features_off_forwards_bytes_verbatim_no_beta() {
 
     // Non-canonical byte-forms (1e1, redundant \/): a Value round-trip would
     // canonicalize these. Byte-equal forwarding proves the true passthrough.
-    let body =
-        r#"{"model":"claude-x","max_tokens":1e1,"messages":[{"role":"user","content":"a\/b"}]}"#;
+    let body = r#"{"model":"claude-x","max_tokens":1e1,"messages":[{"role":"user","content":"a\/b"}]}"#;
     let (status, _resp) = raw_post(port, "/v1/messages", body).await;
     assert_eq!(status, StatusCode::OK);
 
@@ -457,10 +411,7 @@ async fn pino_all_features_off_forwards_bytes_verbatim_no_beta() {
         body.as_bytes().to_vec(),
         "all-features-off pino must forward the original bytes verbatim"
     );
-    assert_eq!(
-        cap.content_length.as_deref(),
-        Some(body.len().to_string().as_str())
-    );
+    assert_eq!(cap.content_length.as_deref(), Some(body.len().to_string().as_str()));
     assert!(
         cap.anthropic_beta.is_none(),
         "no beta header when no feature is active (apply_headers must not fire)"
@@ -505,16 +456,12 @@ async fn pino_auto_cache_on_injects_and_applies_beta() {
     assert_eq!(status, StatusCode::OK);
 
     let cap = stub.last().expect("captured");
-    let received: serde_json::Value =
-        serde_json::from_slice(&cap.body).expect("forwarded body is JSON");
+    let received: serde_json::Value = serde_json::from_slice(&cap.body).expect("forwarded body is JSON");
     let breakpoints = serde_json::to_string(&received)
         .unwrap()
         .matches("cache_control")
         .count();
-    assert!(
-        breakpoints > 0,
-        "auto_cache must inject at least one cache breakpoint"
-    );
+    assert!(breakpoints > 0, "auto_cache must inject at least one cache breakpoint");
     assert_eq!(
         cap.anthropic_beta.as_deref(),
         Some(BETA_FLAG),
@@ -538,9 +485,7 @@ async fn raw_post_text(port: u16, path: &str, body: &str) -> StatusCode {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let stream = TcpStream::connect(addr).await.expect("connect");
     let io = TokioIo::new(stream);
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
-        .await
-        .expect("handshake");
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await.expect("handshake");
     tokio::spawn(async move {
         let _ = conn.await;
     });
@@ -566,15 +511,10 @@ async fn transform_and_apply_headers_run_on_post_messages() {
         let s = shutdown.clone();
         async move { s.notified().await }
     };
-    let cfg = fwd_cfg(
-        ProxyName::Pino,
-        "01J0XF",
-        &format!("http://127.0.0.1:{}", stub.port),
-    );
-    let bound =
-        bind_engine_with_boxed_transform(cfg, std::sync::Arc::new(MarkerTransform), shutdown_fut)
-            .await
-            .expect("bind");
+    let cfg = fwd_cfg(ProxyName::Pino, "01J0XF", &format!("http://127.0.0.1:{}", stub.port));
+    let bound = bind_engine_with_boxed_transform(cfg, std::sync::Arc::new(MarkerTransform), shutdown_fut)
+        .await
+        .expect("bind");
     let port = bound.local_addr.port();
 
     let body = r#"{"model":"claude-x","messages":[]}"#;
@@ -653,15 +593,10 @@ async fn transform_apply_headers_hook_reaches_upstream() {
         let s = shutdown.clone();
         async move { s.notified().await }
     };
-    let cfg = fwd_cfg(
-        ProxyName::Pino,
-        "01J0HK",
-        &format!("http://127.0.0.1:{up_port}"),
-    );
-    let bound =
-        bind_engine_with_boxed_transform(cfg, std::sync::Arc::new(MarkerTransform), shutdown_fut)
-            .await
-            .expect("bind");
+    let cfg = fwd_cfg(ProxyName::Pino, "01J0HK", &format!("http://127.0.0.1:{up_port}"));
+    let bound = bind_engine_with_boxed_transform(cfg, std::sync::Arc::new(MarkerTransform), shutdown_fut)
+        .await
+        .expect("bind");
     let port = bound.local_addr.port();
 
     let (status, _r) = raw_post(port, "/v1/messages", r#"{"messages":[]}"#).await;
@@ -687,15 +622,10 @@ async fn transform_and_hook_do_not_run_off_messages_path() {
         let s = shutdown.clone();
         async move { s.notified().await }
     };
-    let cfg = fwd_cfg(
-        ProxyName::Pino,
-        "01J0XF2",
-        &format!("http://127.0.0.1:{}", stub.port),
-    );
-    let bound =
-        bind_engine_with_boxed_transform(cfg, std::sync::Arc::new(MarkerTransform), shutdown_fut)
-            .await
-            .expect("bind");
+    let cfg = fwd_cfg(ProxyName::Pino, "01J0XF2", &format!("http://127.0.0.1:{}", stub.port));
+    let bound = bind_engine_with_boxed_transform(cfg, std::sync::Arc::new(MarkerTransform), shutdown_fut)
+        .await
+        .expect("bind");
     let port = bound.local_addr.port();
 
     let body = r#"{"x":1}"#;
@@ -731,15 +661,10 @@ async fn transform_does_not_run_on_non_json_post_messages() {
         let s = shutdown.clone();
         async move { s.notified().await }
     };
-    let cfg = fwd_cfg(
-        ProxyName::Pino,
-        "01J0XF3",
-        &format!("http://127.0.0.1:{}", stub.port),
-    );
-    let bound =
-        bind_engine_with_boxed_transform(cfg, std::sync::Arc::new(MarkerTransform), shutdown_fut)
-            .await
-            .expect("bind");
+    let cfg = fwd_cfg(ProxyName::Pino, "01J0XF3", &format!("http://127.0.0.1:{}", stub.port));
+    let bound = bind_engine_with_boxed_transform(cfg, std::sync::Arc::new(MarkerTransform), shutdown_fut)
+        .await
+        .expect("bind");
     let port = bound.local_addr.port();
 
     // content-type text/plain on /v1/messages -> is_json_content_type guard bars
@@ -776,11 +701,7 @@ async fn forward_passes_upstream_response_headers_verbatim() {
         async move { s.notified().await }
     };
     let bound = bind_engine(
-        fwd_cfg(
-            ProxyName::Pino,
-            "01J0RH",
-            &format!("http://127.0.0.1:{}", stub.port),
-        ),
+        fwd_cfg(ProxyName::Pino, "01J0RH", &format!("http://127.0.0.1:{}", stub.port)),
         shutdown_fut,
     )
     .await
@@ -789,8 +710,7 @@ async fn forward_passes_upstream_response_headers_verbatim() {
 
     // The canonical stub always sets content-type: application/json; assert it
     // reaches the client verbatim (verbatim-response-header forwarding).
-    let (status, ct) =
-        raw_post_with_resp_header(port, "/v1/messages", r#"{"messages":[]}"#, "content-type").await;
+    let (status, ct) = raw_post_with_resp_header(port, "/v1/messages", r#"{"messages":[]}"#, "content-type").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         ct.as_deref(),
@@ -879,10 +799,7 @@ async fn tee_log_file_is_owner_only_0600_on_unix() {
         .permissions()
         .mode()
         & 0o777;
-    assert_eq!(
-        mode, 0o600,
-        "body-tee log must be hardened to 0600 (was {mode:o})"
-    );
+    assert_eq!(mode, 0o600, "body-tee log must be hardened to 0600 (was {mode:o})");
 }
 
 // FIX-C (review): the previous test only checks the FINAL mode, which the old
@@ -916,13 +833,7 @@ async fn tee_log_file_is_born_owner_only_no_world_readable_window() {
         .await
         .expect("open tee file");
     // Read the on-disk mode BEFORE any harden_file_perms-style chmod could run.
-    let born_mode = file
-        .metadata()
-        .await
-        .expect("stat tee file")
-        .permissions()
-        .mode()
-        & 0o777;
+    let born_mode = file.metadata().await.expect("stat tee file").permissions().mode() & 0o777;
 
     // Restore the inherited umask for the rest of the test process.
     unsafe { libc::umask(prev_umask) };
@@ -1074,8 +985,7 @@ async fn drain_completes_in_flight_request_before_exit() {
     let port = bound.local_addr.port();
 
     // Fire the slow request concurrently; it blocks at the upstream.
-    let client_task =
-        tokio::spawn(async move { raw_post(port, "/v1/messages", r#"{"messages":[]}"#).await });
+    let client_task = tokio::spawn(async move { raw_post(port, "/v1/messages", r#"{"messages":[]}"#).await });
 
     // Wait (on a real event) until the request has reached the upstream.
     gated.started.notified().await;
@@ -1087,19 +997,11 @@ async fn drain_completes_in_flight_request_before_exit() {
     gated.release.notify_waiters();
 
     let (status, body) = client_task.await.expect("client task");
-    assert_eq!(
-        status,
-        StatusCode::OK,
-        "in-flight request must complete during drain"
-    );
+    assert_eq!(status, StatusCode::OK, "in-flight request must complete during drain");
     assert_eq!(body, r#"{"drained":true}"#);
 
     // After the in-flight request finishes, the serve task must drain and exit.
-    bound
-        .handle
-        .await
-        .expect("join")
-        .expect("engine drained ok");
+    bound.handle.await.expect("join").expect("engine drained ok");
 }
 
 use poverty_mode::proxy::run_proxy_with_shutdown;
@@ -1142,11 +1044,7 @@ async fn run_proxy_entry_serves_and_drains_without_blocking_panic() {
     assert_eq!(stub.count(), 1, "the real request reached the healthy fake");
 
     shutdown.notify_waiters();
-    bound
-        .handle
-        .await
-        .expect("join")
-        .expect("engine drained ok");
+    bound.handle.await.expect("join").expect("engine drained ok");
 
     // Part 2 — the public async entry: bind + drain to completion with no
     // blocking-call panic. It prints its READY line to process stdout (not
@@ -1172,7 +1070,5 @@ async fn run_proxy_entry_serves_and_drains_without_blocking_panic() {
     };
     let run = tokio::spawn(async move { run_proxy_with_shutdown(cfg2, shutdown2_fut).await });
     shutdown2.notify_one();
-    run.await
-        .expect("run task join")
-        .expect("run_proxy_with_shutdown ok");
+    run.await.expect("run task join").expect("run_proxy_with_shutdown ok");
 }

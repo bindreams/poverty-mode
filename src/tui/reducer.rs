@@ -87,8 +87,7 @@ impl TuiState {
     /// seed unmodified yields a central-last entry list. Focus starts on the
     /// first row; nothing is expanded; there is no editor or hint.
     pub fn from_config_and_resolved(config: &Config, resolved: &[ResolvedProxy]) -> Self {
-        let in_chain: std::collections::HashSet<ProxyName> =
-            resolved.iter().map(|r| r.name).collect();
+        let in_chain: std::collections::HashSet<ProxyName> = resolved.iter().map(|r| r.name).collect();
         let mut rows: Vec<ProxyRow> = Vec::with_capacity(config.proxies.len());
         // Enabled resolved members first, in chain order, with resolved settings.
         for r in resolved {
@@ -120,10 +119,7 @@ impl TuiState {
             },
             "TuiState rows must have unique proxy names (one row per ProxyName)"
         );
-        let focus = rows
-            .first()
-            .map(|r| Focus::Proxy(r.name))
-            .unwrap_or(Focus::Start);
+        let focus = rows.first().map(|r| Focus::Proxy(r.name)).unwrap_or(Focus::Start);
         let mut st = TuiState {
             rows,
             focus,
@@ -133,11 +129,7 @@ impl TuiState {
         st.enforce_central_last();
         // The focus may name a row that central-last moved; name-based focus is
         // unaffected. Re-point only if the seed was empty (focus = Start already).
-        st.focus = st
-            .rows
-            .first()
-            .map(|r| Focus::Proxy(r.name))
-            .unwrap_or(Focus::Start);
+        st.focus = st.rows.first().map(|r| Focus::Proxy(r.name)).unwrap_or(Focus::Start);
         st
     }
 
@@ -204,10 +196,9 @@ impl TuiState {
             }
             TuiAction::Cancel => TuiOutcome::Cancel,
             // Edit actions are inert when not editing.
-            TuiAction::EditChar(_)
-            | TuiAction::EditBackspace
-            | TuiAction::EditCommit
-            | TuiAction::EditAbort => TuiOutcome::Continue,
+            TuiAction::EditChar(_) | TuiAction::EditBackspace | TuiAction::EditCommit | TuiAction::EditAbort => {
+                TuiOutcome::Continue
+            }
         }
     }
 
@@ -359,29 +350,17 @@ impl TuiState {
 
     /// The ordered focusable targets derived from the current rows.
     fn visible(&self) -> Vec<Focus> {
-        visible_focus(
-            &self
-                .rows
-                .iter()
-                .map(|r| (r.name, r.expanded))
-                .collect::<Vec<_>>(),
-        )
+        visible_focus(&self.rows.iter().map(|r| (r.name, r.expanded)).collect::<Vec<_>>())
     }
 
     /// The row for `name` (panics if absent; v1 config guarantees presence).
     fn row(&self, name: ProxyName) -> &ProxyRow {
-        self.rows
-            .iter()
-            .find(|r| r.name == name)
-            .expect("row exists")
+        self.rows.iter().find(|r| r.name == name).expect("row exists")
     }
 
     /// The mutable row for `name` (panics if absent).
     fn row_mut(&mut self, name: ProxyName) -> &mut ProxyRow {
-        self.rows
-            .iter_mut()
-            .find(|r| r.name == name)
-            .expect("row exists")
+        self.rows.iter_mut().find(|r| r.name == name).expect("row exists")
     }
 
     /// The full ordered proxy list as [`ProxyEntry`]s (the picker's complete

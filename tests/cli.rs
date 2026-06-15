@@ -73,9 +73,7 @@ fn doctor_subcommand_runs_and_renders() {
         "doctor must be implemented, got stderr: {stderr}"
     );
     assert!(
-        stdout.contains("no problems detected")
-            || stdout.contains("WARN")
-            || stdout.contains("ERROR"),
+        stdout.contains("no problems detected") || stdout.contains("WARN") || stdout.contains("ERROR"),
         "expected doctor diagnostics, got stdout: {stdout:?} stderr: {stderr:?}"
     );
 }

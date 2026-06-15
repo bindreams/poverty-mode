@@ -16,12 +16,8 @@ fn messages_path_matches_with_wire_client_prefix() {
     // C1: the agent carries its central-wire client segment in the base URL, so the
     // inbound path reaching an agent-agnostic hop is prefixed. The prefix is opaque.
     assert!(is_messages_path("/claude-code/anthropic/v1/messages"));
-    assert!(is_messages_path(
-        "/claude-code/anthropic/v1/messages?beta=true"
-    ));
-    assert!(is_messages_path(
-        "/claude-code/anthropic/v1/messages/count_tokens"
-    ));
+    assert!(is_messages_path("/claude-code/anthropic/v1/messages?beta=true"));
+    assert!(is_messages_path("/claude-code/anthropic/v1/messages/count_tokens"));
 }
 
 #[test]
@@ -44,10 +40,7 @@ fn json_content_type_detection() {
     assert!(is_json_content_type(&h));
 
     let mut h2 = HeaderMap::new();
-    h2.insert(
-        "content-type",
-        "application/json; charset=utf-8".parse().unwrap(),
-    );
+    h2.insert("content-type", "application/json; charset=utf-8".parse().unwrap());
     assert!(is_json_content_type(&h2));
 
     let mut h3 = HeaderMap::new();
@@ -89,10 +82,7 @@ fn proxy_name_health_path_first_party_vs_central() {
 #[test]
 fn proxy_name_from_str_roundtrip_and_reject() {
     assert_eq!("pino".parse::<ProxyName>().unwrap(), ProxyName::Pino);
-    assert_eq!(
-        "headroom".parse::<ProxyName>().unwrap(),
-        ProxyName::Headroom
-    );
+    assert_eq!("headroom".parse::<ProxyName>().unwrap(), ProxyName::Headroom);
     assert_eq!("central".parse::<ProxyName>().unwrap(), ProxyName::Central);
     assert!("nope".parse::<ProxyName>().is_err());
 }
@@ -172,11 +162,7 @@ fn transform_kind_variants_exist() {
 
 struct IdentityTransform;
 impl BodyTransform for IdentityTransform {
-    fn transform(
-        &self,
-        _body: &mut serde_json::Value,
-        _ctx: &RequestContext,
-    ) -> anyhow::Result<()> {
+    fn transform(&self, _body: &mut serde_json::Value, _ctx: &RequestContext) -> anyhow::Result<()> {
         Ok(())
     }
 }
@@ -237,10 +223,7 @@ fn ready_line_serializes_compactly_with_run_id() {
         run_id: "01J0RUNID".to_string(),
     };
     let s = serde_json::to_string(&rl).unwrap();
-    assert_eq!(
-        s,
-        r#"{"ready":true,"port":54321,"proxy":"pino","run_id":"01J0RUNID"}"#
-    );
+    assert_eq!(s, r#"{"ready":true,"port":54321,"proxy":"pino","run_id":"01J0RUNID"}"#);
     let back: ReadyLine = serde_json::from_str(&s).unwrap();
     assert_eq!(back.port, 54321);
     assert_eq!(back.proxy, "pino");
@@ -325,20 +308,14 @@ fn target_uri_strips_trailing_slash_and_elides_default_port() {
     // the prefix's trailing slash is stripped by path_prefix().
     let u = up("http://127.0.0.1:80/prefix/");
     let got = upstream_target_uri(&u, "/v1/messages/count_tokens").unwrap();
-    assert_eq!(
-        got.to_string(),
-        "http://127.0.0.1/prefix/v1/messages/count_tokens"
-    );
+    assert_eq!(got.to_string(), "http://127.0.0.1/prefix/v1/messages/count_tokens");
 }
 
 #[test]
 fn target_uri_preserves_inbound_query_string() {
     let u = up("https://api.anthropic.com");
     let got = upstream_target_uri(&u, "/v1/messages?beta=true").unwrap();
-    assert_eq!(
-        got.to_string(),
-        "https://api.anthropic.com/v1/messages?beta=true"
-    );
+    assert_eq!(got.to_string(), "https://api.anthropic.com/v1/messages?beta=true");
 }
 
 #[test]
@@ -371,27 +348,12 @@ fn target_uri_rejects_upstream_with_query() {
 // implements and tests this; here it guards M3's reliance on it.
 #[test]
 fn guard_host_header_elides_default_ports_keeps_explicit() {
-    assert_eq!(
-        up("http://api.anthropic.com").host_header(),
-        "api.anthropic.com"
-    );
-    assert_eq!(
-        up("https://api.anthropic.com").host_header(),
-        "api.anthropic.com"
-    );
-    assert_eq!(
-        up("http://api.anthropic.com:80").host_header(),
-        "api.anthropic.com"
-    );
-    assert_eq!(
-        up("https://api.anthropic.com:443").host_header(),
-        "api.anthropic.com"
-    );
+    assert_eq!(up("http://api.anthropic.com").host_header(), "api.anthropic.com");
+    assert_eq!(up("https://api.anthropic.com").host_header(), "api.anthropic.com");
+    assert_eq!(up("http://api.anthropic.com:80").host_header(), "api.anthropic.com");
+    assert_eq!(up("https://api.anthropic.com:443").host_header(), "api.anthropic.com");
     assert_eq!(up("http://127.0.0.1:9999").host_header(), "127.0.0.1:9999");
-    assert_eq!(
-        up("https://example.com:8443").host_header(),
-        "example.com:8443"
-    );
+    assert_eq!(up("https://example.com:8443").host_header(), "example.com:8443");
 }
 
 #[test]
@@ -443,10 +405,7 @@ fn transform_kind_pino_yields_a_boxed_transform() {
         model_override: None,
     };
     let k = TransformKind::Pino(settings);
-    assert!(
-        k.as_body_transform().is_some(),
-        "pino kind yields a transform"
-    );
+    assert!(k.as_body_transform().is_some(), "pino kind yields a transform");
 }
 
 #[test]
@@ -475,10 +434,7 @@ fn transform_kind_pino_transform_succeeds_after_m4() {
 fn transform_kind_headroom_yields_a_boxed_transform() {
     use crate::proxy::headroom::HeadroomSettings;
     let k = TransformKind::Headroom(HeadroomSettings { compression: false });
-    assert!(
-        k.as_body_transform().is_some(),
-        "headroom kind yields a transform"
-    );
+    assert!(k.as_body_transform().is_some(), "headroom kind yields a transform");
 }
 
 // ---- RequestContext subagent detection ----
@@ -512,10 +468,7 @@ fn request_context_main_when_header_present_but_empty() {
 fn request_context_main_when_header_value_not_ascii() {
     // Real agent IDs are ASCII; a non-ASCII value (`to_str` fails) is treated as main.
     let mut h = http::HeaderMap::new();
-    h.insert(
-        SUBAGENT_HEADER,
-        http::HeaderValue::from_bytes(b"\xff\xfe").unwrap(),
-    );
+    h.insert(SUBAGENT_HEADER, http::HeaderValue::from_bytes(b"\xff\xfe").unwrap());
     assert!(!RequestContext::from_headers(&h).is_subagent);
 }
 

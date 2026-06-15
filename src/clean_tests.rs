@@ -84,9 +84,7 @@ fn build_clean_plan_ignores_non_ulid_run_dirs() {
     // Keep 0 -> delete all *runs*, but the non-ULID dir is not a run.
     let plan = build_clean_plan(&runs_root, &cache, 0, false, false).unwrap();
     assert_eq!(plan.run_dirs_to_delete.len(), 2);
-    assert!(!plan
-        .run_dirs_to_delete
-        .contains(&runs_root.join("my-scratch-notes")));
+    assert!(!plan.run_dirs_to_delete.contains(&runs_root.join("my-scratch-notes")));
 }
 
 #[test]
@@ -223,10 +221,7 @@ fn newest_central_binary_picks_newest_version_semantically() {
 fn newest_central_binary_none_when_not_installed() {
     let tmp = tempfile::tempdir().unwrap();
     // No <cache>/bin/jbcentral at all.
-    assert_eq!(
-        newest_central_binary(&tmp.path().join("cache")).unwrap(),
-        None
-    );
+    assert_eq!(newest_central_binary(&tmp.path().join("cache")).unwrap(), None);
 }
 
 #[test]
@@ -271,10 +266,7 @@ fn confirmed_clean_stops_central_even_when_clearing_the_cache() {
     );
     // ...and only AFTER stop did execute_clean_plan wipe the cache contents.
     assert!(cache.is_dir(), "cache dir recreated empty");
-    assert!(
-        !binpath.exists(),
-        "cache contents (incl. the binary) cleared"
-    );
+    assert!(!binpath.exists(), "cache contents (incl. the binary) cleared");
 }
 
 #[test]
@@ -307,10 +299,7 @@ fn confirmed_clean_without_stop_central_never_resolves_or_stops() {
 #[test]
 fn render_clean_plan_previews_actions() {
     let plan = CleanPlan {
-        run_dirs_to_delete: vec![
-            PathBuf::from("/state/runs/01a"),
-            PathBuf::from("/state/runs/01b"),
-        ],
+        run_dirs_to_delete: vec![PathBuf::from("/state/runs/01a"), PathBuf::from("/state/runs/01b")],
         cache_dir_to_clear: Some(PathBuf::from("/cache")),
         stop_central: false,
     };

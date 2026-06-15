@@ -34,9 +34,7 @@ pub struct CleanPlan {
 
 impl CleanPlan {
     pub fn is_empty(&self) -> bool {
-        self.run_dirs_to_delete.is_empty()
-            && self.cache_dir_to_clear.is_none()
-            && !self.stop_central
+        self.run_dirs_to_delete.is_empty() && self.cache_dir_to_clear.is_none() && !self.stop_central
     }
 }
 
@@ -91,8 +89,7 @@ pub fn execute_clean_plan(plan: &CleanPlan) -> Result<()> {
     }
     if let Some(cache) = &plan.cache_dir_to_clear {
         remove_dir_all_idempotent(cache)?;
-        std::fs::create_dir_all(cache)
-            .with_context(|| format!("recreating cache dir {}", cache.display()))?;
+        std::fs::create_dir_all(cache).with_context(|| format!("recreating cache dir {}", cache.display()))?;
     }
     Ok(())
 }
@@ -111,11 +108,7 @@ pub fn render_clean_plan(plan: &CleanPlan) -> String {
             out,
             "will delete {} run director{}:",
             plan.run_dirs_to_delete.len(),
-            if plan.run_dirs_to_delete.len() == 1 {
-                "y"
-            } else {
-                "ies"
-            }
+            if plan.run_dirs_to_delete.len() == 1 { "y" } else { "ies" }
         );
         for dir in &plan.run_dirs_to_delete {
             let _ = writeln!(out, "  {}", dir.display());
@@ -191,12 +184,7 @@ fn execute_confirmed_clean(
 /// Gather real inputs, preview, confirm (unless `assume_yes`), then execute. Central
 /// stop happens only when `stop_central` is set AND the user confirms, AFTER the
 /// emptiness check -- never on a no-op or aborted clean (R20). Stop errors propagate.
-pub fn run_clean(
-    keep: usize,
-    clear_cache: bool,
-    stop_central: bool,
-    assume_yes: bool,
-) -> Result<()> {
+pub fn run_clean(keep: usize, clear_cache: bool, stop_central: bool, assume_yes: bool) -> Result<()> {
     let cache = crate::paths::cache_dir()?;
     let runs_root = crate::paths::state_dir()?.join("runs");
     let plan = build_clean_plan(&runs_root, &cache, keep, clear_cache, stop_central)?;

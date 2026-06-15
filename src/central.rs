@@ -84,8 +84,7 @@ pub fn central_wire_envelope_url(info: &CentralInfo) -> String {
 /// (never panics) if, against expectation, the encoded URL fails to parse.
 pub fn central_wire_upstream(info: &CentralInfo) -> anyhow::Result<Upstream> {
     let s = central_wire_envelope_url(info);
-    let url =
-        url::Url::parse(&s).with_context(|| "constructing the JB Central wire upstream URL")?;
+    let url = url::Url::parse(&s).with_context(|| "constructing the JB Central wire upstream URL")?;
     Ok(Upstream { url })
 }
 
@@ -97,8 +96,8 @@ pub fn central_wire_upstream(info: &CentralInfo) -> anyhow::Result<Upstream> {
 /// could contain a fragment of the input. Some jbcentral builds write `proxy_port` as a string, so a
 /// numeric-string port is coerced.
 pub fn parse_wire_config(contents: &str) -> anyhow::Result<CentralInfo> {
-    let value: serde_json::Value = serde_json::from_str(contents)
-        .map_err(|_| anyhow!("~/.wire/config.json is not valid JSON"))?;
+    let value: serde_json::Value =
+        serde_json::from_str(contents).map_err(|_| anyhow!("~/.wire/config.json is not valid JSON"))?;
 
     let port = match value.get("proxy_port") {
         Some(serde_json::Value::Number(n)) => n
@@ -134,17 +133,13 @@ pub fn wire_config_path() -> anyhow::Result<PathBuf> {
 /// Read + parse `~/.wire/config.json`. Blocking filesystem I/O (R5).
 pub fn read_wire_config() -> anyhow::Result<CentralInfo> {
     let path = wire_config_path()?;
-    let contents =
-        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let contents = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     parse_wire_config(&contents)
 }
 
 /// `…/jbcentral/latest/version.txt` — where the live latest version is published (R4).
 pub fn latest_version_url() -> String {
-    format!(
-        "{}/jbcentral/latest/version.txt",
-        crate::download::JBCENTRAL_S3_BASE
-    )
+    format!("{}/jbcentral/latest/version.txt", crate::download::JBCENTRAL_S3_BASE)
 }
 
 /// Pure config-or-default version resolver (no network, R4): the trimmed `cfg_pinned` if non-blank,
@@ -363,11 +358,7 @@ pub fn run_status_classified(bin: &Path) -> anyhow::Result<CentralLoginState> {
         .with_context(|| format!("running {} status", bin.display()))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    Ok(classify_login_status(
-        output.status.code(),
-        &stdout,
-        &stderr,
-    ))
+    Ok(classify_login_status(output.status.code(), &stdout, &stderr))
 }
 
 /// Detect login state by running `<bin> status`; if logged out, surface and run the interactive
@@ -554,11 +545,7 @@ pub fn start(bin: &Path, port: Option<u16>, version: &str) -> anyhow::Result<Cen
             .status()
             .with_context(|| format!("running {} {}", bin.display(), argv.join(" ")))?;
         if !status.success() {
-            bail!(
-                "`jbcentral {}` failed (exit {:?})",
-                argv.join(" "),
-                status.code()
-            );
+            bail!("`jbcentral {}` failed (exit {:?})", argv.join(" "), status.code());
         }
     }
 
@@ -575,8 +562,7 @@ pub fn start(bin: &Path, port: Option<u16>, version: &str) -> anyhow::Result<Cen
     }
 
     // jbcentral writes the actual port+secret here after the daemon binds; read it (do not guess).
-    let info =
-        read_wire_config().context("reading ~/.wire/config.json after jbcentral proxy start")?;
+    let info = read_wire_config().context("reading ~/.wire/config.json after jbcentral proxy start")?;
     Ok(info)
 }
 

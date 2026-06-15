@@ -28,10 +28,7 @@ fn login_start_health_stop_round_trip() {
     assert!(info.port > 0, "expected a bound proxy port");
     assert!(!info.secret.is_empty(), "expected a proxy secret");
 
-    assert!(
-        central::health(info.port),
-        "daemon should be healthy after start"
-    );
+    assert!(central::health(info.port), "daemon should be healthy after start");
 
     // The wire upstream is well-formed and points at the bound port.
     let up = central::central_wire_upstream(&info).expect("wire upstream");

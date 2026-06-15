@@ -12,18 +12,12 @@ fn space_and_enter_activate_when_not_editing() {
         m(KeyCode::Char(' '), KeyModifiers::NONE, false),
         Some(TuiAction::Activate)
     );
-    assert_eq!(
-        m(KeyCode::Enter, KeyModifiers::NONE, false),
-        Some(TuiAction::Activate)
-    );
+    assert_eq!(m(KeyCode::Enter, KeyModifiers::NONE, false), Some(TuiAction::Activate));
 }
 
 #[test]
 fn shift_enter_and_shift_space_expand() {
-    assert_eq!(
-        m(KeyCode::Enter, KeyModifiers::SHIFT, false),
-        Some(TuiAction::Expand)
-    );
+    assert_eq!(m(KeyCode::Enter, KeyModifiers::SHIFT, false), Some(TuiAction::Expand));
     assert_eq!(
         m(KeyCode::Char(' '), KeyModifiers::SHIFT, false),
         Some(TuiAction::Expand)
@@ -34,10 +28,7 @@ fn shift_enter_and_shift_space_expand() {
 fn tab_expands_when_not_editing() {
     // Tab is the universal expand/collapse toggle (works in every terminal,
     // unlike Shift+Enter/Shift+Space which need the keyboard-enhancement protocol).
-    assert_eq!(
-        m(KeyCode::Tab, KeyModifiers::NONE, false),
-        Some(TuiAction::Expand)
-    );
+    assert_eq!(m(KeyCode::Tab, KeyModifiers::NONE, false), Some(TuiAction::Expand));
 }
 
 #[test]
@@ -48,30 +39,15 @@ fn tab_is_ignored_while_editing() {
 
 #[test]
 fn arrows_cycle_and_reorder() {
-    assert_eq!(
-        m(KeyCode::Left, KeyModifiers::NONE, false),
-        Some(TuiAction::CycleLeft)
-    );
+    assert_eq!(m(KeyCode::Left, KeyModifiers::NONE, false), Some(TuiAction::CycleLeft));
     assert_eq!(
         m(KeyCode::Right, KeyModifiers::NONE, false),
         Some(TuiAction::CycleRight)
     );
-    assert_eq!(
-        m(KeyCode::Up, KeyModifiers::SHIFT, false),
-        Some(TuiAction::MoveUp)
-    );
-    assert_eq!(
-        m(KeyCode::Down, KeyModifiers::SHIFT, false),
-        Some(TuiAction::MoveDown)
-    );
-    assert_eq!(
-        m(KeyCode::Up, KeyModifiers::NONE, false),
-        Some(TuiAction::Up)
-    );
-    assert_eq!(
-        m(KeyCode::Down, KeyModifiers::NONE, false),
-        Some(TuiAction::Down)
-    );
+    assert_eq!(m(KeyCode::Up, KeyModifiers::SHIFT, false), Some(TuiAction::MoveUp));
+    assert_eq!(m(KeyCode::Down, KeyModifiers::SHIFT, false), Some(TuiAction::MoveDown));
+    assert_eq!(m(KeyCode::Up, KeyModifiers::NONE, false), Some(TuiAction::Up));
+    assert_eq!(m(KeyCode::Down, KeyModifiers::NONE, false), Some(TuiAction::Down));
 }
 
 #[test]
@@ -84,14 +60,8 @@ fn editing_routes_text_keys_and_ctrl_c_aborts() {
         m(KeyCode::Backspace, KeyModifiers::NONE, true),
         Some(TuiAction::EditBackspace)
     );
-    assert_eq!(
-        m(KeyCode::Enter, KeyModifiers::NONE, true),
-        Some(TuiAction::EditCommit)
-    );
-    assert_eq!(
-        m(KeyCode::Esc, KeyModifiers::NONE, true),
-        Some(TuiAction::EditAbort)
-    );
+    assert_eq!(m(KeyCode::Enter, KeyModifiers::NONE, true), Some(TuiAction::EditCommit));
+    assert_eq!(m(KeyCode::Esc, KeyModifiers::NONE, true), Some(TuiAction::EditAbort));
     // Ctrl-C while editing aborts the edit, does NOT insert a control char.
     assert_eq!(
         m(KeyCode::Char('c'), KeyModifiers::CONTROL, true),
@@ -109,8 +79,5 @@ fn ctrl_c_cancels_when_not_editing() {
 
 #[test]
 fn esc_cancels_when_not_editing() {
-    assert_eq!(
-        m(KeyCode::Esc, KeyModifiers::NONE, false),
-        Some(TuiAction::Cancel)
-    );
+    assert_eq!(m(KeyCode::Esc, KeyModifiers::NONE, false), Some(TuiAction::Cancel));
 }

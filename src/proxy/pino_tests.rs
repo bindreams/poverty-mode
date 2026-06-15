@@ -25,14 +25,8 @@ fn pino_settings_default_round_trips_yaml() {
 
 #[test]
 fn cache_ttl_serializes_as_short_strings() {
-    assert_eq!(
-        serde_yaml::to_string(&CacheTtl::FiveMin).unwrap().trim(),
-        "5m"
-    );
-    assert_eq!(
-        serde_yaml::to_string(&CacheTtl::OneHour).unwrap().trim(),
-        "1h"
-    );
+    assert_eq!(serde_yaml::to_string(&CacheTtl::FiveMin).unwrap().trim(), "5m");
+    assert_eq!(serde_yaml::to_string(&CacheTtl::OneHour).unwrap().trim(), "1h");
     let five: CacheTtl = serde_yaml::from_str("\"5m\"").unwrap();
     let hour: CacheTtl = serde_yaml::from_str("\"1h\"").unwrap();
     assert_eq!(five, CacheTtl::FiveMin);
@@ -125,11 +119,7 @@ fn pino_settings_yaml_shape_matches_config_file() {
 #[test]
 fn cache_ttl_invalid_value_falls_back_to_five_min_json() {
     let v: CacheTtl = serde_json::from_str("\"10m\"").unwrap();
-    assert_eq!(
-        v,
-        CacheTtl::FiveMin,
-        "unknown cache TTL must degrade to 5m, not error"
-    );
+    assert_eq!(v, CacheTtl::FiveMin, "unknown cache TTL must degrade to 5m, not error");
     let from_yaml: CacheTtl = serde_yaml::from_str("nonsense").unwrap();
     assert_eq!(from_yaml, CacheTtl::FiveMin);
 }
@@ -184,10 +174,7 @@ fn all_features_off_is_a_no_op() {
     });
     let mut body = original.clone();
     t.transform(&mut body, &main_ctx()).unwrap();
-    assert_eq!(
-        body, original,
-        "no feature enabled => byte-faithful passthrough"
-    );
+    assert_eq!(body, original, "no feature enabled => byte-faithful passthrough");
 }
 
 #[test]
@@ -237,10 +224,7 @@ fn model_override_rewrites_source_id_in_system_string() {
         "messages": []
     });
     t.transform(&mut body, &main_ctx()).unwrap();
-    assert_eq!(
-        body["system"],
-        json!("You are claude-opus-4-6, also called Opus 4.6.")
-    );
+    assert_eq!(body["system"], json!("You are claude-opus-4-6, also called Opus 4.6."));
 }
 
 #[test]
@@ -278,10 +262,7 @@ fn model_override_unknown_target_uses_base_id_as_friendly_name() {
     });
     t.transform(&mut body, &main_ctx()).unwrap();
     // Unknown base => friendly falls back to the base id itself (Node `|| base`).
-    assert_eq!(
-        body["system"],
-        json!("id claude-future-9-9 and name claude-future-9-9")
-    );
+    assert_eq!(body["system"], json!("id claude-future-9-9 and name claude-future-9-9"));
 }
 
 #[test]
@@ -410,10 +391,7 @@ fn strip_ansi_disabled_leaves_escapes_intact() {
         "messages": [ { "role": "user", "content": "\u{1b}[31mred\u{1b}[0m" } ]
     });
     t.transform(&mut body, &main_ctx()).unwrap();
-    assert_eq!(
-        body["messages"][0]["content"],
-        json!("\u{1b}[31mred\u{1b}[0m")
-    );
+    assert_eq!(body["messages"][0]["content"], json!("\u{1b}[31mred\u{1b}[0m"));
 }
 
 #[test]
@@ -484,17 +462,15 @@ fn drop_tools_scrubs_names_from_deferred_tools_reminder_in_string_content() {
     let t = PinoTransform {
         settings: drop_settings(&["NotebookEdit", "CronList"]),
     };
-    let reminder = "<system-reminder>\nThe following are deferred tools:\nNotebookEdit\nBash\nCronList\nRead\n</system-reminder>";
+    let reminder =
+        "<system-reminder>\nThe following are deferred tools:\nNotebookEdit\nBash\nCronList\nRead\n</system-reminder>";
     let mut body = json!({
         "tools": [],
         "messages": [ { "role": "user", "content": reminder } ]
     });
     t.transform(&mut body, &main_ctx()).unwrap();
     let out = body["messages"][0]["content"].as_str().unwrap();
-    assert!(
-        !out.contains("NotebookEdit"),
-        "dropped name must be scrubbed"
-    );
+    assert!(!out.contains("NotebookEdit"), "dropped name must be scrubbed");
     assert!(!out.contains("CronList"), "dropped name must be scrubbed");
     assert!(out.contains("Bash"), "kept tool name stays");
     assert!(out.contains("Read"), "kept tool name stays");
@@ -606,7 +582,8 @@ fn drop_tools_reminder_line_match_is_exact_trim_not_substring() {
     let t = PinoTransform {
         settings: drop_settings(&["NotebookEdit"]),
     };
-    let reminder = "<system-reminder>\ndeferred tools:\nNotebookEdit\nNotebookEditExtra\n  NotebookEdit  \n</system-reminder>";
+    let reminder =
+        "<system-reminder>\ndeferred tools:\nNotebookEdit\nNotebookEditExtra\n  NotebookEdit  \n</system-reminder>";
     let mut body = json!({ "tools": [], "messages": [ { "role": "user", "content": reminder } ] });
     t.transform(&mut body, &main_ctx()).unwrap();
     let out = body["messages"][0]["content"].as_str().unwrap();
@@ -646,10 +623,7 @@ fn restructure_noop_for_single_message() {
     });
     let mut body = original.clone();
     t.transform(&mut body, &main_ctx()).unwrap();
-    assert_eq!(
-        body, original,
-        "single-message body must be untouched by restructure"
-    );
+    assert_eq!(body, original, "single-message body must be untouched by restructure");
 }
 
 #[test]
@@ -920,18 +894,10 @@ fn strip_intermediate_removes_cc_from_middle_messages_only() {
     });
     let stripped = strip_intermediate_message_breakpoints(&mut body);
     assert_eq!(stripped, 2, "only the two middle messages are stripped");
-    assert!(body["messages"][0]["content"][0]
-        .get("cache_control")
-        .is_some());
-    assert!(body["messages"][3]["content"][0]
-        .get("cache_control")
-        .is_some());
-    assert!(body["messages"][1]["content"][0]
-        .get("cache_control")
-        .is_none());
-    assert!(body["messages"][2]["content"][0]
-        .get("cache_control")
-        .is_none());
+    assert!(body["messages"][0]["content"][0].get("cache_control").is_some());
+    assert!(body["messages"][3]["content"][0].get("cache_control").is_some());
+    assert!(body["messages"][1]["content"][0].get("cache_control").is_none());
+    assert!(body["messages"][2]["content"][0].get("cache_control").is_none());
 }
 
 #[test]
@@ -944,12 +910,8 @@ fn strip_intermediate_noop_when_two_or_fewer_messages() {
     });
     let stripped = strip_intermediate_message_breakpoints(&mut body);
     assert_eq!(stripped, 0);
-    assert!(body["messages"][0]["content"][0]
-        .get("cache_control")
-        .is_some());
-    assert!(body["messages"][1]["content"][0]
-        .get("cache_control")
-        .is_some());
+    assert!(body["messages"][0]["content"][0].get("cache_control").is_some());
+    assert!(body["messages"][1]["content"][0].get("cache_control").is_some());
 }
 
 // --- strip_small_system_breakpoints is private; exercise it through the public
@@ -1036,30 +998,18 @@ fn inject_places_tools_system_msg0_tail_within_cap() {
 
     // Uniform TTL: every injected slot carries the passed ttl (5m).
     let tools = body["tools"].as_array().unwrap();
-    assert_eq!(
-        cc_of(&tools[1]).unwrap(),
-        &json!({ "type": "ephemeral", "ttl": "5m" })
-    );
+    assert_eq!(cc_of(&tools[1]).unwrap(), &json!({ "type": "ephemeral", "ttl": "5m" }));
     assert!(cc_of(&tools[0]).is_none());
 
     let system = body["system"].as_array().unwrap();
-    assert_eq!(
-        cc_of(&system[1]).unwrap(),
-        &json!({ "type": "ephemeral", "ttl": "5m" })
-    );
+    assert_eq!(cc_of(&system[1]).unwrap(), &json!({ "type": "ephemeral", "ttl": "5m" }));
     assert!(cc_of(&system[0]).is_none());
 
     let msg0 = body["messages"][0]["content"].as_array().unwrap();
-    assert_eq!(
-        cc_of(&msg0[1]).unwrap(),
-        &json!({ "type": "ephemeral", "ttl": "5m" })
-    );
+    assert_eq!(cc_of(&msg0[1]).unwrap(), &json!({ "type": "ephemeral", "ttl": "5m" }));
 
     let last_block = &body["messages"][2]["content"][0];
-    assert_eq!(
-        cc_of(last_block).unwrap(),
-        &json!({ "type": "ephemeral", "ttl": "5m" })
-    );
+    assert_eq!(cc_of(last_block).unwrap(), &json!({ "type": "ephemeral", "ttl": "5m" }));
     assert_eq!(tail_paths, vec!["/messages/2/content/0".to_string()]);
 
     assert_eq!(count_cache_breakpoints(&body), 4);
@@ -1098,10 +1048,7 @@ fn inject_skips_msg0_breakpoint_when_single_message() {
     let tail_paths = inject_breakpoint_if_absent(&mut body, CacheTtl::OneHour);
     let blocks = body["messages"][0]["content"].as_array().unwrap();
     assert_eq!(count_cache_breakpoints(&body), 1);
-    assert_eq!(
-        cc_of(&blocks[0]).unwrap(),
-        &json!({ "type": "ephemeral", "ttl": "1h" })
-    );
+    assert_eq!(cc_of(&blocks[0]).unwrap(), &json!({ "type": "ephemeral", "ttl": "1h" }));
     assert_eq!(tail_paths, vec!["/messages/0/content/0".to_string()]);
 }
 
@@ -1164,11 +1111,7 @@ fn inject_len_gt_one_only_msg0_cacheable_no_duplicate_tail() {
         cc_of(&body["messages"][0]["content"][0]).unwrap(),
         &json!({ "type": "ephemeral", "ttl": "5m" })
     );
-    assert_eq!(
-        count_cache_breakpoints(&body),
-        1,
-        "exactly one breakpoint (msg0)"
-    );
+    assert_eq!(count_cache_breakpoints(&body), 1, "exactly one breakpoint (msg0)");
     assert!(
         tail_paths.is_empty(),
         "no extra tail added when the only cacheable block is msg0's"
@@ -1194,18 +1137,9 @@ fn normalize_tail_forces_last_message_breakpoints_to_ttl() {
         ]
     });
     let paths = normalize_tail_breakpoints(&mut body, CacheTtl::FiveMin);
-    assert_eq!(
-        body["messages"][1]["content"][0]["cache_control"]["ttl"],
-        json!("5m")
-    );
-    assert_eq!(
-        body["messages"][1]["content"][1]["cache_control"]["ttl"],
-        json!("5m")
-    );
-    assert_eq!(
-        body["messages"][0]["content"][0]["cache_control"]["ttl"],
-        json!("1h")
-    );
+    assert_eq!(body["messages"][1]["content"][0]["cache_control"]["ttl"], json!("5m"));
+    assert_eq!(body["messages"][1]["content"][1]["cache_control"]["ttl"], json!("5m"));
+    assert_eq!(body["messages"][0]["content"][0]["cache_control"]["ttl"], json!("1h"));
     let set: HashSet<String> = paths.into_iter().collect();
     assert!(set.contains("/messages/1/content/0"));
     assert!(set.contains("/messages/1/content/1"));
@@ -1248,10 +1182,7 @@ fn rewrite_bumps_every_ephemeral_to_ttl_except_skip() {
     rewrite_cache_control(&mut body, &skip, CacheTtl::OneHour);
     assert_eq!(body["tools"][0]["cache_control"]["ttl"], json!("1h"));
     assert_eq!(body["system"][0]["cache_control"]["ttl"], json!("1h"));
-    assert_eq!(
-        body["messages"][0]["content"][0]["cache_control"]["ttl"],
-        json!("5m")
-    );
+    assert_eq!(body["messages"][0]["content"][0]["cache_control"]["ttl"], json!("5m"));
 }
 
 #[test]
@@ -1388,22 +1319,14 @@ fn auto_cache_caps_at_four_and_strips_intermediate() {
 
     assert_eq!(count_cache_breakpoints(&body), 4);
     assert!(
-        body["messages"][1]["content"][0]
-            .get("cache_control")
-            .is_none(),
+        body["messages"][1]["content"][0].get("cache_control").is_none(),
         "intermediate breakpoint stripped"
     );
     // Uniform under main: every slot, including the tail, carries main_ttl (1h).
     assert_eq!(body["tools"][1]["cache_control"]["ttl"], json!("1h"));
     assert_eq!(body["system"][0]["cache_control"]["ttl"], json!("1h"));
-    assert_eq!(
-        body["messages"][0]["content"][0]["cache_control"]["ttl"],
-        json!("1h")
-    );
-    assert_eq!(
-        body["messages"][2]["content"][0]["cache_control"]["ttl"],
-        json!("1h")
-    );
+    assert_eq!(body["messages"][0]["content"][0]["cache_control"]["ttl"], json!("1h"));
+    assert_eq!(body["messages"][2]["content"][0]["cache_control"]["ttl"], json!("1h"));
 }
 
 #[test]
@@ -1421,10 +1344,7 @@ fn auto_cache_main_rewrites_every_ephemeral_to_main_ttl() {
     t.transform(&mut body, &main_ctx()).unwrap();
     // Uniform TTL: the client tail is no longer special-cased to a different value.
     assert_eq!(body["system"][0]["cache_control"]["ttl"], json!("1h"));
-    assert_eq!(
-        body["messages"][1]["content"][0]["cache_control"]["ttl"],
-        json!("1h")
-    );
+    assert_eq!(body["messages"][1]["content"][0]["cache_control"]["ttl"], json!("1h"));
 }
 
 #[test]
@@ -1436,10 +1356,7 @@ fn auto_cache_main_single_turn_uses_main_ttl() {
         "messages": [ { "role": "user", "content": [ { "type": "text", "text": "only turn" } ] } ]
     });
     t.transform(&mut body, &main_ctx()).unwrap();
-    assert_eq!(
-        body["messages"][0]["content"][0]["cache_control"]["ttl"],
-        json!("1h")
-    );
+    assert_eq!(body["messages"][0]["content"][0]["cache_control"]["ttl"], json!("1h"));
     assert_eq!(count_cache_breakpoints(&body), 1);
 }
 
@@ -1489,14 +1406,8 @@ fn auto_cache_targets_restructured_layout_not_pre_restructure() {
         json!("claudeMd core context block")
     );
     // Uniform under main: msg0 dedicated breakpoint and the tail are both main_ttl (1h).
-    assert_eq!(
-        body["messages"][0]["content"][1]["cache_control"]["ttl"],
-        json!("1h")
-    );
-    assert_eq!(
-        body["messages"][2]["content"][0]["cache_control"]["ttl"],
-        json!("1h")
-    );
+    assert_eq!(body["messages"][0]["content"][1]["cache_control"]["ttl"], json!("1h"));
+    assert_eq!(body["messages"][2]["content"][0]["cache_control"]["ttl"], json!("1h"));
     assert_eq!(count_cache_breakpoints(&body), 2);
 }
 
@@ -1511,10 +1422,7 @@ fn beta_header_added_when_absent() {
     let mut headers = HeaderMap::new();
     let status = ensure_beta_header(&mut headers);
     assert_eq!(status, BetaHeaderStatus::Added);
-    assert_eq!(
-        headers.get("anthropic-beta").unwrap().to_str().unwrap(),
-        BETA_FLAG
-    );
+    assert_eq!(headers.get("anthropic-beta").unwrap().to_str().unwrap(), BETA_FLAG);
 }
 
 #[test]
@@ -1595,10 +1503,7 @@ fn apply_headers_sets_beta_when_auto_cache_on() {
     };
     let mut headers = HeaderMap::new();
     t.apply_headers(&mut headers);
-    assert_eq!(
-        headers.get("anthropic-beta").unwrap().to_str().unwrap(),
-        BETA_FLAG
-    );
+    assert_eq!(headers.get("anthropic-beta").unwrap().to_str().unwrap(), BETA_FLAG);
 }
 
 #[test]
@@ -1688,10 +1593,7 @@ fn full_pipeline_parity_realistic_body() {
     // The tail still contains the tool_result and the (scrubbed) reminder block.
     let tail_content = body["messages"][last]["content"].as_array().unwrap();
     // ANSI stripped on the tool_result content.
-    let tr = tail_content
-        .iter()
-        .find(|b| b["type"] == json!("tool_result"))
-        .unwrap();
+    let tr = tail_content.iter().find(|b| b["type"] == json!("tool_result")).unwrap();
     assert_eq!(tr["content"], json!("done output"));
     // Reminder scrubbed: NotebookEdit gone, Glob kept.
     let rem = tail_content
@@ -1728,10 +1630,7 @@ fn full_pipeline_parity_realistic_body() {
     // --- apply_headers emits the beta flag (engine hook) ---
     let mut headers = http::HeaderMap::new();
     t.apply_headers(&mut headers);
-    assert_eq!(
-        headers.get("anthropic-beta").unwrap().to_str().unwrap(),
-        BETA_FLAG
-    );
+    assert_eq!(headers.get("anthropic-beta").unwrap().to_str().unwrap(), BETA_FLAG);
 }
 
 // FIX-B: pino byte-fidelity seam =====================================
@@ -1759,11 +1658,8 @@ fn transform_bytes_all_features_off_is_true_passthrough_none() {
     };
     // Non-canonical byte-forms: if pino round-tripped through Value it would
     // canonicalize these; None proves it never parsed/re-serialized at all.
-    let raw =
-        br#"{"model":"claude-x","max_tokens":1e1,"messages":[{"role":"user","content":"a\/b"}]}"#;
-    let out = t
-        .transform_bytes(raw, &main_ctx())
-        .expect("all-off transform is Ok");
+    let raw = br#"{"model":"claude-x","max_tokens":1e1,"messages":[{"role":"user","content":"a\/b"}]}"#;
+    let out = t.transform_bytes(raw, &main_ctx()).expect("all-off transform is Ok");
     assert!(
         out.is_none(),
         "all-features-off pino must be a TRUE byte passthrough (None)"
@@ -1840,8 +1736,7 @@ fn transform_bytes_strip_ansi_on_returns_some() {
     };
     // ESC is JSON-escaped as backslash-u-001b (a literal ESC byte inside a JSON string is
     // invalid); strip_ansi must still remove the decoded CSI sequence.
-    let raw =
-        br#"{"model":"claude-x","messages":[{"role":"user","content":"\u001b[31mred\u001b[0m"}]}"#;
+    let raw = br#"{"model":"claude-x","messages":[{"role":"user","content":"\u001b[31mred\u001b[0m"}]}"#;
     let out = t
         .transform_bytes(raw, &main_ctx())
         .expect("strip_ansi transform is Ok")

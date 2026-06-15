@@ -115,12 +115,8 @@ async fn empty_chain_execs_agent_pointed_at_tail_unchanged() {
         Some("https://api.anthropic.com/")
     );
     let env = agent.seen_env.lock().unwrap().clone();
-    assert!(env
-        .iter()
-        .any(|(k, v)| k == "POVERTY_PROXY_CHAIN" && v.is_empty()));
-    assert!(env
-        .iter()
-        .any(|(k, v)| k == "ENABLE_TOOL_SEARCH" && v == "true"));
+    assert!(env.iter().any(|(k, v)| k == "POVERTY_PROXY_CHAIN" && v.is_empty()));
+    assert!(env.iter().any(|(k, v)| k == "ENABLE_TOOL_SEARCH" && v == "true"));
     assert!(env.iter().all(|(k, _)| k != "ANTHROPIC_AUTH_TOKEN"));
 }
 
@@ -141,9 +137,7 @@ async fn disabling_tool_search_threads_false_to_agent_env() {
     assert!(status.success());
 
     let env = agent.seen_env.lock().unwrap().clone();
-    assert!(env
-        .iter()
-        .any(|(k, v)| k == "ENABLE_TOOL_SEARCH" && v == "false"));
+    assert!(env.iter().any(|(k, v)| k == "ENABLE_TOOL_SEARCH" && v == "false"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -170,9 +164,7 @@ async fn central_only_chain_execs_agent_at_wire_url_with_auth_token() {
     assert!(env
         .iter()
         .any(|(k, v)| k == "ANTHROPIC_AUTH_TOKEN" && v == "wire-proxy"));
-    assert!(env
-        .iter()
-        .any(|(k, v)| k == "POVERTY_PROXY_CHAIN" && v == "central"));
+    assert!(env.iter().any(|(k, v)| k == "POVERTY_PROXY_CHAIN" && v == "central"));
 }
 
 /// A fake agent that POSTs /v1/messages to its base_url (the chain head) via a
@@ -221,10 +213,7 @@ async fn two_hop_chain_wires_head_to_tail_and_request_reaches_upstream() {
     let status = orchestrator::build_and_run(chain, tail, &agent, &[], true)
         .await
         .expect("build_and_run two-hop");
-    assert!(
-        status.success(),
-        "posting agent should succeed through the chain"
-    );
+    assert!(status.success(), "posting agent should succeed through the chain");
 
     let base = agent.seen_base.lock().unwrap().clone().unwrap();
     assert!(base.starts_with("http://127.0.0.1:"), "head base: {base}");
@@ -259,11 +248,7 @@ async fn trailing_central_strips_hop_and_carries_secret_path_to_tail() {
         cap.uri, "/wire/SECRET/claude-code/anthropic/v1/messages",
         "secret path must be prepended at the last first-party hop"
     );
-    assert_eq!(
-        stub.count(),
-        1,
-        "exactly one hop (pino) forwarded to the stub"
-    );
+    assert_eq!(stub.count(), 1, "exactly one hop (pino) forwarded to the stub");
 }
 
 // Post-READY stdout contract (R12 characterization guard) =====
@@ -355,23 +340,13 @@ async fn codex_chain_carries_codex_openai_wire_path_to_tail() {
     let status = orchestrator::build_and_run(chain, tail, &CodexAgent, &argv, true)
         .await
         .expect("build_and_run codex chain");
-    assert!(
-        status.success(),
-        "codex agent should succeed through the chain"
-    );
+    assert!(status.success(), "codex agent should succeed through the chain");
 
     let cap = stub.last().expect("stub recorded a request");
     assert_eq!(cap.method, "POST");
     assert_eq!(cap.uri, "/wire/SECRET/codex/openai/responses");
-    assert_eq!(
-        cap.x_api_key, None,
-        "codex sends no api key; central injects the JWT"
-    );
-    assert_eq!(
-        stub.count(),
-        1,
-        "exactly one hop (pino) forwarded to the stub"
-    );
+    assert_eq!(cap.x_api_key, None, "codex sends no api key; central injects the JWT");
+    assert_eq!(stub.count(), 1, "exactly one hop (pino) forwarded to the stub");
 }
 
 #[tokio::test(flavor = "multi_thread")]

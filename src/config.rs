@@ -136,15 +136,14 @@ impl Config {
         let path = crate::paths::config_path()?;
         if !path.exists() {
             let cfg = Config::default_all_disabled();
-            let yaml = serde_yaml::to_string(&cfg)
-                .map_err(|e| anyhow::anyhow!("serializing default config: {e}"))?;
+            let yaml = serde_yaml::to_string(&cfg).map_err(|e| anyhow::anyhow!("serializing default config: {e}"))?;
             crate::paths::atomic_write(&path, yaml.as_bytes())?;
             return Ok(cfg);
         }
-        let text = std::fs::read_to_string(&path)
-            .map_err(|e| anyhow::anyhow!("reading config {}: {e}", path.display()))?;
-        let cfg: Config = serde_yaml::from_str(&text)
-            .map_err(|e| anyhow::anyhow!("parsing config {}: {e}", path.display()))?;
+        let text =
+            std::fs::read_to_string(&path).map_err(|e| anyhow::anyhow!("reading config {}: {e}", path.display()))?;
+        let cfg: Config =
+            serde_yaml::from_str(&text).map_err(|e| anyhow::anyhow!("parsing config {}: {e}", path.display()))?;
         cfg.validate()?;
         Ok(cfg)
     }
@@ -154,8 +153,7 @@ impl Config {
     pub fn save(&self) -> anyhow::Result<()> {
         self.validate()?;
         let path = crate::paths::config_path()?;
-        let yaml =
-            serde_yaml::to_string(self).map_err(|e| anyhow::anyhow!("serializing config: {e}"))?;
+        let yaml = serde_yaml::to_string(self).map_err(|e| anyhow::anyhow!("serializing config: {e}"))?;
         crate::paths::atomic_write(&path, yaml.as_bytes())?;
         Ok(())
     }
@@ -224,16 +222,12 @@ impl Config {
         // 4. Map each requested name to its config settings (error if absent).
         let mut resolved = Vec::with_capacity(requested.len());
         for name in requested {
-            let entry = self
-                .proxies
-                .iter()
-                .find(|e| e.name == name)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "proxy {:?} was requested but has no entry in the config (no settings available)",
-                        name
-                    )
-                })?;
+            let entry = self.proxies.iter().find(|e| e.name == name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "proxy {:?} was requested but has no entry in the config (no settings available)",
+                    name
+                )
+            })?;
             resolved.push(ResolvedProxy {
                 name,
                 settings: entry.settings.clone(),
@@ -329,11 +323,7 @@ impl Config {
                 );
             }
         }
-        if let Some(pos) = self
-            .proxies
-            .iter()
-            .position(|e| e.name == ProxyName::Central)
-        {
+        if let Some(pos) = self.proxies.iter().position(|e| e.name == ProxyName::Central) {
             if pos != self.proxies.len() - 1 {
                 anyhow::bail!("config error: central must be last in the proxies list");
             }

@@ -94,9 +94,5 @@ async fn sigterm_is_forwarded_to_agent_and_status_reflects_it() {
         recorded.contains("SIGTERM"),
         "agent should have received SIGTERM: {recorded:?}"
     );
-    assert_eq!(
-        status.code(),
-        Some(42),
-        "status should reflect the agent's exit code"
-    );
+    assert_eq!(status.code(), Some(42), "status should reflect the agent's exit code");
 }

@@ -10,11 +10,7 @@ use crate::config::ResolvedProxy;
 /// Render a resolved chain as the `POVERTY_PROXY_CHAIN` value: lowercase proxy
 /// names in chain order (head->tail), comma-separated. Empty chain -> "".
 pub fn serialize_chain(chain: &[ResolvedProxy]) -> String {
-    chain
-        .iter()
-        .map(|p| p.name.as_str())
-        .collect::<Vec<_>>()
-        .join(",")
+    chain.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(",")
 }
 
 /// Parse a `POVERTY_PROXY_CHAIN` CSV into ordered, trimmed, non-empty names.
@@ -62,8 +58,8 @@ pub fn resolve_tail_upstream(inputs: &TailInputs) -> anyhow::Result<Upstream> {
         .filter(|s| !s.is_empty());
 
     let raw = preexisting.unwrap_or(DEFAULT_ANTHROPIC_BASE_URL);
-    let url = url::Url::parse(raw)
-        .map_err(|e| anyhow::anyhow!("ANTHROPIC_BASE_URL is not a valid URL ({raw:?}): {e}"))?;
+    let url =
+        url::Url::parse(raw).map_err(|e| anyhow::anyhow!("ANTHROPIC_BASE_URL is not a valid URL ({raw:?}): {e}"))?;
     Ok(Upstream { url })
 }
 
@@ -87,10 +83,7 @@ pub fn compute_agent_env(
 ) -> Vec<(String, String)> {
     let mut env = vec![
         ("POVERTY_PROXY_CHAIN".to_string(), serialize_chain(chain)),
-        (
-            "ENABLE_TOOL_SEARCH".to_string(),
-            enable_tool_search.to_string(),
-        ),
+        ("ENABLE_TOOL_SEARCH".to_string(), enable_tool_search.to_string()),
         // The bare agent-agnostic head (no wire-client segment), so a nested
         // `poverty-mode run -- <agent>` can attach to the live chain (C1 / option B).
         ("POVERTY_PROXY_HEAD".to_string(), head.as_str().to_string()),
@@ -116,11 +109,7 @@ use anyhow::Context as _;
 /// unchanged. The append is string-level (trim trailing slashes, then add
 /// `/<segment>`) so it never clobbers the wire envelope's last segment the way a
 /// relative `Url::join` would.
-pub fn agent_base_for(
-    head: &url::Url,
-    agent: &dyn Agent,
-    central_is_tail: bool,
-) -> anyhow::Result<url::Url> {
+pub fn agent_base_for(head: &url::Url, agent: &dyn Agent, central_is_tail: bool) -> anyhow::Result<url::Url> {
     if !central_is_tail {
         return Ok(head.clone());
     }
@@ -139,8 +128,7 @@ pub fn agent_base_for(
         "agent_base_for called on an already-composed base: {head}"
     );
     let composed = format!("{trimmed}/{}", agent.wire_client_path());
-    url::Url::parse(&composed)
-        .with_context(|| format!("composing agent base from head '{head}' + wire client path"))
+    url::Url::parse(&composed).with_context(|| format!("composing agent base from head '{head}' + wire client path"))
 }
 
 /// Split off a SINGLE trailing must-be-last (Central) entry, returning
@@ -246,8 +234,7 @@ fn self_spawn_exe() -> anyhow::Result<std::path::PathBuf> {
             return Ok(std::path::PathBuf::from(p));
         }
     }
-    std::env::current_exe()
-        .map_err(|e| anyhow::anyhow!("resolving current_exe for self-spawn: {e}"))
+    std::env::current_exe().map_err(|e| anyhow::anyhow!("resolving current_exe for self-spawn: {e}"))
 }
 
 /// Build the chain through a `&mut dyn ProxyManager` (R15 seam), run + signal-
@@ -298,12 +285,7 @@ async fn build_via_manager(
         })
         .collect();
 
-    let running = match tokio::time::timeout(
-        READINESS_DEADLINE,
-        manager.start_hops(&hop_specs, tail_upstream),
-    )
-    .await
-    {
+    let running = match tokio::time::timeout(READINESS_DEADLINE, manager.start_hops(&hop_specs, tail_upstream)).await {
         Ok(Ok(running)) => running,
         Ok(Err(e)) => {
             // start_hops already tore down on internal error; surface it.
@@ -353,10 +335,10 @@ async fn run_agent_forwarding_signals(
     {
         let child_pid = child.id();
         use tokio::signal::unix::{signal, SignalKind};
-        let mut sigint = signal(SignalKind::interrupt())
-            .map_err(|e| anyhow::anyhow!("installing SIGINT handler: {e}"))?;
-        let mut sigterm = signal(SignalKind::terminate())
-            .map_err(|e| anyhow::anyhow!("installing SIGTERM handler: {e}"))?;
+        let mut sigint =
+            signal(SignalKind::interrupt()).map_err(|e| anyhow::anyhow!("installing SIGINT handler: {e}"))?;
+        let mut sigterm =
+            signal(SignalKind::terminate()).map_err(|e| anyhow::anyhow!("installing SIGTERM handler: {e}"))?;
         loop {
             tokio::select! {
                 status = child.wait() => {
@@ -507,10 +489,7 @@ pub fn proxy_child_args(spec: &ProxyHopSpec) -> Vec<String> {
         ProxySettings::Central(_) => {
             // Central is never spawned via `poverty-mode proxy`; it is the
             // external daemon. The chain builder never passes a Central hop here.
-            debug_assert!(
-                false,
-                "proxy_child_args must never be called for a Central hop"
-            );
+            debug_assert!(false, "proxy_child_args must never be called for a Central hop");
         }
     }
 
@@ -680,9 +659,7 @@ pub fn nested_reuse_check(desired_chain: &[ResolvedProxy]) -> Option<url::Url> {
     let desired_sig = serialize_chain(desired_chain);
     let env_chain = std::env::var("POVERTY_PROXY_CHAIN").ok();
     let env_base = std::env::var("POVERTY_PROXY_HEAD").ok();
-    nested_reuse_decision(&desired_sig, env_chain, env_base, |u| {
-        health_probe(u).is_some()
-    })
+    nested_reuse_decision(&desired_sig, env_chain, env_base, |u| health_probe(u).is_some())
 }
 
 /// High-level `run` orchestration (R5-safe): nested-reuse short-circuit, central
@@ -771,12 +748,7 @@ trait CentralOps {
     fn ensure_logged_in(&self, bin: &std::path::Path) -> anyhow::Result<()>;
     /// Configure + start the daemon for `version`, requesting `port`; return the
     /// live `CentralInfo`.
-    fn start(
-        &self,
-        bin: &std::path::Path,
-        port: Option<u16>,
-        version: &str,
-    ) -> anyhow::Result<CentralInfo>;
+    fn start(&self, bin: &std::path::Path, port: Option<u16>, version: &str) -> anyhow::Result<CentralInfo>;
     /// True iff the daemon at `port` answers `/health`.
     fn health(&self, port: u16) -> bool;
 }
@@ -794,12 +766,7 @@ impl CentralOps for RealCentral {
     fn ensure_logged_in(&self, bin: &std::path::Path) -> anyhow::Result<()> {
         central::ensure_logged_in(bin)
     }
-    fn start(
-        &self,
-        bin: &std::path::Path,
-        port: Option<u16>,
-        version: &str,
-    ) -> anyhow::Result<CentralInfo> {
+    fn start(&self, bin: &std::path::Path, port: Option<u16>, version: &str) -> anyhow::Result<CentralInfo> {
         central::start(bin, port, version)
     }
     fn health(&self, port: u16) -> bool {
@@ -822,18 +789,12 @@ fn ensure_central_started(chain: &[ResolvedProxy]) -> anyhow::Result<CentralInfo
 /// the version once (from the trailing Central entry's pinned version), install,
 /// log in, start at the entry's requested port, then health-check the LIVE
 /// daemon's port (fail-closed if it never reports healthy).
-fn ensure_central_started_with(
-    chain: &[ResolvedProxy],
-    ops: &dyn CentralOps,
-) -> anyhow::Result<CentralInfo> {
+fn ensure_central_started_with(chain: &[ResolvedProxy], ops: &dyn CentralOps) -> anyhow::Result<CentralInfo> {
     // Caller invariant: only reached when central is the tail (see `run_command`).
     let central_settings = match chain.last().map(|p| &p.settings) {
         Some(ProxySettings::Central(c)) => c,
         _ => {
-            debug_assert!(
-                false,
-                "ensure_central_started called without a central tail"
-            );
+            debug_assert!(false, "ensure_central_started called without a central tail");
             anyhow::bail!("internal error: ensure_central_started called without a central tail");
         }
     };

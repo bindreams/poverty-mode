@@ -28,10 +28,7 @@ fn central_wire_upstream_percent_encodes_special_secret() {
         secret: "a#b?c/d e&f%g".to_string(),
     };
     let up = central_wire_upstream(&info).unwrap();
-    assert_eq!(
-        up.url.as_str(),
-        "http://127.0.0.1:19516/wire/a%23b%3Fc%2Fd%20e%26f%25g"
-    );
+    assert_eq!(up.url.as_str(), "http://127.0.0.1:19516/wire/a%23b%3Fc%2Fd%20e%26f%25g");
     // It stays one segment: no fragment, no query, no extra path separators.
     assert_eq!(up.url.fragment(), None);
     assert_eq!(up.url.query(), None);
@@ -78,10 +75,7 @@ fn errors_on_unparseable_json_without_leaking_contents() {
     let json = r#"{ "proxy_secret": "TOPSECRET", "#; // truncated/invalid
     let err = parse_wire_config(json).unwrap_err();
     let msg = err.to_string();
-    assert!(
-        !msg.contains("TOPSECRET"),
-        "error must not leak the secret: {msg}"
-    );
+    assert!(!msg.contains("TOPSECRET"), "error must not leak the secret: {msg}");
     assert!(
         msg.contains("not valid JSON"),
         "error should name the failure mode: {msg}"
@@ -128,10 +122,7 @@ fn wire_url_string_helper_matches_upstream() {
         port: 8080,
         secret: "xyz".to_string(),
     };
-    assert_eq!(
-        central_wire_envelope_url(&info),
-        "http://127.0.0.1:8080/wire/xyz"
-    );
+    assert_eq!(central_wire_envelope_url(&info), "http://127.0.0.1:8080/wire/xyz");
 }
 
 #[test]
@@ -146,14 +137,8 @@ fn wire_secret_with_url_significant_chars_is_percent_encoded() {
     assert_eq!(url, "http://127.0.0.1:9000/wire/a%20b%2Fc%3Fd%23e%C3%A9");
     // It parses without panicking and the secret stays inside the path (no query/fragment leaked).
     let up = central_wire_upstream(&info).unwrap();
-    assert!(
-        up.url.query().is_none(),
-        "secret must not leak into the query"
-    );
-    assert!(
-        up.url.fragment().is_none(),
-        "secret must not leak into the fragment"
-    );
+    assert!(up.url.query().is_none(), "secret must not leak into the query");
+    assert!(up.url.fragment().is_none(), "secret must not leak into the fragment");
     assert_eq!(up.url.path(), "/wire/a%20b%2Fc%3Fd%23e%C3%A9");
 }
 
@@ -323,11 +308,7 @@ fn write_fake_jbcentral(dir: &std::path::Path, stdout: &str, code: i32) -> std::
     let bin = if cfg!(windows) {
         let p = dir.join("jbcentral.bat");
         // `@echo off` so the command line itself is not echoed into stdout.
-        std::fs::write(
-            &p,
-            format!("@echo off\r\necho {stdout}\r\nexit /b {code}\r\n"),
-        )
-        .unwrap();
+        std::fs::write(&p, format!("@echo off\r\necho {stdout}\r\nexit /b {code}\r\n")).unwrap();
         p
     } else {
         let p = dir.join("jbcentral");
@@ -352,11 +333,7 @@ fn run_status_classified_reports_logged_in_when_status_exits_zero() {
     let tmp = tempfile::tempdir().unwrap();
     let bin = write_fake_jbcentral(tmp.path(), "Logged in as user@example.com", 0);
     let state = run_status_classified(&bin).unwrap();
-    assert_eq!(
-        state,
-        CentralLoginState::LoggedIn,
-        "exit 0 + banner => logged in"
-    );
+    assert_eq!(state, CentralLoginState::LoggedIn, "exit 0 + banner => logged in");
 }
 
 #[test]
@@ -365,11 +342,7 @@ fn run_status_classified_reports_logged_out_on_nonzero_exit() {
     let tmp = tempfile::tempdir().unwrap();
     let bin = write_fake_jbcentral(tmp.path(), "not logged in; run jbcentral login", 1);
     let state = run_status_classified(&bin).unwrap();
-    assert_eq!(
-        state,
-        CentralLoginState::LoggedOut,
-        "non-zero exit => logged out"
-    );
+    assert_eq!(state, CentralLoginState::LoggedOut, "non-zero exit => logged out");
 }
 
 #[test]
@@ -412,18 +385,12 @@ fn configure_argv_sets_analytics_off_and_threaded_pinned_version() {
 
 #[test]
 fn proxy_start_argv_is_proxy_start() {
-    assert_eq!(
-        proxy_start_argv(),
-        vec!["proxy".to_string(), "start".to_string()]
-    );
+    assert_eq!(proxy_start_argv(), vec!["proxy".to_string(), "start".to_string()]);
 }
 
 #[test]
 fn proxy_stop_argv_is_proxy_stop() {
-    assert_eq!(
-        proxy_stop_argv(),
-        vec!["proxy".to_string(), "stop".to_string()]
-    );
+    assert_eq!(proxy_stop_argv(), vec!["proxy".to_string(), "stop".to_string()]);
 }
 
 #[test]

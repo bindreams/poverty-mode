@@ -86,9 +86,7 @@ impl SettingId {
     /// How this setting is edited/rendered.
     pub fn kind(self) -> SettingKind {
         match self {
-            SettingId::AutoCache | SettingId::StripAnsi | SettingId::Compression => {
-                SettingKind::Bool
-            }
+            SettingId::AutoCache | SettingId::StripAnsi | SettingId::Compression => SettingKind::Bool,
             SettingId::MainTtl | SettingId::SubTtl => SettingKind::Enum,
             SettingId::DropTools => SettingKind::List,
             SettingId::ModelOverride | SettingId::PinnedVersion => SettingKind::Text,
@@ -133,16 +131,10 @@ impl SettingId {
     /// value rendered as raw text (empty for an unset `Option`).
     pub fn edit_buffer(self, s: &ProxySettings) -> String {
         match (self, s) {
-            (SettingId::ModelOverride, ProxySettings::Pino(p)) => {
-                p.model_override.clone().unwrap_or_default()
-            }
+            (SettingId::ModelOverride, ProxySettings::Pino(p)) => p.model_override.clone().unwrap_or_default(),
             (SettingId::DropTools, ProxySettings::Pino(p)) => p.drop_tools.join(","),
-            (SettingId::Port, ProxySettings::Central(c)) => {
-                c.port.map(|n| n.to_string()).unwrap_or_default()
-            }
-            (SettingId::PinnedVersion, ProxySettings::Central(c)) => {
-                c.pinned_version.clone().unwrap_or_default()
-            }
+            (SettingId::Port, ProxySettings::Central(c)) => c.port.map(|n| n.to_string()).unwrap_or_default(),
+            (SettingId::PinnedVersion, ProxySettings::Central(c)) => c.pinned_version.clone().unwrap_or_default(),
             _ => String::new(),
         }
     }
@@ -226,21 +218,18 @@ pub fn render_value(s: &ProxySettings, id: SettingId) -> String {
             _ => "(none)".to_string(),
         },
         SettingKind::Text => match (id, s) {
-            (SettingId::ModelOverride, ProxySettings::Pino(p)) => p
-                .model_override
-                .clone()
-                .unwrap_or_else(|| "(default)".to_string()),
-            (SettingId::PinnedVersion, ProxySettings::Central(c)) => c
-                .pinned_version
-                .clone()
-                .unwrap_or_else(|| "(default)".to_string()),
+            (SettingId::ModelOverride, ProxySettings::Pino(p)) => {
+                p.model_override.clone().unwrap_or_else(|| "(default)".to_string())
+            }
+            (SettingId::PinnedVersion, ProxySettings::Central(c)) => {
+                c.pinned_version.clone().unwrap_or_else(|| "(default)".to_string())
+            }
             _ => "(default)".to_string(),
         },
         SettingKind::Number => match (id, s) {
-            (SettingId::Port, ProxySettings::Central(c)) => c
-                .port
-                .map(|n| n.to_string())
-                .unwrap_or_else(|| "(default)".to_string()),
+            (SettingId::Port, ProxySettings::Central(c)) => {
+                c.port.map(|n| n.to_string()).unwrap_or_else(|| "(default)".to_string())
+            }
             _ => "(default)".to_string(),
         },
     }

@@ -102,11 +102,7 @@ pub async fn start_stub_async(canned_json: &'static str) -> Stub {
     Stub { port, state }
 }
 
-fn spawn_accept_loop(
-    listener: TcpListener,
-    state: Arc<Mutex<CaptureState>>,
-    canned_json: &'static str,
-) {
+fn spawn_accept_loop(listener: TcpListener, state: Arc<Mutex<CaptureState>>, canned_json: &'static str) {
     tokio::spawn(async move {
         loop {
             let (stream, _) = match listener.accept().await {
@@ -195,11 +191,7 @@ pub async fn start_gated_stub(canned_json: &'static str) -> GatedStub {
         }
     });
 
-    GatedStub {
-        port,
-        started,
-        release,
-    }
+    GatedStub { port, started, release }
 }
 
 async fn capture_request(req: Request<Incoming>) -> Captured {

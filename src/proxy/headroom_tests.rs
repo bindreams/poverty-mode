@@ -57,10 +57,7 @@ fn disabled_compression_is_byte_equal_noop() {
     t.transform(&mut body, &main_ctx())
         .expect("disabled transform must be Ok");
     let after = serde_json::to_vec(&body).unwrap();
-    assert_eq!(
-        before, after,
-        "disabled compression must be a byte-equal no-op"
-    );
+    assert_eq!(before, after, "disabled compression must be a byte-equal no-op");
 }
 
 /// A body whose JSON-array tool_result is BELOW the 512-byte JSON-array
@@ -99,10 +96,7 @@ fn enabled_but_nothing_shrinks_is_byte_equal() {
     t.transform(&mut body, &main_ctx())
         .expect("enabled transform must be Ok on a valid body");
     let after = serde_json::to_vec(&body).unwrap();
-    assert_eq!(
-        before, after,
-        "NoChange outcome must leave the body byte-identical"
-    );
+    assert_eq!(before, after, "NoChange outcome must leave the body byte-identical");
 }
 
 // Characterization / regression tests (R12) ==========================
@@ -159,10 +153,7 @@ fn shrink_metrics(text: &str) -> (usize, usize, usize, usize) {
     let after_total = serde_json::to_vec(&body).unwrap().len();
     // Document is still a valid Anthropic request after rewrite.
     assert_eq!(body["messages"][0]["role"], json!("user"));
-    assert_eq!(
-        body["messages"][0]["content"][0]["type"],
-        json!("tool_result")
-    );
+    assert_eq!(body["messages"][0]["content"][0]["type"], json!("tool_result"));
     (before_content, after_content, before_total, after_total)
 }
 
@@ -175,10 +166,7 @@ fn shrinks_json_array_tool_result_smart_crusher() {
         .collect();
     let payload = serde_json::to_string(&array).unwrap();
     let (bc, ac, bt, at) = shrink_metrics(&payload);
-    assert!(
-        ac < bc,
-        "SmartCrusher must shrink JSON-array content ({bc} -> {ac})"
-    );
+    assert!(ac < bc, "SmartCrusher must shrink JSON-array content ({bc} -> {ac})");
     assert!(
         at < bt,
         "whole body must be smaller after JSON compression ({bt} -> {at})"
@@ -198,10 +186,7 @@ fn shrinks_build_log_tool_result_log_compressor() {
         ));
     }
     let (bc, ac, bt, at) = shrink_metrics(&lines);
-    assert!(
-        ac < bc,
-        "LogCompressor must shrink build-log content ({bc} -> {ac})"
-    );
+    assert!(ac < bc, "LogCompressor must shrink build-log content ({bc} -> {ac})");
     assert!(
         at < bt,
         "whole body must be smaller after log compression ({bt} -> {at})"
@@ -244,10 +229,7 @@ fn shrinks_git_diff_tool_result_diff_compressor() {
     }
     diff.push_str("-old line that needs to be replaced\n+new line replacing the old one\n");
     for i in 0..40 {
-        diff.push_str(&format!(
-            " context line {} with extra padding text\n",
-            i + 40
-        ));
+        diff.push_str(&format!(" context line {} with extra padding text\n", i + 40));
     }
     assert!(
         diff.len() > 1024,
@@ -255,10 +237,7 @@ fn shrinks_git_diff_tool_result_diff_compressor() {
         diff.len()
     );
     let (bc, ac, bt, at) = shrink_metrics(&diff);
-    assert!(
-        ac < bc,
-        "DiffCompressor must shrink git-diff content ({bc} -> {ac})"
-    );
+    assert!(ac < bc, "DiffCompressor must shrink git-diff content ({bc} -> {ac})");
     assert!(
         at < bt,
         "whole body must be smaller after diff compression ({bt} -> {at})"
@@ -434,10 +413,8 @@ fn transform_bytes_preserves_noncanonical_cache_hot_zone_verbatim() {
 
     // Sanity: the cache-hot byte-forms really are non-canonical (a Value
     // round-trip would change them), so this test is not vacuous.
-    let canonical = serde_json::to_vec(
-        &serde_json::from_slice::<serde_json::Value>(&raw).expect("fixture is valid JSON"),
-    )
-    .unwrap();
+    let canonical =
+        serde_json::to_vec(&serde_json::from_slice::<serde_json::Value>(&raw).expect("fixture is valid JSON")).unwrap();
     assert_ne!(
         raw, canonical,
         "fixture must use non-canonical byte-forms in the cache-hot zone"
@@ -482,9 +459,7 @@ fn transform_bytes_nochange_returns_none() {
         settings: HeadroomSettings { compression: true },
     };
     let raw = serde_json::to_vec(&tiny_array_body()).unwrap();
-    let out = t
-        .transform_bytes(&raw, &main_ctx())
-        .expect("transform must be Ok");
+    let out = t.transform_bytes(&raw, &main_ctx()).expect("transform must be Ok");
     assert!(
         out.is_none(),
         "NoChange must map to None (forward original bytes verbatim)"
@@ -498,9 +473,7 @@ fn transform_bytes_disabled_returns_none() {
         settings: HeadroomSettings { compression: false },
     };
     let raw = serde_json::to_vec(&compressible_body()).unwrap();
-    let out = t
-        .transform_bytes(&raw, &main_ctx())
-        .expect("transform must be Ok");
+    let out = t.transform_bytes(&raw, &main_ctx()).expect("transform must be Ok");
     assert!(out.is_none(), "disabled compression must map to None");
 }
 
@@ -582,9 +555,7 @@ fn transform_bytes_reads_model_from_body_for_tokenizer_gate() {
     let via_transform = t
         .transform_bytes(&raw, &main_ctx())
         .expect("transform must be Ok")
-        .expect(
-            "body declares a tiktoken model -> Some (a hardcoded DEFAULT_MODEL would yield None)",
-        );
+        .expect("body declares a tiktoken model -> Some (a hardcoded DEFAULT_MODEL would yield None)");
 
     assert_eq!(
         Some(&via_transform),

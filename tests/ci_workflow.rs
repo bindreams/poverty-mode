@@ -59,10 +59,7 @@ fn ci_runs_fmt_check_in_a_single_lint_job() {
     let jobs = wf.get("jobs").expect("jobs key");
     let lint = jobs.get("lint").expect("dedicated lint job");
     let text = serde_yaml::to_string(lint).unwrap();
-    assert!(
-        text.contains("cargo fmt"),
-        "lint job must run cargo fmt --check"
-    );
+    assert!(text.contains("cargo fmt"), "lint job must run cargo fmt --check");
     // fmt must NOT be duplicated inside the per-target build-test job.
     let bt = jobs.get("build-test").expect("build-test job");
     let bt_text = serde_yaml::to_string(bt).unwrap();
@@ -81,10 +78,7 @@ fn ci_triggers_on_push_and_pull_request() {
         .or_else(|| wf.get(serde_yaml::Value::Bool(true)))
         .expect("on: key");
     assert!(on.get("push").is_some(), "must trigger on push");
-    assert!(
-        on.get("pull_request").is_some(),
-        "must trigger on pull_request"
-    );
+    assert!(on.get("pull_request").is_some(), "must trigger on pull_request");
 }
 
 #[test]
@@ -92,14 +86,8 @@ fn ci_never_runs_ignored_tests_or_central_login() {
     // R7: CI must NOT run --include-ignored, must NOT provision jbcentral, and must
     // NOT attempt a central login (no non-interactive --token form exists).
     let text = ci_text();
-    assert!(
-        !text.contains("--include-ignored"),
-        "R7: CI must not run ignored tests"
-    );
-    assert!(
-        !text.contains("central login"),
-        "R7: CI must not attempt central login"
-    );
+    assert!(!text.contains("--include-ignored"), "R7: CI must not run ignored tests");
+    assert!(!text.contains("central login"), "R7: CI must not attempt central login");
     assert!(
         !text.to_lowercase().contains("jbcentral_token"),
         "R7: CI must not reference a jbcentral login token"

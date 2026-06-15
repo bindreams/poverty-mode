@@ -46,10 +46,7 @@ fn build_command_through_trait_object_carries_inputs() {
 
     assert_eq!(std_cmd.get_program(), "fake-binary");
 
-    let args: Vec<String> = std_cmd
-        .get_args()
-        .map(|a| a.to_string_lossy().into_owned())
-        .collect();
+    let args: Vec<String> = std_cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
     assert_eq!(
         args,
         vec![
@@ -69,24 +66,15 @@ fn build_command_through_trait_object_carries_inputs() {
 #[test]
 fn select_agent_picks_codex_by_basename() {
     assert_eq!(select_agent(&["codex".to_string()]).name(), "codex");
-    assert_eq!(
-        select_agent(&["/usr/local/bin/codex".to_string()]).name(),
-        "codex"
-    );
+    assert_eq!(select_agent(&["/usr/local/bin/codex".to_string()]).name(), "codex");
     assert_eq!(select_agent(&["codex.exe".to_string()]).name(), "codex");
-    assert_eq!(
-        select_agent(&[r"C:\tools\codex.EXE".to_string()]).name(),
-        "codex"
-    );
+    assert_eq!(select_agent(&[r"C:\tools\codex.EXE".to_string()]).name(), "codex");
 }
 
 #[test]
 fn select_agent_defaults_to_claude() {
     assert_eq!(select_agent(&["claude".to_string()]).name(), "claude");
     assert_eq!(select_agent(&["/opt/claude".to_string()]).name(), "claude");
-    assert_eq!(
-        select_agent(&["something-else".to_string()]).name(),
-        "claude"
-    );
+    assert_eq!(select_agent(&["something-else".to_string()]).name(), "claude");
     assert_eq!(select_agent(&[]).name(), "claude");
 }

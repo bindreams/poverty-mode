@@ -32,10 +32,7 @@ fn detects_top_level_base_url_conflict_in_user_settings() {
     assert_eq!(findings[0].domain, FindingDomain::Settings);
     assert_eq!(findings[0].layer, Some(SettingsLayer::UserSettings));
     assert_eq!(findings[0].severity, Severity::Warn);
-    assert_eq!(
-        findings[0].found_value.as_deref(),
-        Some("https://corp.example/api")
-    );
+    assert_eq!(findings[0].found_value.as_deref(), Some("https://corp.example/api"));
     assert!(findings[0].message.contains("ANTHROPIC_BASE_URL"));
 }
 
@@ -48,10 +45,7 @@ fn detects_env_block_base_url_conflict_in_project_settings() {
     let findings = analyze_base_url(&sources, "http://127.0.0.1:40001");
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].layer, Some(SettingsLayer::ProjectSettings));
-    assert_eq!(
-        findings[0].found_value.as_deref(),
-        Some("https://other.example")
-    );
+    assert_eq!(findings[0].found_value.as_deref(), Some("https://other.example"));
 }
 
 #[test]
@@ -94,10 +88,7 @@ fn both_top_level_and_env_block_yield_two_findings() {
     )];
     let findings = analyze_base_url(&sources, "http://127.0.0.1:40001");
     assert_eq!(findings.len(), 2);
-    let values: Vec<&str> = findings
-        .iter()
-        .filter_map(|f| f.found_value.as_deref())
-        .collect();
+    let values: Vec<&str> = findings.iter().filter_map(|f| f.found_value.as_deref()).collect();
     assert!(values.contains(&"https://a.example"));
     assert!(values.contains(&"https://b.example"));
 }
@@ -146,16 +137,11 @@ fn toolchain_finding_emitted_for_unsupported_target() {
         .iter()
         .all(|f| f.domain == FindingDomain::Toolchain && f.layer.is_none()));
     // First: unsupported build target (Error).
-    assert!(
-        findings
-            .iter()
-            .any(|f| f.severity == Severity::Error
-                && f.message.to_lowercase().contains("unsupported"))
-    );
-    // Second: no central asset (mentions central).
     assert!(findings
         .iter()
-        .any(|f| f.message.to_lowercase().contains("central")));
+        .any(|f| f.severity == Severity::Error && f.message.to_lowercase().contains("unsupported")));
+    // Second: no central asset (mentions central).
+    assert!(findings.iter().any(|f| f.message.to_lowercase().contains("central")));
 }
 
 #[test]

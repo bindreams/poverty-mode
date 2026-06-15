@@ -41,10 +41,7 @@ fn build_subscriber_to_writer_captures_a_log_line() {
         "log output should contain the message, got: {text:?}"
     );
     // ANSI disabled => no escape sequences.
-    assert!(
-        !text.contains('\u{1b}'),
-        "expected no ANSI escapes: {text:?}"
-    );
+    assert!(!text.contains('\u{1b}'), "expected no ANSI escapes: {text:?}");
 }
 
 #[test]

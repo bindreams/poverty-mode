@@ -116,24 +116,20 @@ impl EphemeralManager {
             } else {
                 Vec::new()
             };
-            let spawned = self.group.spawn(&exe, &args, &extra_env).map_err(|e| {
-                anyhow::anyhow!("spawning proxy hop '{}': {e}", hop.name().as_str())
-            })?;
-            let stdout = spawned.stdout.ok_or_else(|| {
-                anyhow::anyhow!("proxy hop '{}' had no piped stdout", hop.name().as_str())
-            })?;
+            let spawned = self
+                .group
+                .spawn(&exe, &args, &extra_env)
+                .map_err(|e| anyhow::anyhow!("spawning proxy hop '{}': {e}", hop.name().as_str()))?;
+            let stdout = spawned
+                .stdout
+                .ok_or_else(|| anyhow::anyhow!("proxy hop '{}' had no piped stdout", hop.name().as_str()))?;
             let mut reader = tokio::io::BufReader::new(stdout);
 
             // Blocking READY read = real synchronization (no sleep/poll). Validates
             // ready/name/run_id (R10).
             let ready = read_ready_line(&mut reader, hop.name(), &hop.run_id)
                 .await
-                .map_err(|e| {
-                    anyhow::anyhow!(
-                        "READY handshake for hop '{}' failed: {e}",
-                        hop.name().as_str()
-                    )
-                })?;
+                .map_err(|e| anyhow::anyhow!("READY handshake for hop '{}' failed: {e}", hop.name().as_str()))?;
 
             // Verify identity/staleness via /__pm/health off the async executor
             // (R5: the blocking GET must not run on the runtime thread).

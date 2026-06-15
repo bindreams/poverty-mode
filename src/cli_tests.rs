@@ -32,19 +32,13 @@ fn parses_run_with_proxies_and_trailing_agent() {
             agent_argv,
             ..
         } => {
-            assert_eq!(
-                proxies,
-                Some(vec!["pino".to_string(), "headroom".to_string()])
-            );
+            assert_eq!(proxies, Some(vec!["pino".to_string(), "headroom".to_string()]));
             assert!(!interactive);
             assert!(!save);
             assert!(!no_save);
             assert_eq!(
                 agent_argv,
-                vec![
-                    "claude".to_string(),
-                    "--dangerously-skip-permissions".to_string()
-                ]
+                vec!["claude".to_string(), "--dangerously-skip-permissions".to_string()]
             );
         }
         other => panic!("expected Run, got {other:?}"),
@@ -98,16 +92,12 @@ fn run_without_setting_flags_yields_empty_overrides() {
     let Command::Run { settings, .. } = cli.command else {
         panic!()
     };
-    assert_eq!(
-        settings.to_overrides(),
-        crate::config::overrides::Overrides::default()
-    );
+    assert_eq!(settings.to_overrides(), crate::config::overrides::Overrides::default());
 }
 
 #[test]
 fn run_pino_auto_cache_pair_resolves_true() {
-    let cli =
-        Cli::try_parse_from(["poverty-mode", "run", "--pino-auto-cache", "--", "claude"]).unwrap();
+    let cli = Cli::try_parse_from(["poverty-mode", "run", "--pino-auto-cache", "--", "claude"]).unwrap();
     let Command::Run { settings, .. } = cli.command else {
         panic!()
     };
@@ -118,15 +108,7 @@ fn run_pino_auto_cache_pair_resolves_true() {
 fn run_empty_drop_tools_clears_the_list() {
     // Decision: passing --pino-drop-tools with an empty value is an explicit clear
     // (Some(vec![])), which replaces any configured list with empty on apply.
-    let cli = Cli::try_parse_from([
-        "poverty-mode",
-        "run",
-        "--pino-drop-tools",
-        "",
-        "--",
-        "claude",
-    ])
-    .unwrap();
+    let cli = Cli::try_parse_from(["poverty-mode", "run", "--pino-drop-tools", "", "--", "claude"]).unwrap();
     let Command::Run { settings, .. } = cli.command else {
         panic!()
     };
@@ -174,10 +156,7 @@ fn parses_proxy_pino_with_transform_flags() {
                 vec!["WebFetch".to_string(), "WebSearch".to_string()]
             );
             assert!(!args.strip_ansi());
-            assert_eq!(
-                args.pino.model_override.as_deref(),
-                Some("claude-3-5-haiku")
-            );
+            assert_eq!(args.pino.model_override.as_deref(), Some("claude-3-5-haiku"));
         }
         other => panic!("expected Proxy, got {other:?}"),
     }
@@ -337,10 +316,7 @@ fn proxy_body_log_file_is_independent_of_global_log_file() {
         "/tmp/bodies.log",
     ])
     .expect("proxy argv with both log flags should parse");
-    assert_eq!(
-        cli.log_file.as_deref(),
-        Some(std::path::Path::new("/tmp/tracing.log"))
-    );
+    assert_eq!(cli.log_file.as_deref(), Some(std::path::Path::new("/tmp/tracing.log")));
     match cli.command {
         Command::Proxy(args) => {
             assert_eq!(
@@ -455,10 +431,7 @@ fn proxy_bool_flags_are_presence_with_negations() {
         "r",
         "--compression",
     ]);
-    assert!(
-        a.compression(),
-        "--compression keeps it on (redundant with default)"
-    );
+    assert!(a.compression(), "--compression keeps it on (redundant with default)");
 }
 
 #[test]
@@ -480,10 +453,7 @@ fn proxy_transform_kind_matches_chosen_proxy() {
     match transform_from_proxy_args(&a) {
         TransformKind::Pino(s) => {
             assert!(s.auto_cache);
-            assert_eq!(
-                s.drop_tools,
-                vec!["NotebookEdit".to_string(), "CronList".to_string()]
-            );
+            assert_eq!(s.drop_tools, vec!["NotebookEdit".to_string(), "CronList".to_string()]);
         }
         other => panic!("expected pino transform, got {other:?}"),
     }

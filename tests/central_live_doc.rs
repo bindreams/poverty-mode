@@ -13,10 +13,7 @@ fn documents_central_live_suite() {
         GATES.contains("central_live"),
         "must reference the central_live test target"
     );
-    assert!(
-        GATES.contains("--ignored"),
-        "must show the --ignored run invocation"
-    );
+    assert!(GATES.contains("--ignored"), "must show the --ignored run invocation");
     assert!(
         GATES.contains("AI Pro"),
         "must document the JetBrains AI Pro login prerequisite"

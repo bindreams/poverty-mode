@@ -4,11 +4,7 @@ use super::*;
 fn build_command_uses_argv_program_and_args() {
     let agent = ClaudeAgent;
     let base = Url::parse("http://127.0.0.1:4100/").unwrap();
-    let argv = vec![
-        "/usr/bin/claude".to_string(),
-        "--print".to_string(),
-        "hi".to_string(),
-    ];
+    let argv = vec!["/usr/bin/claude".to_string(), "--print".to_string(), "hi".to_string()];
     let cmd = agent.build_command(&argv, &base, &[]);
     let std = cmd.as_std();
     // Generic model (M6): program is argv[0].
@@ -17,10 +13,7 @@ fn build_command_uses_argv_program_and_args() {
     // user's args (argv[1..]) follow verbatim and in order. (We assert the flag's
     // position and the trailing user args here; the JSON value's *contents* are
     // characterized by the M7.4 `settings_*` tests, so we do not hardcode them.)
-    let args: Vec<_> = std
-        .get_args()
-        .map(|a| a.to_string_lossy().into_owned())
-        .collect();
+    let args: Vec<_> = std.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
     assert_eq!(args[0], "--settings");
     assert_eq!(&args[2..], &["--print".to_string(), "hi".to_string()]);
 }
@@ -88,10 +81,7 @@ fn program_is_argv0() {
     let base = Url::parse("http://127.0.0.1:4100").unwrap();
     let argv = vec!["/opt/bin/claude".to_string(), "--print".to_string()];
     let cmd = ClaudeAgent.build_command(&argv, &base, &[]);
-    assert_eq!(
-        cmd.as_std().get_program(),
-        std::ffi::OsStr::new("/opt/bin/claude")
-    );
+    assert_eq!(cmd.as_std().get_program(), std::ffi::OsStr::new("/opt/bin/claude"));
 }
 
 #[test]
@@ -107,23 +97,13 @@ fn settings_flag_inserted_between_program_and_user_args() {
     // argv = [program, user_arg1, user_arg2]: the program becomes get_program();
     // the emitted args are `--settings <json>` followed by argv[1..] in order.
     let base = Url::parse("http://127.0.0.1:4100").unwrap();
-    let argv = vec![
-        "claude".to_string(),
-        "--print".to_string(),
-        "do a thing".to_string(),
-    ];
+    let argv = vec!["claude".to_string(), "--print".to_string(), "do a thing".to_string()];
     let cmd = ClaudeAgent.build_command(&argv, &base, &[]);
     let args = args_of(&cmd);
 
     // Exactly one --settings flag, with a value immediately after it.
-    let pos = args
-        .iter()
-        .position(|a| a == "--settings")
-        .expect("--settings present");
-    assert!(
-        pos + 1 < args.len(),
-        "--settings must be followed by a value"
-    );
+    let pos = args.iter().position(|a| a == "--settings").expect("--settings present");
+    assert!(pos + 1 < args.len(), "--settings must be followed by a value");
     assert_eq!(args.iter().filter(|a| *a == "--settings").count(), 1);
 
     // `--settings` lands at the very front of the arg vector (right after the
@@ -132,10 +112,7 @@ fn settings_flag_inserted_between_program_and_user_args() {
 
     // User argv[1..] comes strictly after the settings flag+value.
     let user_start = pos + 2;
-    assert_eq!(
-        &args[user_start..],
-        &["--print".to_string(), "do a thing".to_string()]
-    );
+    assert_eq!(&args[user_start..], &["--print".to_string(), "do a thing".to_string()]);
 }
 
 #[test]
@@ -183,18 +160,12 @@ fn process_env_sets_base_url() {
 fn process_env_includes_every_extra_env_entry() {
     let base = Url::parse("http://127.0.0.1:4100").unwrap();
     let extra = vec![
-        (
-            "POVERTY_PROXY_CHAIN".to_string(),
-            "pino,headroom".to_string(),
-        ),
+        ("POVERTY_PROXY_CHAIN".to_string(), "pino,headroom".to_string()),
         ("ENABLE_TOOL_SEARCH".to_string(), "true".to_string()),
     ];
     let cmd = ClaudeAgent.build_command(&[], &base, &extra);
 
-    assert_eq!(
-        env_of(&cmd, "POVERTY_PROXY_CHAIN"),
-        Some("pino,headroom".to_string())
-    );
+    assert_eq!(env_of(&cmd, "POVERTY_PROXY_CHAIN"), Some("pino,headroom".to_string()));
     assert_eq!(env_of(&cmd, "ENABLE_TOOL_SEARCH"), Some("true".to_string()));
     // base url is still set even when extra_env does not carry it.
     assert_eq!(
@@ -212,10 +183,7 @@ fn central_tail_auth_token_lands_in_process_env() {
         ("ANTHROPIC_AUTH_TOKEN".to_string(), "wire-proxy".to_string()),
     ];
     let cmd = ClaudeAgent.build_command(&[], &base, &extra);
-    assert_eq!(
-        env_of(&cmd, "ANTHROPIC_AUTH_TOKEN"),
-        Some("wire-proxy".to_string())
-    );
+    assert_eq!(env_of(&cmd, "ANTHROPIC_AUTH_TOKEN"), Some("wire-proxy".to_string()));
 }
 
 #[test]
@@ -240,10 +208,7 @@ use serde_json::Value;
 // Extract and parse the JSON value passed to `--settings`.
 fn settings_json(cmd: &tokio::process::Command) -> Value {
     let args = args_of(cmd);
-    let pos = args
-        .iter()
-        .position(|a| a == "--settings")
-        .expect("--settings present");
+    let pos = args.iter().position(|a| a == "--settings").expect("--settings present");
     let raw = &args[pos + 1];
     serde_json::from_str(raw).expect("--settings value must be valid JSON")
 }
@@ -262,10 +227,7 @@ fn settings_env_block_carries_base_url() {
 fn settings_env_mirrors_extra_env_exactly() {
     let base = Url::parse("http://127.0.0.1:4100").unwrap();
     let extra = vec![
-        (
-            "POVERTY_PROXY_CHAIN".to_string(),
-            "pino,central".to_string(),
-        ),
+        ("POVERTY_PROXY_CHAIN".to_string(), "pino,central".to_string()),
         ("ENABLE_TOOL_SEARCH".to_string(), "true".to_string()),
         ("ANTHROPIC_AUTH_TOKEN".to_string(), "wire-proxy".to_string()),
     ];
@@ -278,15 +240,9 @@ fn settings_env_mirrors_extra_env_exactly() {
         env["ANTHROPIC_BASE_URL"],
         Value::String("http://127.0.0.1:4100/".to_string())
     );
-    assert_eq!(
-        env["POVERTY_PROXY_CHAIN"],
-        Value::String("pino,central".to_string())
-    );
+    assert_eq!(env["POVERTY_PROXY_CHAIN"], Value::String("pino,central".to_string()));
     assert_eq!(env["ENABLE_TOOL_SEARCH"], Value::String("true".to_string()));
-    assert_eq!(
-        env["ANTHROPIC_AUTH_TOKEN"],
-        Value::String("wire-proxy".to_string())
-    );
+    assert_eq!(env["ANTHROPIC_AUTH_TOKEN"], Value::String("wire-proxy".to_string()));
 }
 
 #[test]
@@ -384,9 +340,7 @@ fn managed_policy_note_documents_the_one_layer_we_cannot_beat() {
     // The note must name Managed and must NOT claim we override it.
     assert!(MANAGED_POLICY_NOTE.contains("Managed"));
     assert!(
-        !MANAGED_POLICY_NOTE
-            .to_lowercase()
-            .contains("override managed"),
+        !MANAGED_POLICY_NOTE.to_lowercase().contains("override managed"),
         "we must not claim to beat Managed policy"
     );
 }

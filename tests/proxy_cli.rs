@@ -41,10 +41,7 @@ fn proxy_subcommand_binds_prints_ready_line_with_real_port() {
     assert!(ready.ready);
     assert_eq!(ready.proxy, "pino");
     assert_eq!(ready.run_id, "01J0CLIRUN");
-    assert_ne!(
-        ready.port, 0,
-        "READY must report the real bound ephemeral port"
-    );
+    assert_ne!(ready.port, 0, "READY must report the real bound ephemeral port");
 
     // Confirm the port is actually bound by connecting to it.
     let addr = format!("127.0.0.1:{}", ready.port);

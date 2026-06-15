@@ -26,11 +26,7 @@ fn release_triggers_on_version_tags() {
         .and_then(|p| p.get("tags"))
         .and_then(|t| t.as_sequence())
         .expect("push.tags sequence");
-    let tag_strs: Vec<String> = tags
-        .iter()
-        .filter_map(|t| t.as_str())
-        .map(|s| s.to_string())
-        .collect();
+    let tag_strs: Vec<String> = tags.iter().filter_map(|t| t.as_str()).map(|s| s.to_string()).collect();
     assert!(
         tag_strs.iter().any(|t| t.starts_with('v')),
         "release must trigger on v* tags; got {tag_strs:?}"

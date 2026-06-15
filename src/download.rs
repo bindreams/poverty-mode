@@ -61,8 +61,7 @@ pub fn host_arch() -> anyhow::Result<&'static str> {
 /// `dest_dir` is created if absent. These are our own pinned, sha256-verified JetBrains assets; both
 /// `tar` and `zip` sanitize path traversal internally.
 pub fn extract_archive(bytes: &[u8], name: &str, dest_dir: &Path) -> anyhow::Result<()> {
-    fs::create_dir_all(dest_dir)
-        .with_context(|| format!("creating extract dir {}", dest_dir.display()))?;
+    fs::create_dir_all(dest_dir).with_context(|| format!("creating extract dir {}", dest_dir.display()))?;
 
     let lower = name.to_ascii_lowercase();
     if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
@@ -73,8 +72,7 @@ pub fn extract_archive(bytes: &[u8], name: &str, dest_dir: &Path) -> anyhow::Res
             .with_context(|| format!("unpacking tar.gz into {}", dest_dir.display()))?;
         Ok(())
     } else if lower.ends_with(".zip") {
-        let mut archive =
-            zip::ZipArchive::new(Cursor::new(bytes)).context("opening zip archive")?;
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).context("opening zip archive")?;
         archive
             .extract(dest_dir)
             .with_context(|| format!("extracting zip into {}", dest_dir.display()))?;
@@ -170,8 +168,7 @@ pub fn verify_and_extract_bytes(
     let parent = dest_dir
         .parent()
         .ok_or_else(|| anyhow!("destination {} has no parent dir", dest_dir.display()))?;
-    fs::create_dir_all(parent)
-        .with_context(|| format!("creating parent dir {}", parent.display()))?;
+    fs::create_dir_all(parent).with_context(|| format!("creating parent dir {}", parent.display()))?;
 
     // Stage extraction in a temp dir in the SAME parent so the final rename is on one filesystem.
     let staging = tempfile::Builder::new()
@@ -187,16 +184,12 @@ pub fn verify_and_extract_bytes(
     if dest_dir.exists() {
         let aside = parent.join(format!(
             ".pm-old-{}-{}",
-            dest_dir
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("dest"),
+            dest_dir.file_name().and_then(|s| s.to_str()).unwrap_or("dest"),
             std::process::id()
         ));
         if let Err(e) = fs::rename(dest_dir, &aside) {
             let _ = fs::remove_dir_all(&staged); // don't leak the staged extract on this error path
-            return Err(e)
-                .with_context(|| format!("renaming old dest {} aside", dest_dir.display()));
+            return Err(e).with_context(|| format!("renaming old dest {} aside", dest_dir.display()));
         }
         renamed_old = Some(aside);
     }
@@ -207,8 +200,7 @@ pub fn verify_and_extract_bytes(
             let _ = fs::rename(old, dest_dir);
         }
         let _ = fs::remove_dir_all(&staged);
-        return Err(e)
-            .with_context(|| format!("renaming staged extract into {}", dest_dir.display()));
+        return Err(e).with_context(|| format!("renaming staged extract into {}", dest_dir.display()));
     }
 
     if let Some(old) = renamed_old {
@@ -227,23 +219,15 @@ pub fn verify_and_extract_bytes(
 /// runs racing the first download cooperate (the loser re-extracts into a fresh staging dir, which is
 /// cheap and correct). The blocking client uses reqwest's native-roots TLS (M1, R2) — no
 /// rustls-platform-verifier.
-pub fn download_verify_extract(
-    url: &str,
-    sha256: Option<&str>,
-    dest_dir: &Path,
-) -> anyhow::Result<()> {
+pub fn download_verify_extract(url: &str, sha256: Option<&str>, dest_dir: &Path) -> anyhow::Result<()> {
     let parent = dest_dir
         .parent()
         .ok_or_else(|| anyhow!("destination {} has no parent dir", dest_dir.display()))?;
-    fs::create_dir_all(parent)
-        .with_context(|| format!("creating parent dir {}", parent.display()))?;
+    fs::create_dir_all(parent).with_context(|| format!("creating parent dir {}", parent.display()))?;
 
     let lock_name = format!(
         "{}.lock",
-        dest_dir
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("download")
+        dest_dir.file_name().and_then(|s| s.to_str()).unwrap_or("download")
     );
     let lock_path = parent.join(lock_name);
 
@@ -265,9 +249,7 @@ pub fn download_verify_extract(
             .with_context(|| format!("GET {url}"))?
             .error_for_status()
             .with_context(|| format!("non-success status from {url}"))?;
-        let bytes = resp
-            .bytes()
-            .with_context(|| format!("reading body of {url}"))?;
+        let bytes = resp.bytes().with_context(|| format!("reading body of {url}"))?;
 
         verify_and_extract_bytes(&bytes, &name, sha256, dest_dir)
     })

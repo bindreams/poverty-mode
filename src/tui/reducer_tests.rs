@@ -93,9 +93,7 @@ fn activate_on_proxy_toggles_enabled_does_not_run() {
     let TuiOutcome::Run(entries) = st.apply(TuiAction::Activate) else {
         panic!("expected Run")
     };
-    assert!(entries
-        .iter()
-        .any(|e| e.name == ProxyName::Pino && e.enabled));
+    assert!(entries.iter().any(|e| e.name == ProxyName::Pino && e.enabled));
 }
 
 #[test]
@@ -281,10 +279,7 @@ fn move_only_acts_on_proxy_headers() {
     let before = st.rows_order();
     assert_eq!(st.apply(TuiAction::MoveDown), TuiOutcome::Continue);
     assert_eq!(st.rows_order(), before);
-    assert_eq!(
-        st.focus(),
-        Focus::Setting(ProxyName::Pino, SettingId::SubTtl)
-    );
+    assert_eq!(st.focus(), Focus::Setting(ProxyName::Pino, SettingId::SubTtl));
 }
 
 #[test]
@@ -361,9 +356,7 @@ fn run_outcome_full_state_central_last() {
     };
     assert_eq!(entries.len(), 3);
     assert_eq!(entries.last().unwrap().name, ProxyName::Central);
-    assert!(entries
-        .iter()
-        .any(|e| e.name == ProxyName::Pino && e.enabled));
+    assert!(entries.iter().any(|e| e.name == ProxyName::Pino && e.enabled));
 }
 
 #[test]
@@ -466,10 +459,7 @@ fn chain_preview_lists_enabled_in_order() {
     st.apply(TuiAction::Activate); // pino on
     st.set_focus(Focus::Proxy(ProxyName::Headroom));
     st.apply(TuiAction::Activate); // headroom on
-    assert_eq!(
-        st.chain_preview(),
-        "claude → pino → headroom → api.anthropic.com"
-    );
+    assert_eq!(st.chain_preview(), "claude → pino → headroom → api.anthropic.com");
 }
 
 #[test]

@@ -17,13 +17,9 @@ use poverty_mode::orchestrator;
 /// Serve a fixed HealthBody JSON at /__pm/health (200), 404 elsewhere. Returns
 /// the bound port. The bind is awaited (no sleep); the server runs until exit.
 async fn serve_health(run_id: &'static str) -> u16 {
-    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
-        .await
-        .unwrap();
+    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let body = format!(
-        r#"{{"proxy":"pino","port":{port},"upstream":"api.anthropic.com","run_id":"{run_id}"}}"#
-    );
+    let body = format!(r#"{{"proxy":"pino","port":{port},"upstream":"api.anthropic.com","run_id":"{run_id}"}}"#);
     tokio::spawn(async move {
         loop {
             let (stream, _) = match listener.accept().await {

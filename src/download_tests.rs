@@ -86,9 +86,7 @@ fn make_tar_gz_fixture(file_rel: &str, contents: &[u8]) -> Vec<u8> {
         header.set_size(contents.len() as u64);
         header.set_mode(0o755);
         header.set_cksum();
-        builder
-            .append_data(&mut header, file_rel, contents)
-            .unwrap();
+        builder.append_data(&mut header, file_rel, contents).unwrap();
         builder.finish().unwrap();
     }
     let mut gz = GzEncoder::new(Vec::new(), Compression::default());
@@ -104,8 +102,7 @@ fn make_zip_fixture(file_rel: &str, contents: &[u8]) -> Vec<u8> {
     let mut cursor = Cursor::new(Vec::new());
     {
         let mut writer = zip::ZipWriter::new(&mut cursor);
-        let opts =
-            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         writer.start_file(file_rel, opts).unwrap();
         writer.write_all(contents).unwrap();
         writer.finish().unwrap();
@@ -174,8 +171,7 @@ fn pinned_sha256_returns_some_for_a_known_entry() {
         if let Some(sum) = pinned_sha256("0.2.9", os, arch) {
             assert_eq!(sum.len(), 64, "sha256 hex must be 64 chars: {sum}");
             assert!(
-                sum.chars()
-                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+                sum.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
                 "pin must be lowercase hex: {sum}"
             );
         }
@@ -210,10 +206,7 @@ fn verify_and_extract_rejects_wrong_sha256_and_leaves_no_dest() {
     let err = verify_and_extract_bytes(&bytes, "asset.tar.gz", Some(&wrong), &dest).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("checksum") || msg.contains("sha256"), "{msg}");
-    assert!(
-        !dest.exists(),
-        "dest must not exist after a checksum failure"
-    );
+    assert!(!dest.exists(), "dest must not exist after a checksum failure");
 }
 
 #[test]
@@ -253,10 +246,7 @@ fn verify_and_extract_replaces_existing_dest_without_stale_leftovers() {
     let bytes = make_tar_gz_fixture("bin/jbcentral", b"payload-E");
     verify_and_extract_bytes(&bytes, "asset.tar.gz", None, &dest).unwrap();
 
-    assert!(
-        !dest.join("STALE").exists(),
-        "stale file must be gone after replace"
-    );
+    assert!(!dest.join("STALE").exists(), "stale file must be gone after replace");
     let got = std::fs::read(dest.join("bin").join("jbcentral")).unwrap();
     assert_eq!(got, b"payload-E");
 }
@@ -275,16 +265,10 @@ fn pin_table_covers_all_supported_targets_for_default_version() {
         ("windows", "x86_64"),
     ];
     for (os, arch) in supported {
-        let sum = pinned_sha256(v, os, arch)
-            .unwrap_or_else(|| panic!("missing sha256 pin for {v} {os}/{arch}"));
-        assert_eq!(
-            sum.len(),
-            64,
-            "pin for {os}/{arch} must be 64 hex chars: {sum}"
-        );
+        let sum = pinned_sha256(v, os, arch).unwrap_or_else(|| panic!("missing sha256 pin for {v} {os}/{arch}"));
+        assert_eq!(sum.len(), 64, "pin for {os}/{arch} must be 64 hex chars: {sum}");
         assert!(
-            sum.chars()
-                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            sum.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
             "pin for {os}/{arch} must be lowercase hex: {sum}"
         );
     }
