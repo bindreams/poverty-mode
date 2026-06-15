@@ -75,6 +75,7 @@ async fn readiness_failure_via_manager_tears_down_started_hops() {
         proxy: hop,
         run_id: run_id.clone(),
         log_file: std::env::temp_dir().join("pm-failclosed-pino.log"),
+        stderr_log: std::env::temp_dir().join("pm-failclosed-pino.stderr.log"),
     };
     let tail = Upstream {
         url: Url::parse("https://api.anthropic.com").unwrap(),

@@ -84,9 +84,34 @@ mod imp {
             args: &[String],
             extra_env: &[(String, String)],
         ) -> anyhow::Result<GroupSpawn> {
+            self.spawn_with_stderr(exe, args, extra_env, None)
+        }
+
+        pub fn spawn_with_stderr(
+            &mut self,
+            exe: &Path,
+            args: &[String],
+            extra_env: &[(String, String)],
+            stderr_log: Option<&Path>,
+        ) -> anyhow::Result<GroupSpawn> {
             let mut cmd = Command::new(exe);
             cmd.args(args);
             cmd.stdout(Stdio::piped());
+            // Redirect the child's stderr (its tracing sink) to a file so no hop log
+            // line is inherited onto the parent terminal the agent owns. `None`
+            // inherits (the `__spawn-holder`/`__sleep` teardown harness).
+            if let Some(path) = stderr_log {
+                let file = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                    .map_err(|e| {
+                        anyhow::anyhow!("opening hop stderr log {}: {e}", path.display())
+                    })?;
+                // Owner-only on POSIX (the run dir is already 0700; defense in depth).
+                let _ = crate::paths::harden_file_perms(path);
+                cmd.stderr(Stdio::from(file));
+            }
             // Tell the child which fd is the death-pipe read end to watch.
             cmd.env("PM_DEATH_PIPE_FD", self.death_read_fd.to_string());
             // Per-child env overrides (e.g. test-only fault injection): applied to
@@ -374,6 +399,16 @@ mod imp {
             args: &[String],
             extra_env: &[(String, String)],
         ) -> anyhow::Result<GroupSpawn> {
+            self.spawn_with_stderr(exe, args, extra_env, None)
+        }
+
+        pub fn spawn_with_stderr(
+            &mut self,
+            exe: &Path,
+            args: &[String],
+            extra_env: &[(String, String)],
+            stderr_log: Option<&Path>,
+        ) -> anyhow::Result<GroupSpawn> {
             // Build an inheritable stdout pipe for the READY read.
             // SAFETY: zeroed is a valid initial state for SECURITY_ATTRIBUTES.
             let mut sa: SECURITY_ATTRIBUTES = unsafe { std::mem::zeroed() };
@@ -416,9 +451,36 @@ mod imp {
             si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
             si.dwFlags = STARTF_USESTDHANDLES;
             si.hStdOutput = write_h;
-            // Inherit stderr so the parent terminal stays informative.
-            // SAFETY: GetStdHandle returns a process-owned handle.
-            si.hStdError = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
+            // Redirect the child's stderr to a per-hop file (inheritable handle) so
+            // no hop log line reaches the parent terminal. `None` inherits the
+            // parent's stderr (the teardown harness). Kept alive across CreateProcessW.
+            let stderr_file = match stderr_log {
+                Some(path) => {
+                    let f = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                        .map_err(|e| {
+                            anyhow::anyhow!("opening hop stderr log {}: {e}", path.display())
+                        })?;
+                    // Make the handle inheritable so the child can use it as stderr.
+                    // SAFETY: f.as_raw_handle() is a live, owned handle for this call.
+                    unsafe {
+                        SetHandleInformation(
+                            f.as_raw_handle() as HANDLE,
+                            HANDLE_FLAG_INHERIT,
+                            HANDLE_FLAG_INHERIT,
+                        );
+                    }
+                    Some(f)
+                }
+                None => None,
+            };
+            si.hStdError = match &stderr_file {
+                Some(f) => f.as_raw_handle() as HANDLE,
+                // SAFETY: GetStdHandle returns a process-owned handle.
+                None => unsafe { GetStdHandle(STD_ERROR_HANDLE) },
+            };
             si.hStdInput = INVALID_HANDLE_VALUE;
 
             // SAFETY: zeroed is a valid initial state for PROCESS_INFORMATION.

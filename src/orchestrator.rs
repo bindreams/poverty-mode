@@ -295,6 +295,7 @@ async fn build_via_manager(
             proxy: hop.clone(),
             run_id: run_id.clone(),
             log_file: hop_log_file(&run_dir, hop.name),
+            stderr_log: run_dir.join(format!("{}.log", hop.name.as_str())),
         })
         .collect();
 

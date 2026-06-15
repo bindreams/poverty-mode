@@ -151,6 +151,12 @@ pub enum Command {
     /// deterministic in-repo "codex" agent for chain tests.
     #[command(name = "__codexpost", hide = true)]
     CodexPost,
+
+    /// Hidden: emit one `tracing::warn!` line carrying <msg>, then exit 0. Used by
+    /// the log-redirection test to prove a child's stderr (its tracing sink) is
+    /// captured into the per-hop file, not inherited onto the terminal.
+    #[command(name = "__emit-warn", hide = true)]
+    EmitWarn { msg: String },
 }
 
 /// Arguments for the `proxy` subcommand (R23b). The positional `which` selects
@@ -741,6 +747,10 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
                     Err(e) => anyhow::bail!("__codexpost failed: {e}"),
                 }
             })
+        }
+        Command::EmitWarn { msg } => {
+            tracing::warn!("{msg}");
+            Ok(())
         }
     }
 }
