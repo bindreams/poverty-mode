@@ -460,7 +460,11 @@ pub fn engine_config_from_proxy_args(args: &ProxyArgs) -> EngineConfig {
 /// completion on a fresh multi-thread runtime. Every other handler is wired to its
 /// real implementation; `central`/`config` delegate to [`dispatch_central`] /
 /// [`dispatch_config`].
-pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
+///
+/// `run_id`: for the `run` subcommand, the caller pre-generates a session id (so
+/// that a session dir is created BEFORE tracing is initialized). Other subcommands
+/// ignore this parameter.
+pub fn dispatch(cli: Cli, run_id: Option<String>) -> anyhow::Result<()> {
     let config_overrides = cli.config.clone();
     match cli.command {
         Command::Run {
@@ -544,10 +548,12 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
             // `dispatch` is synchronous; `run_command` is async (R5: its blocking
             // probes are dispatched off the executor via `spawn_blocking`). Drive
             // it on a fresh multi-thread runtime, mirroring the `proxy` arm.
+            let run_id = run_id.unwrap_or_else(crate::paths::new_session_name);
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()?;
             let status = rt.block_on(crate::orchestrator::run_command(
+                &run_id,
                 chain,
                 &agent_argv,
                 config.defaults.enable_tool_search,

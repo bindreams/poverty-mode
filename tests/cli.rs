@@ -26,7 +26,8 @@ fn library_dispatch_is_reachable_for_config_subcommand() {
     use poverty_mode::cli::{dispatch, Cli};
 
     let cli = Cli::try_parse_from(["poverty-mode", "config", "path"]).unwrap();
-    dispatch(cli).expect("`config path` should dispatch successfully via the library import path");
+    dispatch(cli, None)
+        .expect("`config path` should dispatch successfully via the library import path");
 }
 
 // ---- Characterization guards (R12): added AFTER the dispatch stubs exist in
