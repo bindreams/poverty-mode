@@ -30,7 +30,7 @@ fn settings_of_lists_fields_in_fixed_order() {
     assert_eq!(settings_of(ProxyName::Headroom), &[SettingId::Compression]);
     assert_eq!(
         settings_of(ProxyName::Central),
-        &[SettingId::Port, SettingId::PinnedVersion]
+        &[SettingId::Port, SettingId::PinnedVersion, SettingId::Executable]
     );
 }
 #[test]
@@ -95,6 +95,30 @@ fn commit_number_parses_empty_is_none_garbage_errs() {
     assert!(SettingId::Port.commit_edit(&mut s, "abc").is_err());
     SettingId::Port.commit_edit(&mut s, "").unwrap();
     assert_eq!(render_value(&s, SettingId::Port), "(default)");
+}
+#[test]
+fn central_executable_edits_and_commits() {
+    let mut s = ProxySettings::Central(CentralSettings {
+        port: None,
+        pinned_version: None,
+        executable: Some("jbcentral".into()),
+    });
+    assert_eq!(SettingId::Executable.edit_buffer(&s), "jbcentral");
+    assert_eq!(render_value(&s, SettingId::Executable), "jbcentral");
+    SettingId::Executable.commit_edit(&mut s, "/opt/jb").unwrap();
+    let ProxySettings::Central(c) = &s else {
+        panic!("expected Central settings, got {s:?}");
+    };
+    assert_eq!(c.executable.as_deref(), Some("/opt/jb"));
+    assert_eq!(render_value(&s, SettingId::Executable), "/opt/jb");
+    SettingId::Executable.commit_edit(&mut s, "").unwrap();
+    let ProxySettings::Central(c) = &s else {
+        panic!("expected Central settings, got {s:?}");
+    };
+    assert_eq!(c.executable, None);
+    // Unset executable renders as the download-fallback marker, not "(default)".
+    assert_eq!(render_value(&s, SettingId::Executable), "(download)");
+    assert!(CENTRAL_SETTINGS.contains(&SettingId::Executable));
 }
 #[test]
 fn describe_reflects_key_settings() {
