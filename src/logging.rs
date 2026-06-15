@@ -1,7 +1,8 @@
 //! Tracing initialization. Logs go to a file (no ANSI) when `--log-file` is
-//! given, else to stderr (with ANSI). The level filter is read from
-//! `POVERTY_MODE_LOG` and defaults to `info`.
+//! given, else to stderr (with ANSI only when stderr is a terminal). The level
+//! filter is read from `POVERTY_MODE_LOG` and defaults to `info`.
 
+use std::io::IsTerminal;
 use std::path::Path;
 
 use tracing::Subscriber;
@@ -62,7 +63,7 @@ pub fn init_tracing(log_file: Option<&Path>) -> anyhow::Result<()> {
             set_global_default(subscriber)?;
         }
         None => {
-            let subscriber = build_subscriber(std::io::stderr, true);
+            let subscriber = build_subscriber(std::io::stderr, std::io::stderr().is_terminal());
             set_global_default(subscriber)?;
         }
     }
