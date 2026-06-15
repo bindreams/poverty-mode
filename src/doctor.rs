@@ -227,8 +227,7 @@ pub fn analyze_toolchain(os: &str, arch: &str) -> Vec<Finding> {
 /// file; a bare name is searched on `PATH` (plus the `.exe` form for Windows).
 /// Std-only and intentionally lenient — `doctor` only warns, it does not gate.
 fn executable_resolves(exe: &std::path::Path) -> bool {
-    let is_explicit_path =
-        exe.is_absolute() || exe.parent().is_some_and(|p| !p.as_os_str().is_empty());
+    let is_explicit_path = exe.is_absolute() || exe.parent().is_some_and(|p| !p.as_os_str().is_empty());
     if is_explicit_path {
         return exe.is_file();
     }
