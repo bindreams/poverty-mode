@@ -142,6 +142,31 @@ fn default_central_executable_is_jbcentral() {
 }
 
 #[test]
+fn central_executable_reads_trailing_central_entry() {
+    // The default config's central entry carries `jbcentral`.
+    assert_eq!(
+        Config::default_all_disabled().central_executable().as_deref(),
+        Some("jbcentral")
+    );
+}
+
+#[test]
+fn central_executable_is_none_when_blank_or_absent() {
+    // Blank/None executable on the central entry => None (Download mode).
+    let mut cfg = Config::default_all_disabled();
+    if let ProxySettings::Central(c) = &mut cfg.proxies[2].settings {
+        c.executable = None;
+    } else {
+        panic!("expected central entry last");
+    }
+    assert_eq!(cfg.central_executable(), None);
+
+    // No central entry at all => None.
+    cfg.proxies.retain(|e| e.name != ProxyName::Central);
+    assert_eq!(cfg.central_executable(), None);
+}
+
+#[test]
 fn pino_settings_invalid_cache_ttl_falls_back_to_five_min_not_an_error() {
     // R22/R23k: M1 defines `CacheTtl` with a CUSTOM lenient `Deserialize` that maps
     // any unrecognized value to `FiveMin` (Node parseTailTtl parity) — it must NOT
@@ -230,14 +255,15 @@ fn load_or_default_returns_default_without_writing_when_absent() {
 #[test]
 fn load_or_default_reads_existing_file() {
     let g = ConfigHomeGuard::new();
-    // User enabled pino by hand (tail_ttl 1h).
+    // User enabled pino by hand (main_ttl 1h).
     let edited = r#"version: 1
 proxies:
   - name: pino
     enabled: true
     settings:
       auto_cache: true
-      tail_ttl: 1h
+      main_ttl: 1h
+      sub_ttl: 5m
       drop_tools: []
       strip_ansi: true
       model_override: null
@@ -259,7 +285,7 @@ defaults:
     assert_eq!(cfg.proxies[0].name, ProxyName::Pino);
     assert_eq!(cfg.proxies[0].enabled, true);
     match &cfg.proxies[0].settings {
-        ProxySettings::Pino(p) => assert_eq!(p.tail_ttl, TailTtl::OneHour),
+        ProxySettings::Pino(p) => assert_eq!(p.main_ttl, CacheTtl::OneHour),
         other => panic!("expected pino, got {other:?}"),
     }
     // Reading an existing file must not rewrite it.
@@ -284,10 +310,7 @@ defaults:
 
     let err = Config::load_or_default().unwrap_err();
     let msg = err.to_string().to_lowercase();
-    assert!(
-        msg.contains("pino"),
-        "error should mention proxy name: {msg}"
-    );
+    assert!(msg.contains("pino"), "error should mention proxy name: {msg}");
     assert!(
         msg.contains("settings") || msg.contains("mismatch"),
         "error should mention settings mismatch: {msg}"

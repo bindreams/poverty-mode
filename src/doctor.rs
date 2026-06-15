@@ -219,14 +219,44 @@ pub fn analyze_toolchain(os: &str, arch: &str) -> Vec<Finding> {
             found_value: None,
         });
     }
-    if !central_asset_available(os, arch) {
-        findings.push(Finding {
-            domain: FindingDomain::Toolchain,
-            layer: None,
-            severity: Severity::Warn,
-            message: format!("no jbcentral asset for {os}/{arch}; the central proxy cannot be used on this platform"),
-            found_value: None,
-        });
+    findings
+}
+
+/// Central readiness, honoring the configured source. External: verify the
+/// executable resolves (on PATH or as a path). Download: verify a jbcentral asset
+/// exists for this target. All findings are `FindingDomain::Toolchain` with
+/// `layer: None`.
+pub fn analyze_central(source: crate::central::CentralSource, os: &str, arch: &str) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    match source {
+        crate::central::CentralSource::External(exe) => {
+            // `which` resolves both bare PATH names and explicit paths.
+            if which::which(&exe).is_err() {
+                findings.push(Finding {
+                    domain: FindingDomain::Toolchain,
+                    layer: None,
+                    severity: Severity::Warn,
+                    message: format!(
+                        "configured central executable {} not found on PATH or filesystem",
+                        exe.display()
+                    ),
+                    found_value: None,
+                });
+            }
+        }
+        crate::central::CentralSource::Download => {
+            if !central_asset_available(os, arch) {
+                findings.push(Finding {
+                    domain: FindingDomain::Toolchain,
+                    layer: None,
+                    severity: Severity::Warn,
+                    message: format!(
+                        "no jbcentral asset for {os}/{arch}; the central proxy cannot be used on this platform"
+                    ),
+                    found_value: None,
+                });
+            }
+        }
     }
     findings
 }
@@ -246,22 +276,64 @@ pub fn render_findings(findings: &[Finding]) -> String {
     out
 }
 
+/// Pure assembly of all doctor findings from already-gathered inputs: the parsed
+/// settings layers, the host `(os, arch)`, and the resolved central source. Kept
+/// separate from `run_doctor` (which reads disk/env and prints) so the merge is
+/// directly testable.
+///
+/// `central` is the resolved [`crate::central::CentralSource`] on success, or
+/// `Err(message)` when the on-disk config could not be read/parsed. As a read-only
+/// diagnostic, `doctor` never aborts on a broken config: an `Err` becomes a single
+/// `Warn` finding and the central readiness check is skipped (the rest of the
+/// report still surfaces).
+pub fn assemble_findings(
+    sources: &[SettingsSource],
+    os: &str,
+    arch: &str,
+    central: std::result::Result<crate::central::CentralSource, String>,
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    // `doctor` cannot know the ephemeral run port, so any non-empty
+    // ANTHROPIC_BASE_URL is a conflict candidate: compare against an impossible
+    // sentinel so every set value surfaces.
+    findings.extend(analyze_base_url(sources, "\u{0}none"));
+    findings.extend(analyze_toolchain(os, arch));
+    match central {
+        Ok(source) => findings.extend(analyze_central(source, os, arch)),
+        Err(message) => findings.push(Finding {
+            domain: FindingDomain::Toolchain,
+            layer: None,
+            severity: Severity::Warn,
+            message: format!(
+                "could not read config to check central readiness ({message}); \
+                 skipping the central source check"
+            ),
+            found_value: None,
+        }),
+    }
+    findings
+}
+
 /// Gather real inputs and print diagnostics. Side-effecting entry point.
 ///
-/// Returns `Ok(false)` when any `Severity::Error` finding exists, so the caller can
-/// set a non-zero process exit code.
+/// Reads the on-disk config READ-ONLY via `Config::load_or_default` (never
+/// `load_or_create` — `doctor` must not create a config file as a side effect) to
+/// resolve the central source, then merges settings, toolchain, and central
+/// findings. A config that cannot be read/parsed does NOT abort `doctor`: it
+/// degrades to a `Warn` finding (see [`assemble_findings`]). Returns `Ok(false)`
+/// when any `Severity::Error` finding exists, so the caller can set a non-zero
+/// process exit code.
 pub fn run_doctor() -> Result<bool> {
-    let mut findings = Vec::new();
+    let sources: Vec<SettingsSource> = settings_layer_paths()?
+        .into_iter()
+        .map(|(layer, path)| read_settings_layer(layer, &path))
+        .collect();
 
-    // File-backed settings layers. `doctor` cannot know the ephemeral run port, so
-    // any non-empty ANTHROPIC_BASE_URL is a conflict candidate: compare against an
-    // impossible sentinel so every set value surfaces.
-    for (layer, path) in settings_layer_paths()? {
-        let source = read_settings_layer(layer, &path);
-        findings.extend(analyze_base_url(&[source], "\u{0}none"));
-    }
+    let central = crate::config::Config::load_or_default()
+        .map(|cfg| crate::central::central_source(cfg.central_executable().as_deref()))
+        .map_err(|e| e.to_string());
 
-    findings.extend(analyze_toolchain(std::env::consts::OS, std::env::consts::ARCH));
+    let findings = assemble_findings(&sources, std::env::consts::OS, std::env::consts::ARCH, central);
 
     print!("{}", render_findings(&findings));
     Ok(!findings.iter().any(|f| f.severity == Severity::Error))

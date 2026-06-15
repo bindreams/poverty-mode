@@ -161,14 +161,31 @@ impl Config {
         }
     }
 
+    /// The configured central `executable`, from the trailing `central` entry.
+    /// `None` when central is absent or its `executable` is unset. Drives the
+    /// External-vs-Download decision (see [`crate::central::central_source`]); the
+    /// extraction shared by the read-only consumers `status` and `doctor` (the
+    /// orchestrator routes its own `ResolvedProxy.executable` through
+    /// `central_source` instead, never holding a `Config`). `validate` enforces
+    /// central-last, so the first central found is the tail central.
+    pub fn central_executable(&self) -> Option<String> {
+        self.proxies
+            .iter()
+            .find_map(|entry| match &entry.settings {
+                ProxySettings::Central(c) => Some(c.executable.clone()),
+                _ => None,
+            })
+            .flatten()
+    }
+
     /// Read, parse, and validate an existing config file. Shared by `load_or_create`
     /// and `load_or_default` so both treat a present (possibly malformed) file
     /// identically; neither writes here.
     fn read_existing(path: &std::path::Path) -> anyhow::Result<Config> {
-        let text = std::fs::read_to_string(path)
-            .map_err(|e| anyhow::anyhow!("reading config {}: {e}", path.display()))?;
-        let cfg: Config = serde_yaml::from_str(&text)
-            .map_err(|e| anyhow::anyhow!("parsing config {}: {e}", path.display()))?;
+        let text =
+            std::fs::read_to_string(path).map_err(|e| anyhow::anyhow!("reading config {}: {e}", path.display()))?;
+        let cfg: Config =
+            serde_yaml::from_str(&text).map_err(|e| anyhow::anyhow!("parsing config {}: {e}", path.display()))?;
         cfg.validate()?;
         Ok(cfg)
     }

@@ -391,12 +391,7 @@ pub(crate) fn newest_central_binary(cache_dir: &Path) -> Result<Option<PathBuf>>
 fn configured_central_executable() -> Result<Option<String>> {
     // Read-only: `status` is a diagnostic and must never create `poverty-mode.yaml`
     // as a side effect (load_or_create would write the default on first run).
-    let cfg = crate::config::Config::load_or_default()?;
-    let executable = cfg.proxies.iter().find_map(|entry| match &entry.settings {
-        crate::config::ProxySettings::Central(c) => Some(c.executable.clone()),
-        _ => None,
-    });
-    Ok(executable.flatten())
+    Ok(crate::config::Config::load_or_default()?.central_executable())
 }
 
 /// Best-effort human label for an external central binary: the first non-empty,

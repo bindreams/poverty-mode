@@ -2017,6 +2017,7 @@ dependencies = [
  "tracing-subscriber",
  "ulid",
  "url",
+ "which",
  "windows-sys 0.61.2",
  "zip",
 ]
@@ -3693,6 +3694,15 @@ dependencies = [
  "lazy_static",
  "serde",
  "wezterm-dynamic",
+]
+
+[[package]]
+name = "which"
+version = "8.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c789537cf2f7f55be8e6192f92e464174ee55f91af622777f7f1ceb0dbccd03e"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
