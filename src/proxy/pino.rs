@@ -213,7 +213,7 @@ impl BodyTransform for PinoTransform {
     }
 }
 
-// --- pipeline stages (filled in by later tasks) -----
+// --- pipeline stages (filled in by later tasks) ----------------------------------------------------------------------
 
 // Source model that Claude Code self-identifies as; rewritten to the override.
 // Ported verbatim from reference/pino/src/model.js SOURCE_ID_PATTERN (the JS /g
@@ -288,7 +288,7 @@ fn apply_model_override(body: &mut Value, model: &str) {
     }
 }
 
-// --- strip_ansi (default.js lines 42-70) -----
+// --- strip_ansi (default.js lines 42-70) -----------------------------------------------------------------------------
 
 // Matches a CSI/SGR sequence: ESC '[' <params> <final letter>. Port of the Node
 // ANSI_RE /\x1b\[[0-9;]*[A-Za-z]/g; only this exact form is scrubbed.
@@ -347,7 +347,7 @@ fn strip_ansi_from_messages(body: &mut Value) {
     }
 }
 
-// --- drop_tools (default.js lines 72-113) -----
+// --- drop_tools (default.js lines 72-113) ----------------------------------------------------------------------------
 
 // Matches a <system-reminder>...</system-reminder> block (non-greedy). Port of
 // the Node REMINDER_RE /<system-reminder>([\s\S]*?)<\/system-reminder>/g; JS
@@ -425,7 +425,7 @@ fn scrub_reminders_from_messages(body: &mut Value, drop: &[String]) {
     }
 }
 
-// --- restructureV123 (default.js lines 126-208) -----
+// --- restructureV123 (default.js lines 126-208) ----------------------------------------------------------------------
 
 // Ported verbatim from reference/pino/src/transforms/default.js restructureV123
 // (lines 126-208). Normalizes string content to arrays, extracts core-context
@@ -544,7 +544,7 @@ fn apply_default_transform(body: &mut Value, settings: &PinoSettings) {
     }
 }
 
-// --- cache helpers (cache.js lines 28-96) -----
+// --- cache helpers (cache.js lines 28-96) ----------------------------------------------------------------------------
 
 /// Counts every `cache_control.type == "ephemeral"` breakpoint anywhere in the
 /// body. Mirrors countCacheBreakpoints in reference/pino/src/cache.js (lines 28-38).
@@ -785,7 +785,7 @@ pub fn inject_breakpoint_if_absent(body: &mut Value, ttl: CacheTtl) -> Vec<Strin
     tail_paths
 }
 
-// --- tail normalization + ttl rewrite with skip-set (cache.js 3-26, 44-59) -----
+// --- tail normalization + ttl rewrite with skip-set (cache.js 3-26, 44-59) -------------------------------------------
 
 use std::collections::HashSet;
 

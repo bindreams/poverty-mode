@@ -474,7 +474,7 @@ fn proxy_transform_kind_matches_chosen_proxy() {
     }
 }
 
-// FIX-D: `central` / `config` subcommand dispatch =====
+// FIX-D: `central` / `config` subcommand dispatch =====================================================================
 //
 // These exercise the safe, hermetic arms of the new dispatch handlers. The env
 // guards (`crate::test_support`) serialize and isolate the config/cache roots so

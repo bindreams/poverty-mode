@@ -197,7 +197,7 @@ fn anthropic_tail_has_no_auth_token_override() {
     assert_eq!(env_of(&cmd, "ANTHROPIC_AUTH_TOKEN"), None);
 }
 
-// M7.4 (the real new work: belt 2's `--settings {"env":{...}}` contents) =====
+// M7.4 (the real new work: belt 2's `--settings {"env":{...}}` contents) ==============================================
 //
 // The `--settings` JSON env block must carry exactly belt 1's pairs:
 // ANTHROPIC_BASE_URL plus every extra_env entry — so the two belts cannot
@@ -305,7 +305,7 @@ fn settings_value_escapes_special_characters() {
 }
 
 // M7.5 (ENABLE_TOOL_SEARCH cross-check, pinned flag/key constants, Managed +
-// remote-exec notes) =====
+// remote-exec notes) ==================================================================================================
 //
 // These lock the four M7.5 contract gaps: the `--settings` flag and env-key
 // names are pinned so a silent rename can't break precedence; the cross-check

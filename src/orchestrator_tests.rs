@@ -218,7 +218,7 @@ fn agent_env_for_empty_chain_has_empty_chain_value() {
     assert_eq!(get(&env, "ANTHROPIC_AUTH_TOKEN"), None);
 }
 
-// proxy_child_args =====
+// proxy_child_args ====================================================================================================
 //
 // NOTE (deviation from the M6.4 plan text, see milestone report): the plan's
 // literal argv used `--log-file`, `--strip-ansi false`, and `--compression true`.
@@ -472,7 +472,7 @@ fn proxy_child_args_round_trips_through_clap() {
     }
 }
 
-// read_ready_line =====
+// read_ready_line =====================================================================================================
 
 use tokio::io::BufReader;
 
@@ -558,7 +558,7 @@ async fn read_ready_line_errors_when_ready_false() {
     assert!(err.to_string().to_lowercase().contains("ready"), "{err}");
 }
 
-// nested_reuse_decision =====
+// nested_reuse_decision ===============================================================================================
 
 use url::Url;
 
@@ -660,7 +660,7 @@ fn hop_log_file_embeds_literal_port_token_per_proxy() {
     );
 }
 
-// ensure_central_started (FIX-A: central-tail orchestration wiring) =====
+// ensure_central_started (FIX-A: central-tail orchestration wiring) ===================================================
 //
 // The production `ensure_central_started` must drive the REAL `central::*`
 // install/login/start/health pipeline (R4/R5/M8) — not the removed M6
@@ -865,7 +865,7 @@ fn ensure_central_started_real_path_is_no_longer_the_m8_placeholder() {
     );
 }
 
-// agent_base_for (C1 wire-client composition) =====
+// agent_base_for (C1 wire-client composition) =========================================================================
 
 #[test]
 fn agent_base_for_non_central_returns_head_unchanged() {

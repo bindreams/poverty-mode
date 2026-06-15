@@ -251,7 +251,7 @@ async fn trailing_central_strips_hop_and_carries_secret_path_to_tail() {
     assert_eq!(stub.count(), 1, "exactly one hop (pino) forwarded to the stub");
 }
 
-// Post-READY stdout contract (R12 characterization guard) =====
+// Post-READY stdout contract (R12 characterization guard) =============================================================
 //
 // The orchestrator's manager reads each hop's stdout only long enough to consume
 // the single READY line; after that it relies on the engine writing nothing more

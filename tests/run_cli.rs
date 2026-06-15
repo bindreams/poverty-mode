@@ -310,7 +310,7 @@ async fn run_codex_reuses_live_chain_end_to_end() {
     );
 }
 
-// `run` setting overrides persisted by `--save` =====
+// `run` setting overrides persisted by `--save` =======================================================================
 
 use poverty_mode::config::{Config, ProxySettings};
 use poverty_mode::proxy::pino::CacheTtl;

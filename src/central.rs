@@ -204,7 +204,7 @@ pub fn resolve_version(cfg_pinned: Option<&str>) -> String {
     resolve_version_from(cfg_pinned, crate::download::JBCENTRAL_S3_BASE)
 }
 
-// install layout =====
+// install layout ======================================================================================================
 
 /// The on-disk name of the jbcentral binary for the host OS.
 pub fn jbcentral_binary_name() -> &'static str {
@@ -301,7 +301,7 @@ pub fn ensure_installed(version: &str) -> anyhow::Result<PathBuf> {
     Ok(bin)
 }
 
-// login state =====
+// login state =========================================================================================================
 
 /// Result of inspecting `jbcentral status` (R20: login truth from status parsing, not "secret present").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -409,7 +409,7 @@ pub fn ensure_logged_in(bin: &Path) -> anyhow::Result<()> {
     }
 }
 
-// start / health / stop =====
+// start / health / stop ===============================================================================================
 
 /// The `jbcentral config set ...` argv lines we apply before starting: analytics off + the RESOLVED
 /// pinned version (threaded in by the orchestrator, R4 — never re-derived from a const here), so the
@@ -579,7 +579,7 @@ pub fn stop(bin: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-// `central` subcommand support =====
+// `central` subcommand support ========================================================================================
 
 /// A focused snapshot for `central <status>`: install presence, daemon run state,
 /// and login truth. Kept independent of `crate::status`'s full report so the

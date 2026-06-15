@@ -332,7 +332,7 @@ impl Config {
     }
 }
 
-// `config` subcommand support =====
+// `config` subcommand support =========================================================================================
 
 /// Render a [`Config`] as the YAML text shown by `config show`. This is the same
 /// serialization `save` writes to disk, so `show` reflects exactly what a later

@@ -90,7 +90,7 @@ fn accepts_string_port_coerced_to_u16() {
     assert_eq!(info.port, 8123);
 }
 
-// wire URL =====
+// wire URL ============================================================================================================
 
 use crate::proxy::Upstream;
 
@@ -152,7 +152,7 @@ fn wire_url_helper_and_upstream_agree_on_encoded_secret() {
     assert_eq!(up.url.as_str(), central_wire_envelope_url(&info));
 }
 
-// version resolution (pure) =====
+// version resolution (pure) ===========================================================================================
 
 #[test]
 fn pinned_version_uses_config_when_set() {
@@ -189,7 +189,7 @@ fn latest_version_url_targets_latest_version_txt() {
     );
 }
 
-// install layout =====
+// install layout ======================================================================================================
 
 #[test]
 fn binary_name_is_platform_specific() {
@@ -263,7 +263,7 @@ fn installed_binary_path_in_none_when_dir_missing() {
     assert!(installed_binary_path_in(tmp.path(), "0.2.9").is_none());
 }
 
-// login state classification =====
+// login state classification ==========================================================================================
 
 #[test]
 fn login_state_logged_in_on_success_exit() {
@@ -355,7 +355,7 @@ fn run_status_classified_errors_when_binary_is_missing() {
     );
 }
 
-// start/health argv + env =====
+// start/health argv + env =============================================================================================
 
 #[test]
 fn configure_argv_sets_analytics_off_and_threaded_pinned_version() {
@@ -451,7 +451,7 @@ fn start_reuse_keeps_live_daemon_port() {
     assert_eq!(reuse_decision(None, true), None);
 }
 
-// `central status` rendering (FIX-D) =====
+// `central status` rendering (FIX-D) ==================================================================================
 
 #[test]
 fn render_central_command_status_installed_running_logged_in() {

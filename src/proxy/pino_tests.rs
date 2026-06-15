@@ -72,7 +72,7 @@ fn sample_settings() -> PinoSettings {
 }
 
 // --- characterization guards: lock the serde wire shape (R12: added after the
-// --- types already exist; NOT a red->green cycle) -----
+// --- types already exist; NOT a red->green cycle) --------------------------------------------------------------------
 
 #[test]
 fn cache_ttl_serializes_as_human_strings() {
@@ -114,7 +114,7 @@ fn pino_settings_yaml_shape_matches_config_file() {
 // --- back to 5m on any unknown value (reference/pino/src/config.js lines 36-44).
 // --- The M1 Deserialize is lenient but does an EXACT match, so "  1H " degrades
 // --- to FiveMin instead of mapping to OneHour; this asserts the case-insensitive
-// --- + trim parity this task adds. -----
+// --- + trim parity this task adds. -----------------------------------------------------------------------------------
 
 #[test]
 fn cache_ttl_invalid_value_falls_back_to_five_min_json() {
@@ -1633,7 +1633,7 @@ fn full_pipeline_parity_realistic_body() {
     assert_eq!(headers.get("anthropic-beta").unwrap().to_str().unwrap(), BETA_FLAG);
 }
 
-// FIX-B: pino byte-fidelity seam =====================================
+// FIX-B: pino byte-fidelity seam ======================================================================================
 //
 // pino re-serialization is acceptable (prompt-cache relies on cross-turn
 // CONSISTENCY, which a stable serialize preserves), but a TRUE passthrough

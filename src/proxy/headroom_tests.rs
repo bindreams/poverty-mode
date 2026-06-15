@@ -99,7 +99,7 @@ fn enabled_but_nothing_shrinks_is_byte_equal() {
     assert_eq!(before, after, "NoChange outcome must leave the body byte-identical");
 }
 
-// Characterization / regression tests (R12) ==========================
+// Characterization / regression tests (R12) ===========================================================================
 //
 // These lock the full claimed compressor surface (spec 5.6): JSON tool
 // output (SmartCrusher), build/test logs (LogCompressor), grep/search
@@ -372,7 +372,7 @@ fn hot_zones_history_and_numeric_precision_preserved() {
     );
 }
 
-// FIX-B: real byte-fidelity tests for the bytes-oriented seam =========
+// FIX-B: real byte-fidelity tests for the bytes-oriented seam =========================================================
 //
 // These are NOT round-trips through `serde_json::to_vec`: they feed a
 // hand-authored COMPACT JSON body whose bytes DIFFER from serde_json's

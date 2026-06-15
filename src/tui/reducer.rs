@@ -390,7 +390,7 @@ impl TuiState {
         self.rows.push(row);
     }
 
-    // Render accessors --------------------------------------------------------
+    // Render accessors ------------------------------------------------------------------------------------------------
 
     /// The proxy rows in display order (read by the render layer).
     pub fn rows(&self) -> &[ProxyRow] {
@@ -412,7 +412,7 @@ impl TuiState {
         self.editing.as_ref()
     }
 
-    // Test-only accessors -----------------------------------------------------
+    // Test-only accessors ---------------------------------------------------------------------------------------------
 
     /// Set the focus directly (test-only seam for asserting per-target behavior).
     #[cfg(test)]

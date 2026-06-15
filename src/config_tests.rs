@@ -665,7 +665,7 @@ fn characterization_default_yaml_has_spec_5_2_shape() {
     assert_eq!(back, Config::default_all_disabled());
 }
 
-// `config show` rendering (FIX-D) =====
+// `config show` rendering (FIX-D) =====================================================================================
 
 #[test]
 fn render_config_matches_save_serialization_and_round_trips() {
@@ -678,7 +678,7 @@ fn render_config_matches_save_serialization_and_round_trips() {
     assert_eq!(back, cfg);
 }
 
-// `config edit` editor resolution (FIX-D) =====
+// `config edit` editor resolution (FIX-D) =============================================================================
 
 #[test]
 fn resolve_editor_prefers_visual_then_editor_then_fallback() {
@@ -704,7 +704,7 @@ fn resolve_editor_treats_blank_env_as_unset_and_falls_back() {
     assert_eq!(fallback, vec![expected.to_string()]);
 }
 
-// `with_overrides` + `save_full_state` (Task A3) =====
+// `with_overrides` + `save_full_state` (Task A3) ======================================================================
 
 #[test]
 fn with_overrides_applies_to_matching_entries_only() {
@@ -838,7 +838,7 @@ fn save_full_state_round_trips() {
     assert_eq!(Config::load_or_create().unwrap().proxies, entries);
 }
 
-// `entries_for_chain` (Task A4) =====
+// `entries_for_chain` (Task A4) =======================================================================================
 
 #[test]
 fn entries_for_chain_orders_enabled_then_disabled_central_last() {

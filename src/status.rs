@@ -222,7 +222,7 @@ pub fn build_status_report(cache_dir: &Path, runs_root: &Path, probe: &CentralPr
     })
 }
 
-// rendering + live probe + dispatch (M10.3) =====
+// rendering + live probe + dispatch (M10.3) ===========================================================================
 
 use std::fmt::Write as _;
 

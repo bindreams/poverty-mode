@@ -69,7 +69,7 @@ fn unknown_arch_is_an_error() {
     assert!(err.to_string().contains("riscv64"), "{err}");
 }
 
-// extract_archive =====
+// extract_archive =====================================================================================================
 
 use std::fs;
 use std::io::Write as _;
@@ -144,7 +144,7 @@ fn extract_archive_unknown_suffix_errors() {
     assert!(err.to_string().contains("thing.rar"), "{err}");
 }
 
-// pin lookup + verify + replace =====
+// pin lookup + verify + replace =======================================================================================
 
 use sha2::{Digest, Sha256};
 
@@ -251,7 +251,7 @@ fn verify_and_extract_replaces_existing_dest_without_stale_leftovers() {
     assert_eq!(got, b"payload-E");
 }
 
-// pin coverage (R14) =====
+// pin coverage (R14) ==================================================================================================
 
 #[test]
 fn pin_table_covers_all_supported_targets_for_default_version() {

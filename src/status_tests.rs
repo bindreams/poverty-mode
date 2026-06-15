@@ -251,7 +251,7 @@ fn report_includes_live_runs() {
     assert_eq!(report.runs[0].run_id, NEWER);
 }
 
-// --- render_status (pure) -----
+// --- render_status (pure) --------------------------------------------------------------------------------------------
 
 #[test]
 fn render_status_lists_components_central_and_runs() {
@@ -301,7 +301,7 @@ fn render_status_handles_not_installed_and_no_runs() {
     assert!(out.contains("no live runs"), "got: {out}");
 }
 
-// --- shared secret-free wire-config port parser (pure) -----
+// --- shared secret-free wire-config port parser (pure) ---------------------------------------------------------------
 
 #[test]
 fn parse_wire_config_port_reads_numeric_port() {
@@ -345,7 +345,7 @@ fn status_commands_agree_on_liveness_for_secretless_wire_config() {
     assert!(crate::central::parse_wire_config(empty_secret).is_err());
 }
 
-// --- probe assembly permutations (pure) -----
+// --- probe assembly permutations (pure) ------------------------------------------------------------------------------
 
 #[test]
 fn assemble_probe_no_install_yields_dead_probe() {
@@ -377,7 +377,7 @@ fn assemble_probe_installed_with_wire_config_carries_port_and_login() {
     assert_eq!(probe.login, CentralLogin::LoggedIn);
 }
 
-// --- R5-safe async entry: blocking probe must not panic on the runtime thread -----
+// --- R5-safe async entry: blocking probe must not panic on the runtime thread ----------------------------------------
 
 #[tokio::test]
 async fn run_status_async_entry_does_not_panic_on_blocking_probe() {
