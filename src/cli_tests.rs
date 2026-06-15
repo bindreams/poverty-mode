@@ -87,6 +87,36 @@ fn run_parses_prefixed_setting_flags_into_overrides() {
 }
 
 #[test]
+fn central_executable_flag_projects_into_override() {
+    let args = RunSettingsArgs {
+        central_executable: Some("/opt/jb".into()),
+        ..Default::default()
+    };
+    let ov = args.to_overrides();
+    assert_eq!(ov.central.executable.as_deref(), Some("/opt/jb"));
+}
+
+#[test]
+fn run_parses_central_executable_flag_into_override() {
+    let cli = Cli::try_parse_from([
+        "poverty-mode",
+        "run",
+        "--central-executable",
+        "/opt/jb",
+        "--",
+        "claude",
+    ])
+    .unwrap();
+    let Command::Run { settings, .. } = cli.command else {
+        panic!("expected Run")
+    };
+    assert_eq!(
+        settings.to_overrides().central.executable.as_deref(),
+        Some("/opt/jb")
+    );
+}
+
+#[test]
 fn run_without_setting_flags_yields_empty_overrides() {
     let cli = Cli::try_parse_from(["poverty-mode", "run", "--", "claude"]).unwrap();
     let Command::Run { settings, .. } = cli.command else {
