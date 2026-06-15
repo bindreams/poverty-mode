@@ -1,10 +1,10 @@
 use super::*;
 use crate::proxy::BodyTransform;
+use serde_json::json;
 
 fn main_ctx() -> crate::proxy::RequestContext {
     crate::proxy::RequestContext::default()
 }
-use serde_json::json;
 
 #[test]
 fn headroom_settings_default_round_trips_yaml() {
