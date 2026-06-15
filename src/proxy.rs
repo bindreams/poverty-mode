@@ -28,12 +28,18 @@ use tokio::net::TcpListener;
 pub mod headroom;
 pub mod pino;
 
-/// True for `/v1/messages`, `/v1/messages/count_tokens`, and either of those
-/// followed by a `?query`. Mirrors the upstream pino `isMessagesPath`
-/// (reference/pino/src/server.js:27-34).
+/// True for `/v1/messages` and `/v1/messages/count_tokens`, with an optional
+/// `?query` and an optional opaque leading wire-client prefix (C1: the agent
+/// carries `claude-code/anthropic` in its base URL, so the inbound path arrives as
+/// `/claude-code/anthropic/v1/messages`). A bare `ends_with` suffix match suffices
+/// and is agent-agnostic — codex's `/responses` never ends with a messages suffix.
+///
+/// This DELIBERATELY diverges from upstream pino's exact `isMessagesPath`
+/// (reference/pino/src/server.js): poverty-mode's chain is agent-agnostic, so the
+/// messages suffix may sit behind a client/api prefix the proxy must not interpret.
 pub fn is_messages_path(path: &str) -> bool {
     let base = path.split('?').next().unwrap_or("");
-    base == "/v1/messages" || base == "/v1/messages/count_tokens"
+    base.ends_with("/v1/messages") || base.ends_with("/v1/messages/count_tokens")
 }
 
 /// True when the `content-type` header contains `application/json`
