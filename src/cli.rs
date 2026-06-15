@@ -632,10 +632,12 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
         }
         Command::SigWait { marker } => {
             use std::io::Write as _;
-            {
-                let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&marker)?;
-                writeln!(f, "STARTED")?;
-            }
+            // Install the SIGTERM handler BEFORE announcing readiness. The test driver
+            // raises SIGTERM the instant it observes "STARTED", so writing STARTED first
+            // races the sigaction below: a forwarded SIGTERM landing in that window kills
+            // the process by SIGTERM's default action (no handler yet) and the "SIGTERM"
+            // line is never written — a flake observed on macOS CI. Install-then-announce
+            // makes STARTED-visible a happens-before for the installed handler.
             #[cfg(unix)]
             {
                 // Install a SIGTERM handler (sync; std-only via signal-hook is not
@@ -659,6 +661,10 @@ pub fn dispatch(cli: Cli) -> anyhow::Result<()> {
                     libc::sigemptyset(&mut sa.sa_mask);
                     libc::sigaction(libc::SIGTERM, &sa, std::ptr::null_mut());
                 }
+            }
+            {
+                let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&marker)?;
+                writeln!(f, "STARTED")?;
             }
             // Park forever. On unix the SIGTERM handler installed above exits the
             // process via libc::_exit(42); on Windows no handler is installed, so
