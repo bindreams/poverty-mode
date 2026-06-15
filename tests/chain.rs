@@ -149,7 +149,7 @@ async fn central_only_chain_execs_agent_at_wire_url_with_auth_token() {
     // chain = [central]; no first-party hops. tail_upstream is the wire URL.
     let agent = RecordingAgent::default();
     let tail = Upstream {
-        url: Url::parse("http://127.0.0.1:19000/wire/SECRET/claude-code/anthropic").unwrap(),
+        url: Url::parse("http://127.0.0.1:19000/wire/SECRET").unwrap(),
     };
     let chain = vec![central_rp()];
 
@@ -196,7 +196,9 @@ impl Agent for PostingAgent {
         // Self-exec the test binary's helper is not available; use the hidden
         // `poverty-mode __post <url>` helper added in M6.10 so the "agent" is a
         // real child process making one POST and exiting with the HTTP success.
-        let target = format!("{}v1/messages", base_url.as_str());
+        // C1: the base may now carry a path (`…/claude-code/anthropic`) with no
+        // trailing slash, so join with an explicit separator.
+        let target = format!("{}/v1/messages", base_url.as_str().trim_end_matches('/'));
         let exe = env!("CARGO_BIN_EXE_poverty-mode");
         let mut c = tokio::process::Command::new(exe);
         c.args(["__post", &target]);
@@ -240,7 +242,7 @@ async fn trailing_central_strips_hop_and_carries_secret_path_to_tail() {
     let stub = start_stub(r#"{"ok":true}"#);
     let tail = Upstream {
         url: Url::parse(&format!(
-            "http://127.0.0.1:{}/wire/SECRET/claude-code/anthropic",
+            "http://127.0.0.1:{}/wire/SECRET",
             stub.port
         ))
         .unwrap(),

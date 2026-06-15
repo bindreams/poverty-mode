@@ -100,7 +100,7 @@ fn tail_is_central_wire_url_when_central_is_tail() {
     // central wins over a pre-existing base url.
     assert_eq!(
         up.url.as_str(),
-        "http://127.0.0.1:19516/wire/abc123/claude-code/anthropic"
+        "http://127.0.0.1:19516/wire/abc123"
     );
 }
 

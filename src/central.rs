@@ -66,25 +66,24 @@ pub struct CentralInfo {
     pub secret: String,
 }
 
-/// The wire URL string that fronts JB Central:
-/// `http://127.0.0.1:<port>/wire/<percent-encoded-secret>/claude-code/anthropic` (design §6).
-/// This is the upstream the hop before central uses (or the agent base for a central-only chain).
-/// The externally-sourced secret is percent-encoded as one path segment so URL-significant
-/// characters cannot escape the path into a query, fragment, or extra segment. Never logged.
-pub fn central_wire_url(info: &CentralInfo) -> String {
+/// The wire ENVELOPE URL that fronts JB Central (C1):
+/// `http://127.0.0.1:<port>/wire/<percent-encoded-secret>` (design §6). The
+/// agent-specific client/api segment (`claude-code/anthropic`, `codex/openai`) is
+/// appended by the agent's base URL, NOT here, so a single chain serves every
+/// agent. This is the upstream the hop before central uses (or the agent base
+/// prefix for a central-only chain). The externally-sourced secret is
+/// percent-encoded as one path segment. Never logged.
+pub fn central_wire_envelope_url(info: &CentralInfo) -> String {
     let secret = utf8_percent_encode(&info.secret, WIRE_SECRET_SET);
-    format!(
-        "http://127.0.0.1:{}/wire/{secret}/claude-code/anthropic",
-        info.port
-    )
+    format!("http://127.0.0.1:{}/wire/{secret}", info.port)
 }
 
-/// The wire upstream the chain forwards to when central is the tail, as a parsed [`Upstream`]
+/// The wire envelope URL the chain forwards to when central is the tail, as a parsed [`Upstream`]
 /// for direct use as a proxy upstream. The pre-central hop carries this as its `--upstream`; in a
 /// central-only chain the agent's `ANTHROPIC_BASE_URL` points here directly. Returns an error
 /// (never panics) if, against expectation, the encoded URL fails to parse.
 pub fn central_wire_upstream(info: &CentralInfo) -> anyhow::Result<Upstream> {
-    let s = central_wire_url(info);
+    let s = central_wire_envelope_url(info);
     let url =
         url::Url::parse(&s).with_context(|| "constructing the JB Central wire upstream URL")?;
     Ok(Upstream { url })

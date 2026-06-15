@@ -208,7 +208,8 @@ pub async fn build_and_run_with_fault(
         // upstream (for central-only, that is the wire URL). agent_env still
         // reflects central_tail for the auth override.
         let env = compute_agent_env(&chain, central_tail, enable_tool_search, &tail_upstream.url);
-        let cmd = agent.build_command(argv, &tail_upstream.url, &env);
+        let agent_base = agent_base_for(&tail_upstream.url, agent, central_tail)?;
+        let cmd = agent.build_command(argv, &agent_base, &env);
         let status = run_agent_forwarding_signals(cmd, agent.name()).await?;
         return Ok(status);
     }
@@ -327,7 +328,8 @@ async fn build_via_manager(
     let head_base_url = head.base_url.clone();
 
     let agent_env = compute_agent_env(chain, central_tail, enable_tool_search, &head_base_url);
-    let agent_cmd = agent.build_command(argv, &head_base_url, &agent_env);
+    let agent_base = agent_base_for(&head_base_url, agent, central_tail)?;
+    let agent_cmd = agent.build_command(argv, &agent_base, &agent_env);
     let status_result = run_agent_forwarding_signals(agent_cmd, agent.name()).await;
 
     // Drain on agent exit (R17): tear down the proxy hops, await reaping.
