@@ -151,6 +151,23 @@ pub fn pinned_version(cfg_pinned: Option<&str>) -> String {
     }
 }
 
+/// Which binary backs central: an external executable (use-as-is) or the managed
+/// download. The single decision point for External-vs-Download — `executable`
+/// trimmed-non-empty ⇒ External, else Download.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CentralSource {
+    External(PathBuf),
+    Download,
+}
+
+/// Resolve the central source from the configured `executable`.
+pub fn central_source(executable: Option<&str>) -> CentralSource {
+    match executable.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(exe) => CentralSource::External(PathBuf::from(exe)),
+        None => CentralSource::Download,
+    }
+}
+
 /// Parse a `version.txt` body: the first non-blank, trimmed line, which must look like a dotted
 /// version (digits and dots, at least one dot). Anything else is an error so the caller falls back.
 pub fn parse_version_txt(body: &str) -> anyhow::Result<String> {

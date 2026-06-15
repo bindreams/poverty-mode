@@ -189,6 +189,26 @@ fn latest_version_url_targets_latest_version_txt() {
     );
 }
 
+// central source (external vs download) ===============================================================================
+
+#[test]
+fn central_source_external_vs_download() {
+    assert!(matches!(central_source(None), CentralSource::Download));
+    assert!(matches!(central_source(Some("")), CentralSource::Download));
+    assert!(matches!(
+        central_source(Some("   ")),
+        CentralSource::Download
+    ));
+    match central_source(Some("jbcentral")) {
+        CentralSource::External(p) => assert_eq!(p, std::path::PathBuf::from("jbcentral")),
+        _ => panic!("expected External"),
+    }
+    match central_source(Some("/opt/jb/jbcentral")) {
+        CentralSource::External(p) => assert_eq!(p, std::path::PathBuf::from("/opt/jb/jbcentral")),
+        _ => panic!("expected External"),
+    }
+}
+
 // install layout ======================================================================================================
 
 #[test]
