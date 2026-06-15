@@ -145,10 +145,30 @@ impl Config {
             crate::paths::atomic_write(&path, yaml.as_bytes())?;
             return Ok(cfg);
         }
-        let text =
-            std::fs::read_to_string(&path).map_err(|e| anyhow::anyhow!("reading config {}: {e}", path.display()))?;
-        let cfg: Config =
-            serde_yaml::from_str(&text).map_err(|e| anyhow::anyhow!("parsing config {}: {e}", path.display()))?;
+        Self::read_existing(&path)
+    }
+
+    /// Load the config if the file exists; otherwise return `default_all_disabled()`
+    /// IN MEMORY without writing anything to disk. For read-only consumers (`status`,
+    /// `doctor`) that must not create a config file as a side effect. (Contrast
+    /// `load_or_create`, which writes the default on first run.)
+    pub fn load_or_default() -> anyhow::Result<Config> {
+        let path = crate::paths::config_path()?;
+        if path.exists() {
+            Self::read_existing(&path)
+        } else {
+            Ok(Config::default_all_disabled())
+        }
+    }
+
+    /// Read, parse, and validate an existing config file. Shared by `load_or_create`
+    /// and `load_or_default` so both treat a present (possibly malformed) file
+    /// identically; neither writes here.
+    fn read_existing(path: &std::path::Path) -> anyhow::Result<Config> {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| anyhow::anyhow!("reading config {}: {e}", path.display()))?;
+        let cfg: Config = serde_yaml::from_str(&text)
+            .map_err(|e| anyhow::anyhow!("parsing config {}: {e}", path.display()))?;
         cfg.validate()?;
         Ok(cfg)
     }

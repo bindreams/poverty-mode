@@ -101,8 +101,45 @@ fn enumerate_runs_skips_non_ulid_directories() {
     assert_eq!(runs[0].run_id, NEWER);
 }
 
-fn probe(running: bool, login: CentralLogin, port: Option<u16>) -> CentralProbe {
-    CentralProbe { running, login, port }
+fn probe_with_install(running: bool, login: CentralLogin, port: Option<u16>, install: CentralInstall) -> CentralProbe {
+    CentralProbe {
+        running,
+        login,
+        port,
+        install,
+    }
+}
+
+/// A probe whose install is derived from `cache_dir`, matching today's
+/// download-cache behavior so the cache-driven install tests keep exercising
+/// `central_versions`. `build_status_report` no longer reads the cache itself.
+fn probe(cache_dir: &Path, running: bool, login: CentralLogin, port: Option<u16>) -> CentralProbe {
+    let versions = central_versions(cache_dir).unwrap();
+    let install = if versions.is_empty() {
+        CentralInstall::NotInstalled
+    } else {
+        CentralInstall::Installed { versions }
+    };
+    probe_with_install(running, login, port, install)
+}
+
+#[test]
+fn external_mode_reports_external_install() {
+    // With an external binary configured, the probe carries an `External` install
+    // (display string is supplied by the probe, not recomputed by the builder).
+    let display = "jbcentral (test)".to_string();
+    let probe = probe_with_install(
+        false,
+        CentralLogin::LoggedIn,
+        None,
+        CentralInstall::External {
+            display: display.clone(),
+        },
+    );
+    let report = build_status_report(Path::new("/nonexistent-runs"), &probe).unwrap();
+    assert_eq!(report.central.install, CentralInstall::External { display });
+    // An external install is a real install: the probe's login passes through.
+    assert_eq!(report.central.login, CentralLogin::LoggedIn);
 }
 
 #[test]
@@ -111,9 +148,8 @@ fn central_install_state_reflects_cache_presence() {
     let cache = tmp.path().join("cache");
     // No bin/jbcentral dir yet -> NotInstalled.
     let report = build_status_report(
-        &cache,
         &tmp.path().join("runs"),
-        &probe(false, CentralLogin::Unknown, None),
+        &probe(&cache, false, CentralLogin::Unknown, None),
     )
     .unwrap();
     assert_eq!(report.central.install, CentralInstall::NotInstalled);
@@ -126,9 +162,8 @@ fn central_install_state_reflects_cache_presence() {
     touch(&v.join("jbcentral"), "#!/bin/sh\n");
 
     let report = build_status_report(
-        &cache,
         &tmp.path().join("runs"),
-        &probe(false, CentralLogin::Unknown, None),
+        &probe(&cache, false, CentralLogin::Unknown, None),
     )
     .unwrap();
     assert_eq!(
@@ -153,9 +188,8 @@ fn central_versions_are_sorted_semantically_not_lexically() {
     }
 
     let report = build_status_report(
-        &cache,
         &tmp.path().join("runs"),
-        &probe(false, CentralLogin::Unknown, None),
+        &probe(&cache, false, CentralLogin::Unknown, None),
     )
     .unwrap();
     assert_eq!(
@@ -181,9 +215,8 @@ fn central_run_and_login_state_come_from_probe() {
     touch(&v.join("jbcentral"), "bin");
 
     let report = build_status_report(
-        &cache,
         &tmp.path().join("runs"),
-        &probe(true, CentralLogin::LoggedIn, Some(53117)),
+        &probe(&cache, true, CentralLogin::LoggedIn, Some(53117)),
     )
     .unwrap();
     assert_eq!(report.central.run, CentralRun::Running { port: 53117 });
@@ -202,9 +235,8 @@ fn central_login_logged_out_is_preserved_when_installed() {
     touch(&v.join("jbcentral"), "bin");
 
     let report = build_status_report(
-        &cache,
         &tmp.path().join("runs"),
-        &probe(true, CentralLogin::LoggedOut, Some(53117)),
+        &probe(&cache, true, CentralLogin::LoggedOut, Some(53117)),
     )
     .unwrap();
     assert_eq!(report.central.login, CentralLogin::LoggedOut);
@@ -216,9 +248,8 @@ fn central_login_is_unknown_when_not_installed_regardless_of_probe() {
     let tmp = tempfile::tempdir().unwrap();
     let cache = tmp.path().join("cache");
     let report = build_status_report(
-        &cache,
         &tmp.path().join("runs"),
-        &probe(false, CentralLogin::LoggedIn, None),
+        &probe(&cache, false, CentralLogin::LoggedIn, None),
     )
     .unwrap();
     assert_eq!(report.central.install, CentralInstall::NotInstalled);
@@ -230,9 +261,8 @@ fn first_party_components_always_compiled_in() {
     let tmp = tempfile::tempdir().unwrap();
     let cache = tmp.path().join("cache");
     let report = build_status_report(
-        &cache,
         &tmp.path().join("runs"),
-        &probe(false, CentralLogin::Unknown, None),
+        &probe(&cache, false, CentralLogin::Unknown, None),
     )
     .unwrap();
     // pino + headroom are compiled into the binary -> always "Builtin".
@@ -246,7 +276,7 @@ fn report_includes_live_runs() {
     let runs_root = tmp.path().join("runs");
     touch(&runs_root.join(NEWER).join("pino-40001.log"), "x");
 
-    let report = build_status_report(&cache, &runs_root, &probe(false, CentralLogin::Unknown, None)).unwrap();
+    let report = build_status_report(&runs_root, &probe(&cache, false, CentralLogin::Unknown, None)).unwrap();
     assert_eq!(report.runs.len(), 1);
     assert_eq!(report.runs[0].run_id, NEWER);
 }
@@ -301,6 +331,23 @@ fn render_status_handles_not_installed_and_no_runs() {
     assert!(out.contains("no live runs"), "got: {out}");
 }
 
+#[test]
+fn render_status_shows_external_install() {
+    let report = StatusReport {
+        first_party: vec!["pino".to_string(), "headroom".to_string()],
+        central: CentralStatus {
+            install: CentralInstall::External {
+                display: "jbcentral 0.2.10".to_string(),
+            },
+            run: CentralRun::Stopped,
+            login: CentralLogin::LoggedIn,
+        },
+        runs: vec![],
+    };
+    let out = render_status(&report);
+    assert!(out.contains("central: external jbcentral 0.2.10"), "got: {out}");
+}
+
 // --- shared secret-free wire-config port parser (pure) ---------------------------------------------------------------
 
 #[test]
@@ -351,16 +398,20 @@ fn status_commands_agree_on_liveness_for_secretless_wire_config() {
 fn assemble_probe_no_install_yields_dead_probe() {
     // Even if a wire config exists, with no install we never probe.
     let wire = WireConfig { port: Some(53117) };
-    let probe = assemble_probe(false, Some(wire), CentralLogin::LoggedIn);
+    let probe = assemble_probe(CentralInstall::NotInstalled, Some(wire), CentralLogin::LoggedIn);
     assert!(!probe.running);
     assert_eq!(probe.port, None);
     assert_eq!(probe.login, CentralLogin::Unknown);
+    assert_eq!(probe.install, CentralInstall::NotInstalled);
 }
 
 #[test]
 fn assemble_probe_installed_no_wire_config() {
     // Installed but no ~/.wire/config.json: no port, so not running; login from arg.
-    let probe = assemble_probe(true, None, CentralLogin::LoggedOut);
+    let install = CentralInstall::Installed {
+        versions: vec!["0.2.9".to_string()],
+    };
+    let probe = assemble_probe(install, None, CentralLogin::LoggedOut);
     assert_eq!(probe.port, None);
     assert!(!probe.running);
     assert_eq!(probe.login, CentralLogin::LoggedOut);
@@ -369,7 +420,10 @@ fn assemble_probe_installed_no_wire_config() {
 #[test]
 fn assemble_probe_installed_with_wire_config_carries_port_and_login() {
     let wire = WireConfig { port: Some(53117) };
-    let probe = assemble_probe(true, Some(wire), CentralLogin::LoggedIn);
+    let install = CentralInstall::Installed {
+        versions: vec!["0.2.9".to_string()],
+    };
+    let probe = assemble_probe(install, Some(wire), CentralLogin::LoggedIn);
     assert_eq!(probe.port, Some(53117));
     // `running` is decided by the caller's health check, fed via the WireConfig path
     // in run_status; assemble_probe records the port and login and leaves running

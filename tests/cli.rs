@@ -33,17 +33,43 @@ fn library_dispatch_is_reachable_for_config_subcommand() {
 // handler gets an immediate failing test. Not a red->green cycle. ----
 
 /// M10.3 wired `status` to the real handler (R23g): the M3 NotImplemented arm is
-/// gone, so the end-to-end `status` invocation now succeeds. Hermetic via the
-/// `POVERTY_CACHE_DIR`/`POVERTY_LOG_DIR` overrides (R23j): an empty cache dir
-/// yields "not installed" and short-circuits the live central probe (no spawning,
-/// no `~/.wire` read); an empty log dir yields "no live runs".
+/// gone, so the end-to-end `status` invocation now succeeds. Fully hermetic: an
+/// isolated `XDG_CONFIG_HOME` carries a Download-mode config (`executable: null`) so
+/// status scans the empty `POVERTY_CACHE_DIR` and renders "not installed" without
+/// spawning any external binary; `HOME`/`USERPROFILE` are pinned to the temp dir so
+/// the probe's `~/.wire/config.json` read finds nothing (no real port, no real
+/// `/health` call). An empty `POVERTY_LOG_DIR` yields "no live runs".
+///
+/// The configured-External path is covered hermetically and cross-platform by
+/// `tests/diagnostics.rs::status_reports_configured_external_central`.
 #[test]
 fn status_subcommand_runs_and_renders() {
     let tmp = tempfile::tempdir().unwrap();
+    let config_home = tmp.path().join("config");
+    std::fs::create_dir_all(&config_home).unwrap();
+    // Download-mode config: `executable: null` => status scans the cache instead of
+    // probing an external binary, so the empty cache renders "not installed".
+    std::fs::write(
+        config_home.join("poverty-mode.yaml"),
+        "version: 1\n\
+         proxies:\n\
+         - name: central\n\
+         \x20\x20enabled: false\n\
+         \x20\x20settings:\n\
+         \x20\x20\x20\x20executable: null\n\
+         defaults:\n\
+         \x20\x20enable_tool_search: true\n",
+    )
+    .unwrap();
+
     let mut cmd = Command::cargo_bin("poverty-mode").unwrap();
     cmd.arg("status")
+        .env("XDG_CONFIG_HOME", &config_home)
         .env("POVERTY_CACHE_DIR", tmp.path().join("cache"))
         .env("POVERTY_LOG_DIR", tmp.path().join("logs"))
+        // Isolate the probe's `~/.wire/config.json` read from the real home.
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
         .assert()
         .success()
         .stdout(contains("pino (built-in)"))

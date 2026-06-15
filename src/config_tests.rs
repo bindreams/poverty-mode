@@ -214,6 +214,87 @@ fn load_or_create_writes_default_when_absent() {
 }
 
 #[test]
+fn load_or_default_returns_default_without_writing_when_absent() {
+    let g = ConfigHomeGuard::new();
+    assert!(!g.config_file().exists());
+
+    let cfg = Config::load_or_default().unwrap();
+    assert_eq!(cfg, Config::default_all_disabled());
+    // Read-only: the file must NOT have been created as a side effect.
+    assert!(
+        !g.config_file().exists(),
+        "load_or_default must not create the config file"
+    );
+}
+
+#[test]
+fn load_or_default_reads_existing_file() {
+    let g = ConfigHomeGuard::new();
+    // User enabled pino by hand (tail_ttl 1h).
+    let edited = r#"version: 1
+proxies:
+  - name: pino
+    enabled: true
+    settings:
+      auto_cache: true
+      tail_ttl: 1h
+      drop_tools: []
+      strip_ansi: true
+      model_override: null
+  - name: headroom
+    enabled: false
+    settings:
+      compression: false
+  - name: central
+    enabled: false
+    settings:
+      port: null
+      pinned_version: null
+defaults:
+  enable_tool_search: true
+"#;
+    write_file(&g.config_file(), edited);
+
+    let cfg = Config::load_or_default().unwrap();
+    assert_eq!(cfg.proxies[0].name, ProxyName::Pino);
+    assert_eq!(cfg.proxies[0].enabled, true);
+    match &cfg.proxies[0].settings {
+        ProxySettings::Pino(p) => assert_eq!(p.tail_ttl, TailTtl::OneHour),
+        other => panic!("expected pino, got {other:?}"),
+    }
+    // Reading an existing file must not rewrite it.
+    assert_eq!(std::fs::read_to_string(g.config_file()).unwrap(), edited);
+}
+
+#[test]
+fn load_or_default_errors_on_malformed_file_like_load_or_create() {
+    let g = ConfigHomeGuard::new();
+    // `name: pino` but settings are headroom-shaped (compression) -> validate fails,
+    // exactly like load_or_create's existing-file path.
+    let bad = r#"version: 1
+proxies:
+  - name: pino
+    enabled: true
+    settings:
+      compression: true
+defaults:
+  enable_tool_search: true
+"#;
+    write_file(&g.config_file(), bad);
+
+    let err = Config::load_or_default().unwrap_err();
+    let msg = err.to_string().to_lowercase();
+    assert!(
+        msg.contains("pino"),
+        "error should mention proxy name: {msg}"
+    );
+    assert!(
+        msg.contains("settings") || msg.contains("mismatch"),
+        "error should mention settings mismatch: {msg}"
+    );
+}
+
+#[test]
 fn load_or_create_is_idempotent_and_does_not_overwrite_user_edits() {
     let g = ConfigHomeGuard::new();
     // First call creates the default.

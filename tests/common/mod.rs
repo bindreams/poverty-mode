@@ -4,5 +4,6 @@
 // `mod common;` exercises only a subset, so unused items are expected here.
 #![allow(dead_code)]
 
+pub mod fakebin;
 pub mod fixtures;
 pub mod stub;

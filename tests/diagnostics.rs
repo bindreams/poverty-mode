@@ -3,6 +3,9 @@ use predicates::prelude::*;
 use std::path::Path;
 use tempfile::TempDir;
 
+mod common;
+use common::fakebin::write_fake_jbcentral;
+
 /// Build a Command for the binary with explicit, injected state/cache/config roots.
 fn pm(home: &TempDir) -> Command {
     let mut cmd = Command::cargo_bin("poverty-mode").unwrap();
@@ -24,6 +27,11 @@ fn runs_root(home: &TempDir) -> std::path::PathBuf {
     home.path().join("logs")
 }
 
+/// The config file path the binary will use given the injected XDG_CONFIG_HOME.
+fn config_file(home: &TempDir) -> std::path::PathBuf {
+    home.path().join("config").join("poverty-mode.yaml")
+}
+
 // Valid ULIDs (ascending == chronological).
 const A: &str = "01HXXXXXXXXXXXXXXXXXXXXXXA";
 const B: &str = "01HXXXXXXXXXXXXXXXXXXXXXXB";
@@ -35,9 +43,33 @@ fn seed_run(root: &Path, id: &str) {
     std::fs::write(dir.join("pino-40001.log"), "x").unwrap();
 }
 
+/// Write the given central `settings:` YAML body into the injected config home so a
+/// hermetic `status` run resolves a known central source instead of writing (and then
+/// honoring) the External-by-default `default_all_disabled` config.
+fn seed_central_config(home: &TempDir, settings_body: &str) {
+    let config_dir = home.path().join("config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("poverty-mode.yaml"),
+        format!(
+            "version: 1\n\
+             proxies:\n\
+             - name: central\n\
+             \x20\x20enabled: false\n\
+             \x20\x20settings:\n{settings_body}\
+             defaults:\n\
+             \x20\x20enable_tool_search: true\n"
+        ),
+    )
+    .unwrap();
+}
+
 #[test]
 fn status_runs_and_reports_no_runs_on_clean_machine() {
     let home = TempDir::new().unwrap();
+    // Download-mode config (`executable: null`): status scans the (empty) managed cache
+    // rather than probing an external binary, so a clean machine reads "not installed".
+    seed_central_config(&home, "    executable: null\n");
     pm(&home)
         .arg("status")
         .assert()
@@ -48,8 +80,29 @@ fn status_runs_and_reports_no_runs_on_clean_machine() {
 }
 
 #[test]
+fn status_reports_configured_external_central() {
+    // External-by-default: with `executable` set, status reports the binary's
+    // `--version` first line, not the managed cache. A fake jbcentral keeps this
+    // deterministic regardless of what (if anything) is on the runner's PATH.
+    let home = TempDir::new().unwrap();
+    // `--version` => known line; `status` => exit 1 (logged out).
+    let exe = write_fake_jbcentral(home.path(), "jbcentral 9.9.9 (fake)", 1);
+    seed_central_config(&home, &format!("    executable: {}\n", exe.display()));
+
+    pm(&home)
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("central: external jbcentral 9.9.9 (fake)"))
+        .stdout(predicate::str::contains("not installed").not());
+}
+
+#[test]
 fn status_lists_seeded_run() {
     let home = TempDir::new().unwrap();
+    // Download-mode config so the run-listing assertion does not depend on (or spawn)
+    // an external central binary from the runner's PATH.
+    seed_central_config(&home, "    executable: null\n");
     seed_run(&runs_root(&home), A);
     pm(&home)
         .arg("status")
@@ -57,6 +110,34 @@ fn status_lists_seeded_run() {
         .success()
         .stdout(predicate::str::contains(A))
         .stdout(predicate::str::contains("pino:40001"));
+}
+
+#[test]
+fn status_does_not_create_config_file_on_clean_machine() {
+    // Read-only diagnostic: `status` on a machine with NO config file must report its
+    // findings WITHOUT creating `poverty-mode.yaml` as a side effect (regression guard
+    // for load_or_create vs. load_or_default). No config is seeded here.
+    let home = TempDir::new().unwrap();
+    assert!(!config_file(&home).exists());
+
+    pm(&home)
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("pino (built-in)"));
+
+    assert!(!config_file(&home).exists(), "status must not create the config file");
+}
+
+#[test]
+fn doctor_does_not_create_config_file_on_clean_machine() {
+    // `doctor` is read-only too: it must never create `poverty-mode.yaml`.
+    let home = TempDir::new().unwrap();
+    assert!(!config_file(&home).exists());
+
+    pm(&home).arg("doctor").assert().success();
+
+    assert!(!config_file(&home).exists(), "doctor must not create the config file");
 }
 
 #[test]

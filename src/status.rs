@@ -120,8 +120,9 @@ impl From<crate::central::CentralLoginState> for CentralLogin {
 }
 
 /// Result of probing the central singleton, supplied by the caller so the report
-/// builder stays pure and headless-testable.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// builder stays pure and headless-testable. Not `Copy`: `install` carries owned
+/// strings (the External display / Download versions) resolved in the probe.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CentralProbe {
     /// `/health` on the configured port returned 200.
     pub running: bool,
@@ -129,12 +130,23 @@ pub struct CentralProbe {
     pub login: CentralLogin,
     /// The configured/actual proxy port, if known.
     pub port: Option<u16>,
+    /// Resolved install state. Computed in the blocking probe (it may spawn
+    /// `<exe> --version` for External, or scan the cache for Download) so the
+    /// report builder stays pure.
+    pub install: CentralInstall,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CentralInstall {
     NotInstalled,
-    Installed { versions: Vec<String> },
+    Installed {
+        versions: Vec<String>,
+    },
+    /// An external `jbcentral` binary is configured; `display` is a best-effort
+    /// human label (its `--version` first line, falling back to the path).
+    External {
+        display: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -194,13 +206,12 @@ pub(crate) fn central_versions(cache_dir: &Path) -> Result<Vec<String>> {
 }
 
 /// Assemble a full status report from explicit inputs (pure; no process spawning).
-pub fn build_status_report(cache_dir: &Path, runs_root: &Path, probe: &CentralProbe) -> Result<StatusReport> {
-    let versions = central_versions(cache_dir)?;
-    let install = if versions.is_empty() {
-        CentralInstall::NotInstalled
-    } else {
-        CentralInstall::Installed { versions }
-    };
+///
+/// Install resolution lives on the probe (`probe.install`), not here: External mode
+/// may spawn `<exe> --version` and Download mode scans the cache, both of which are
+/// I/O that belongs in the blocking probe (see `run_status`).
+pub fn build_status_report(runs_root: &Path, probe: &CentralProbe) -> Result<StatusReport> {
+    let install = probe.install.clone();
 
     let run = match (probe.running, probe.port) {
         (true, Some(port)) => CentralRun::Running { port },
@@ -242,6 +253,9 @@ pub fn render_status(report: &StatusReport) -> String {
         CentralInstall::Installed { versions } => {
             let _ = writeln!(out, "  central: installed {}", versions.join(", "));
         }
+        CentralInstall::External { display } => {
+            let _ = writeln!(out, "  central: external {display}");
+        }
     }
 
     let _ = writeln!(out, "central:");
@@ -279,27 +293,38 @@ pub struct WireConfig {
     pub port: Option<u16>,
 }
 
-/// Build a `CentralProbe` from the two independent sources (pure).
+/// Build a Download-mode `CentralProbe` from the independent sources (pure).
 ///
-/// - `versions_present`: an install exists under `<cache>/bin/jbcentral/`.
+/// - `install`: the cache-scanned install state (`NotInstalled` or `Installed`).
 /// - `wire`: the parsed `~/.wire/config.json`, if any.
 /// - `login`: the tri-state parsed from `jbcentral status` (Unknown if not probed).
 ///
 /// `running` is left `false` here; the caller flips it to the real `/health` result
-/// for the carried port (see `run_status`). With no install we emit a fully dead
-/// probe so login is forced Unknown by `build_status_report`.
-pub fn assemble_probe(versions_present: bool, wire: Option<WireConfig>, login: CentralLogin) -> CentralProbe {
-    if !versions_present {
+/// for the carried port (see `run_status`). With `NotInstalled` we emit a fully dead
+/// probe so login is forced Unknown by `build_status_report`. External mode does not
+/// use this helper — `run_status` builds its probe directly.
+pub fn assemble_probe(
+    install: CentralInstall,
+    wire: Option<WireConfig>,
+    login: CentralLogin,
+) -> CentralProbe {
+    debug_assert!(
+        !matches!(install, CentralInstall::External { .. }),
+        "assemble_probe is the Download-mode helper; External probes are built directly in run_status"
+    );
+    if install == CentralInstall::NotInstalled {
         return CentralProbe {
             running: false,
             login: CentralLogin::Unknown,
             port: None,
+            install,
         };
     }
     CentralProbe {
         running: false,
         login,
         port: wire.and_then(|w| w.port),
+        install,
     }
 }
 
@@ -359,6 +384,92 @@ pub(crate) fn newest_central_binary(cache_dir: &Path) -> Result<Option<PathBuf>>
     Ok(crate::central::installed_binary_path_in(cache_dir, latest))
 }
 
+/// The configured central `executable`, read from the trailing Central entry of the
+/// loaded config. `None`/blank ⇒ Download mode; `Some(..)` ⇒ External (see
+/// [`crate::central::central_source`]). Mirrors the orchestrator's resolution so
+/// status reports the same binary the chain would run.
+fn configured_central_executable() -> Result<Option<String>> {
+    // Read-only: `status` is a diagnostic and must never create `poverty-mode.yaml`
+    // as a side effect (load_or_create would write the default on first run).
+    let cfg = crate::config::Config::load_or_default()?;
+    let executable = cfg.proxies.iter().find_map(|entry| match &entry.settings {
+        crate::config::ProxySettings::Central(c) => Some(c.executable.clone()),
+        _ => None,
+    });
+    Ok(executable.flatten())
+}
+
+/// Best-effort human label for an external central binary: the first non-empty,
+/// trimmed line of `<exe> --version`'s stdout (e.g. `jbcentral 0.2.10 (commit: ...)`).
+/// On ANY failure (spawn error, non-zero exit, no usable line) fall back to the path.
+/// This spawns a child process (R5), so it belongs in the blocking probe — never in
+/// the pure `build_status_report`.
+fn external_display(exe: &Path) -> String {
+    let fallback = || exe.display().to_string();
+    let Ok(output) = std::process::Command::new(exe).arg("--version").output() else {
+        return fallback();
+    };
+    if !output.status.success() {
+        return fallback();
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(fallback)
+}
+
+/// Blocking central probe (R5): resolve install + login + run-state honoring the
+/// configured `executable`. External mode labels the binary via `external_display`
+/// and classifies login by running `<exe> status`; Download mode scans the managed
+/// cache exactly as before. Run-state (`/health` on the wire-config port) applies to
+/// both. Called via `spawn_blocking` from `run_status`.
+fn probe_central() -> Result<CentralProbe> {
+    let executable = configured_central_executable()?;
+    let wire = read_wire_config();
+
+    let mut probe = match crate::central::central_source(executable.as_deref()) {
+        crate::central::CentralSource::External(exe) => {
+            // Login truth from `<exe> status` (R20/R23c): exit code + output through the
+            // canonical classifier. Unknown if the binary cannot be run.
+            let login = crate::central::run_status_classified(&exe)
+                .map(CentralLogin::from)
+                .unwrap_or(CentralLogin::Unknown);
+            CentralProbe {
+                running: false,
+                login,
+                port: wire.and_then(|w| w.port),
+                install: CentralInstall::External {
+                    display: external_display(&exe),
+                },
+            }
+        }
+        crate::central::CentralSource::Download => {
+            let cache = crate::paths::cache_dir()?;
+            let versions = central_versions(&cache)?;
+            if versions.is_empty() {
+                assemble_probe(CentralInstall::NotInstalled, None, CentralLogin::Unknown)
+            } else {
+                // Login truth from `jbcentral status` (R20), not from any secret on disk.
+                let login = match newest_central_binary(&cache)? {
+                    Some(bin) => crate::central::run_status_classified(&bin)
+                        .map(CentralLogin::from)
+                        .unwrap_or(CentralLogin::Unknown),
+                    None => CentralLogin::Unknown,
+                };
+                assemble_probe(CentralInstall::Installed { versions }, wire, login)
+            }
+        }
+    };
+
+    if let Some(port) = probe.port {
+        probe.running = crate::central::health(port);
+    }
+    Ok(probe)
+}
+
 /// Gather real inputs and print the status report. Side-effecting async entry point.
 ///
 /// All blocking work (`central::health`, `jbcentral status` parsing) runs via
@@ -369,36 +480,14 @@ pub(crate) fn newest_central_binary(cache_dir: &Path) -> Result<Option<PathBuf>>
 /// a forced singleton with a fixed JetBrains destination -- there is no port-squatter
 /// identity concern that motivates the first-party hops' identity check.
 pub async fn run_status() -> Result<()> {
-    let cache = crate::paths::cache_dir()?;
     let runs_root = crate::paths::log_dir()?;
 
-    let cache_for_blocking = cache.clone();
-    // Off-runtime: install scan, wire-config read, jbcentral status parse, health.
-    let probe = tokio::task::spawn_blocking(move || -> Result<CentralProbe> {
-        let versions = central_versions(&cache_for_blocking)?;
-        if versions.is_empty() {
-            return Ok(assemble_probe(false, None, CentralLogin::Unknown));
-        }
-        let wire = read_wire_config();
-        // Login truth from `jbcentral status` (R20), not from any secret on disk.
-        // `run_status_classified` (R23c) captures BOTH the exit code and output and runs the
-        // canonical `classify_login_status`; the exit code is load-bearing -- without it the
-        // classifier short-circuits to Unknown and could never report logged-in/out.
-        let login = match newest_central_binary(&cache_for_blocking)? {
-            Some(bin) => crate::central::run_status_classified(&bin)
-                .map(CentralLogin::from)
-                .unwrap_or(CentralLogin::Unknown),
-            None => CentralLogin::Unknown,
-        };
-        let mut probe = assemble_probe(true, wire, login);
-        if let Some(port) = probe.port {
-            probe.running = crate::central::health(port);
-        }
-        Ok(probe)
-    })
-    .await??;
+    // Off-runtime: config load, install scan / `<exe> --version`, wire-config read,
+    // jbcentral status parse, health. Resolution honors the configured `executable`
+    // (External-by-default), not just the managed download cache.
+    let probe = tokio::task::spawn_blocking(probe_central).await??;
 
-    let report = build_status_report(&cache, &runs_root, &probe)?;
+    let report = build_status_report(&runs_root, &probe)?;
     print!("{}", render_status(&report));
     Ok(())
 }
