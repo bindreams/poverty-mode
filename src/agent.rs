@@ -7,6 +7,7 @@
 //! wiring without re-typing the trait.
 
 pub mod claude;
+pub mod codex;
 
 use url::Url;
 
