@@ -135,7 +135,7 @@ pub fn read_settings_layer(layer: SettingsLayer, path: &std::path::Path) -> Sett
 
 /// Env override (non-empty wins) for the enterprise managed-settings path, so the
 /// otherwise system-level managed path (e.g. `/etc/claude-code/...`) is reachable in
-/// a hermetic test. Mirrors the `POVERTY_STATE_DIR`/`POVERTY_CACHE_DIR` convention (R23j).
+/// a hermetic test. Mirrors the `POVERTY_LOG_DIR`/`POVERTY_CACHE_DIR` convention (R23j).
 const MANAGED_SETTINGS_ENV: &str = "POVERTY_MANAGED_SETTINGS";
 
 /// Candidate on-disk locations of Claude Code's enterprise managed-settings file for

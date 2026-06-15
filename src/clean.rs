@@ -50,8 +50,8 @@ pub fn build_clean_plan(
     clear_cache: bool,
     stop_central: bool,
 ) -> Result<CleanPlan> {
-    // The single ULID-gated run-dir enumerator (shared with `paths::prune_run_dirs_in`)
-    // so a non-run directory is never scheduled for deletion.
+    // The single run-id-gated (`run_ulid`) run-dir enumerator (shared with
+    // `paths::prune_run_dirs_in`) so a non-run directory is never scheduled for deletion.
     let ids = crate::paths::enumerate_run_ids(runs_root)?;
     let to_delete: Vec<PathBuf> = runs_to_prune(&ids, keep)
         .into_iter()
@@ -198,7 +198,7 @@ pub fn run_clean(
     assume_yes: bool,
 ) -> Result<()> {
     let cache = crate::paths::cache_dir()?;
-    let runs_root = crate::paths::state_dir()?.join("runs");
+    let runs_root = crate::paths::log_dir()?;
     let plan = build_clean_plan(&runs_root, &cache, keep, clear_cache, stop_central)?;
 
     print!("{}", render_clean_plan(&plan));

@@ -35,16 +35,16 @@ fn library_dispatch_is_reachable_for_config_subcommand() {
 
 /// M10.3 wired `status` to the real handler (R23g): the M3 NotImplemented arm is
 /// gone, so the end-to-end `status` invocation now succeeds. Hermetic via the
-/// `POVERTY_CACHE_DIR`/`POVERTY_STATE_DIR` overrides (R23j): an empty cache dir
+/// `POVERTY_CACHE_DIR`/`POVERTY_LOG_DIR` overrides (R23j): an empty cache dir
 /// yields "not installed" and short-circuits the live central probe (no spawning,
-/// no `~/.wire` read); an empty state dir yields "no live runs".
+/// no `~/.wire` read); an empty log dir yields "no live runs".
 #[test]
 fn status_subcommand_runs_and_renders() {
     let tmp = tempfile::tempdir().unwrap();
     let mut cmd = Command::cargo_bin("poverty-mode").unwrap();
     cmd.arg("status")
         .env("POVERTY_CACHE_DIR", tmp.path().join("cache"))
-        .env("POVERTY_STATE_DIR", tmp.path().join("state"))
+        .env("POVERTY_LOG_DIR", tmp.path().join("logs"))
         .assert()
         .success()
         .stdout(contains("pino (built-in)"))
@@ -82,7 +82,7 @@ fn doctor_subcommand_runs_and_renders() {
 
 /// M10.7 wired `clean` to the real handler (R23g): the M3 NotImplemented arm is
 /// gone, so the end-to-end `clean` invocation now builds a real plan. Hermetic via
-/// the `POVERTY_CACHE_DIR`/`POVERTY_STATE_DIR` overrides (R23j): an empty state dir
+/// the `POVERTY_CACHE_DIR`/`POVERTY_LOG_DIR` overrides (R23j): an empty log dir
 /// (no run dirs) with the default `--keep` and no `--clear-cache`/`--stop-central`
 /// yields an empty plan, which short-circuits to "nothing to clean" and exits
 /// success WITHOUT prompting -- so this is safe to run non-interactively.
@@ -92,7 +92,7 @@ fn clean_subcommand_empty_plan_says_nothing_to_clean() {
     let mut cmd = Command::cargo_bin("poverty-mode").unwrap();
     cmd.arg("clean")
         .env("POVERTY_CACHE_DIR", tmp.path().join("cache"))
-        .env("POVERTY_STATE_DIR", tmp.path().join("state"))
+        .env("POVERTY_LOG_DIR", tmp.path().join("logs"))
         .assert()
         .success()
         .stdout(contains("nothing to clean"));
@@ -113,7 +113,7 @@ fn clean_subcommand_yes_clears_cache_and_completes() {
     let mut cmd = Command::cargo_bin("poverty-mode").unwrap();
     cmd.args(["clean", "--clear-cache", "--yes"])
         .env("POVERTY_CACHE_DIR", &cache)
-        .env("POVERTY_STATE_DIR", tmp.path().join("state"))
+        .env("POVERTY_LOG_DIR", tmp.path().join("logs"))
         .assert()
         .success()
         .stdout(contains("will clear cache dir"))

@@ -91,7 +91,6 @@ const APP_QUALIFIER: &str = "";
 const APP_ORG: &str = "poverty-mode";
 const APP_NAME: &str = "poverty-mode";
 const CONFIG_FILE_NAME: &str = "poverty-mode.yaml";
-const STATE_DIR_ENV: &str = "POVERTY_STATE_DIR";
 const CACHE_DIR_ENV: &str = "POVERTY_CACHE_DIR";
 const LOG_DIR_ENV: &str = "POVERTY_LOG_DIR";
 
@@ -118,16 +117,6 @@ pub fn config_path() -> anyhow::Result<PathBuf> {
         }
     }
     Ok(project_dirs()?.config_dir().join(CONFIG_FILE_NAME))
-}
-
-/// Absolute path to the per-user state directory (holds `runs/`). Honors the
-/// `POVERTY_STATE_DIR` env override (non-empty value wins) for hermetic tests
-/// (R23j); otherwise the platform `data_dir`.
-pub fn state_dir() -> anyhow::Result<PathBuf> {
-    if let Some(dir) = env_dir_override(STATE_DIR_ENV) {
-        return Ok(dir);
-    }
-    Ok(project_dirs()?.data_dir().to_path_buf())
 }
 
 /// Absolute path to the per-user cache directory (holds downloaded binaries).
@@ -229,10 +218,10 @@ pub(crate) fn run_ulid(name: &str) -> Option<&str> {
     }
 }
 
-/// Absolute path to a single run's directory: `<state>/runs/<run_id>`. Pure path
+/// Absolute path to a single session's directory: `<log_dir>/<run_id>`. Pure path
 /// math; this does not create the directory (see `ensure_run_dir`).
 pub fn run_dir(run_id: &str) -> anyhow::Result<PathBuf> {
-    Ok(state_dir()?.join("runs").join(run_id))
+    Ok(log_dir()?.join(run_id))
 }
 
 /// Restrict `path` to owner-only directory access (0700) on POSIX. No-op on
@@ -250,7 +239,7 @@ pub fn harden_dir_perms(_path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Create `<state>/runs/<run_id>` (and any missing parents), then harden it to
+/// Create `<log_dir>/<run_id>` (and any missing parents), then harden it to
 /// 0700 on POSIX, and return its absolute path. Idempotent: an existing run dir is
 /// re-hardened and returned. Per-run unique paths mean concurrent sessions never
 /// share a directory (spec 5.11).
@@ -261,21 +250,22 @@ pub fn ensure_run_dir(run_id: &str) -> anyhow::Result<PathBuf> {
     Ok(dir)
 }
 
-/// Keep the `keep` most-recent run directories under `<state>/runs/` and remove
+/// Keep the `keep` most-recent run directories under `<log_dir>/` and remove
 /// the rest. Called once on startup by the orchestrator (M6). Thin wrapper over
-/// `prune_run_dirs_in` against the real state-derived runs directory.
+/// `prune_run_dirs_in` against the real log-derived runs directory.
 pub fn prune_run_dirs(keep: usize) -> anyhow::Result<()> {
-    let runs = state_dir()?.join("runs");
+    let runs = log_dir()?;
     prune_run_dirs_in(&runs, keep)
 }
 
-/// List the valid-ULID run-id subdirectories of `runs_dir`, sorted ascending
-/// (oldest first; ULID order == chronological). The canonical "what is a run dir"
-/// primitive: a directory counts as a run ONLY if its name is a valid ULID, so a
-/// non-run directory (e.g. a user's scratch dir) is never returned — and therefore
-/// never pruned. Non-directory entries are ignored. A missing `runs_dir` yields an
-/// empty list. Shared by `prune_run_dirs_in` (here) and `crate::clean` so both
-/// agree on which directories are runs.
+/// List the run-id subdirectories of `runs_dir`, sorted ascending by the embedded
+/// ULID (oldest first; chronological across projects). The canonical "what is a run
+/// dir" primitive: a directory is accepted only if `run_ulid` accepts its name — a
+/// bare ULID or a `<prefix>-<ULID>` session name — so a non-run directory (e.g. a
+/// user's scratch dir) is never returned — and therefore never pruned.
+/// Non-directory entries are ignored. A missing `runs_dir` yields an empty list.
+/// Shared by `prune_run_dirs_in` (here) and `crate::clean` so both agree on which
+/// directories are runs.
 pub(crate) fn enumerate_run_ids(runs_dir: &Path) -> anyhow::Result<Vec<String>> {
     let read = match fs::read_dir(runs_dir) {
         Ok(r) => r,
@@ -296,24 +286,22 @@ pub(crate) fn enumerate_run_ids(runs_dir: &Path) -> anyhow::Result<Vec<String>> 
             continue;
         }
         if let Some(name) = entry.file_name().to_str() {
-            // A run dir is always named with a bare ULID (not a session name);
-            // run_ulid accepts bare ULIDs as well as session names, so it
-            // subsumes the `Ulid::from_string` check and unifies the definition
-            // of "what counts as a run dir" across the module.
-            if run_ulid(name) == Some(name) {
+            // A run dir's name is accepted by run_ulid — a bare ULID or a
+            // `<prefix>-<ULID>` session name.
+            if run_ulid(name).is_some() {
                 ids.push(name.to_string());
             }
         }
     }
-    ids.sort();
+    ids.sort_by(|a, b| run_ulid(a).cmp(&run_ulid(b)));
     Ok(ids)
 }
 
 /// Keep the `keep` most-recent run directories in `runs_dir` and remove the rest.
-/// Recency is by directory-name lexical order (ULID run-ids sort by creation
-/// time — no mtime/timer is consulted). Only valid-ULID directories are runs, so a
-/// non-run directory is never pruned (via `enumerate_run_ids`). A missing `runs_dir`
-/// is a no-op. Removal errors are surfaced (not swallowed).
+/// Recency is keyed on the embedded ULID (chronological across projects; see
+/// `enumerate_run_ids`). Only run-dir names accepted by `run_ulid` (a bare ULID or
+/// a `<prefix>-<ULID>` session name) are treated as runs, so a non-run directory is
+/// never pruned. A missing `runs_dir` is a no-op. Removal errors are surfaced.
 fn prune_run_dirs_in(runs_dir: &Path, keep: usize) -> anyhow::Result<()> {
     // Ascending => oldest first; keep the newest `keep`, remove the leading ones.
     let ids = enumerate_run_ids(runs_dir)?;
