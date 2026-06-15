@@ -591,6 +591,52 @@ fn has_breakpoint(arr: &Value) -> bool {
     }
 }
 
+/// True if a tool is a valid target for the tools cache breakpoint. A tool is not
+/// a target when it is not a JSON object (nowhere to insert `cache_control`) or
+/// when it is deferred (`defer_loading: true`, the ToolSearch catalog). Deferred
+/// tools are excluded from the cached prefix and the Anthropic API rejects
+/// `cache_control` on them with a 400 (issue #5): "Tool '...' cannot have both
+/// defer_loading=true and cache_control set." `defer_loading` is a boolean per the
+/// API tool schema; we treat the field as blocking caching unless it is absent or
+/// explicitly `false`, so a malformed non-boolean value (out of contract) degrades
+/// to skip — never a stamped 400. New behavior: pino had no model of tool
+/// deferral, so there is no Node `cache.js` analog to mirror here.
+fn is_cacheable_tool(tool: &Value) -> bool {
+    if !tool.is_object() {
+        return false;
+    }
+    match tool.get("defer_loading") {
+        None => true,
+        Some(v) => v == &Value::Bool(false),
+    }
+}
+
+/// Removes any `cache_control` already sitting on a deferred tool. A breakpoint on
+/// a `defer_loading: true` tool 400s (issue #5) regardless of who placed it, so
+/// pino must scrub a client-sent one too — otherwise `rewrite_cache_control` would
+/// bump its ttl and forward the 400-triggering body. Returns the count stripped.
+/// Runs before tools injection so the no-double-injection guard sees only
+/// legitimate (non-deferred) breakpoints and can still cache a real tool.
+fn strip_deferred_tool_breakpoints(body: &mut Value) -> usize {
+    let tools = match body.get_mut("tools").and_then(|t| t.as_array_mut()) {
+        Some(t) => t,
+        None => return 0,
+    };
+    let mut stripped = 0;
+    for tool in tools.iter_mut() {
+        // Non-cacheable objects are exactly the deferred ones (non-objects have no
+        // cache_control to remove and short-circuit in as_object_mut below).
+        if !is_cacheable_tool(tool) {
+            if let Some(obj) = tool.as_object_mut() {
+                if obj.remove("cache_control").is_some() {
+                    stripped += 1;
+                }
+            }
+        }
+    }
+    stripped
+}
+
 /// Removes client-sent ephemeral cache_control from system blocks shorter than
 /// MIN_SYSTEM_CACHE_CHARS. Returns the count stripped.
 /// Mirrors stripSmallSystemBreakpoints in reference/pino/src/cache.js (lines 83-96).
@@ -693,21 +739,31 @@ fn find_last_cacheable_index_in_message(message: &mut Value) -> Option<usize> {
 pub fn inject_breakpoint_if_absent(body: &mut Value, ttl: CacheTtl) -> Vec<String> {
     let mut tail_paths: Vec<String> = Vec::new();
 
+    // 0. Scrub any breakpoint already on a deferred tool (issue #5): it 400s no
+    //    matter who placed it, and stripping it first lets step 2's guard see only
+    //    legitimate breakpoints and still cache a real tool.
+    strip_deferred_tool_breakpoints(body);
+
     // 1. Reclaim wasted small-system slots.
     strip_small_system_breakpoints(body);
 
-    // 2. tools: last entry -> ttl, only if the array is non-empty and has no breakpoint.
-    let inject_tools = body
-        .get("tools")
-        .map(|t| t.as_array().map(|a| !a.is_empty()).unwrap_or(false) && !has_breakpoint(t))
-        .unwrap_or(false);
-    if inject_tools {
-        if let Some(tools) = body.get_mut("tools").and_then(|t| t.as_array_mut()) {
-            if let Some(last) = tools.last_mut() {
-                if let Some(obj) = last.as_object_mut() {
-                    obj.insert("cache_control".to_string(), cc(ttl));
-                }
-            }
+    // 2. tools: place the breakpoint on the last CACHEABLE tool (a non-deferred
+    //    object), only if the array is non-empty and carries no breakpoint yet.
+    //    Deferred tools (`defer_loading: true`, the ToolSearch catalog) are
+    //    excluded from the cached prefix and the API rejects `cache_control` on
+    //    them — so the breakpoint lands on the last cacheable tool, or nowhere if
+    //    none qualifies. The no-existing-breakpoint guard is unchanged.
+    let tool_target = match body.get("tools").and_then(|t| t.as_array()) {
+        Some(tools) if !tools.is_empty() && !tools.iter().any(block_has_ephemeral) => {
+            tools.iter().rposition(is_cacheable_tool)
+        }
+        _ => None,
+    };
+    if let Some(idx) = tool_target {
+        // is_cacheable_tool guaranteed object-ness, so as_object_mut never fails here.
+        debug_assert!(body["tools"][idx].is_object());
+        if let Some(obj) = body["tools"][idx].as_object_mut() {
+            obj.insert("cache_control".to_string(), cc(ttl));
         }
     }
 

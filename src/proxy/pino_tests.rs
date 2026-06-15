@@ -1026,6 +1026,156 @@ fn inject_skips_tools_when_already_has_breakpoint() {
 }
 
 #[test]
+fn inject_skips_deferred_tools_places_on_last_non_deferred() {
+    // ToolSearch layout: real tools first, deferred catalog last. The breakpoint
+    // must land on the last NON-deferred tool (Read, idx 1), never on a deferred
+    // one — the API 400s on cache_control + defer_loading together (issue #5).
+    let mut body = json!({
+        "tools": [
+            { "name": "Bash" },
+            { "name": "Read" },
+            { "name": "mcp__Space__get_merge_request", "defer_loading": true },
+            { "name": "mcp__Space__put_merge_request", "defer_loading": true }
+        ],
+        "messages": [ { "role": "user", "content": [ { "type": "text", "text": "hi" } ] } ]
+    });
+    inject_breakpoint_if_absent(&mut body, CacheTtl::FiveMin);
+    let tools = body["tools"].as_array().unwrap();
+    assert!(cc_of(&tools[0]).is_none());
+    assert_eq!(
+        cc_of(&tools[1]).unwrap(),
+        &json!({ "type": "ephemeral", "ttl": "5m" }),
+        "breakpoint lands on last non-deferred tool"
+    );
+    assert!(cc_of(&tools[2]).is_none(), "deferred tool must not be cached");
+    assert!(cc_of(&tools[3]).is_none(), "deferred tool must not be cached");
+}
+
+#[test]
+fn inject_skips_tools_entirely_when_all_deferred() {
+    // Every tool is deferred => no tool may carry cache_control at all.
+    let mut body = json!({
+        "tools": [
+            { "name": "mcp__Space__get_merge_request", "defer_loading": true },
+            { "name": "mcp__Space__put_merge_request", "defer_loading": true }
+        ],
+        "messages": [ { "role": "user", "content": [ { "type": "text", "text": "hi" } ] } ]
+    });
+    inject_breakpoint_if_absent(&mut body, CacheTtl::FiveMin);
+    let tools = body["tools"].as_array().unwrap();
+    assert!(tools.iter().all(|t| cc_of(t).is_none()), "no deferred tool cached");
+}
+
+// Characterization guard (passes pre-fix too): defer_loading:false is a normal,
+// cacheable tool — only `true` opts out.
+#[test]
+fn inject_caches_defer_loading_false_like_normal() {
+    let mut body = json!({
+        "tools": [ { "name": "Bash" }, { "name": "Read", "defer_loading": false } ],
+        "messages": [ { "role": "user", "content": [ { "type": "text", "text": "hi" } ] } ]
+    });
+    inject_breakpoint_if_absent(&mut body, CacheTtl::FiveMin);
+    let tools = body["tools"].as_array().unwrap();
+    assert!(cc_of(&tools[0]).is_none());
+    assert_eq!(cc_of(&tools[1]).unwrap(), &json!({ "type": "ephemeral", "ttl": "5m" }));
+}
+
+// Robustness: a malformed non-boolean defer_loading (out of the wire contract) is
+// treated conservatively as deferred — skipped, never stamped (would risk a 400).
+#[test]
+fn inject_skips_tool_with_non_boolean_defer_loading() {
+    let mut body = json!({
+        "tools": [ { "name": "Bash" }, { "name": "Weird", "defer_loading": "true" } ],
+        "messages": [ { "role": "user", "content": [ { "type": "text", "text": "hi" } ] } ]
+    });
+    inject_breakpoint_if_absent(&mut body, CacheTtl::FiveMin);
+    let tools = body["tools"].as_array().unwrap();
+    assert_eq!(
+        cc_of(&tools[0]).unwrap(),
+        &json!({ "type": "ephemeral", "ttl": "5m" }),
+        "breakpoint falls back to the last provably-cacheable tool"
+    );
+    assert!(cc_of(&tools[1]).is_none(), "non-boolean defer_loading is not stamped");
+}
+
+// Robustness: a non-object element in `tools` (out of contract) is skipped; the
+// breakpoint still lands on the last real, cacheable tool object.
+#[test]
+fn inject_skips_non_object_tool_element() {
+    let mut body = json!({
+        "tools": [ { "name": "Bash" }, "not_an_object" ],
+        "messages": [ { "role": "user", "content": [ { "type": "text", "text": "hi" } ] } ]
+    });
+    inject_breakpoint_if_absent(&mut body, CacheTtl::FiveMin);
+    let tools = body["tools"].as_array().unwrap();
+    assert_eq!(cc_of(&tools[0]).unwrap(), &json!({ "type": "ephemeral", "ttl": "5m" }));
+    assert!(tools[1].as_object().is_none(), "non-object element left untouched");
+}
+
+// Finding 1: a client-supplied cache_control on a deferred tool would 400 (issue
+// #5). pino must REMOVE it (not merely refrain from adding one), then it can cache
+// the freed slot on the real tool. Without the strip, the guard would see the
+// deferred breakpoint, skip step 2 entirely, and forward the 400-triggering body.
+#[test]
+fn inject_strips_client_breakpoint_from_deferred_tool() {
+    let mut body = json!({
+        "tools": [
+            { "name": "Bash" },
+            { "name": "mcp__Space__put_merge_request", "defer_loading": true,
+              "cache_control": { "type": "ephemeral", "ttl": "5m" } }
+        ],
+        "messages": [ { "role": "user", "content": [ { "type": "text", "text": "hi" } ] } ]
+    });
+    inject_breakpoint_if_absent(&mut body, CacheTtl::FiveMin);
+    let tools = body["tools"].as_array().unwrap();
+    assert!(
+        cc_of(&tools[1]).is_none(),
+        "client cache_control stripped from deferred tool"
+    );
+    assert_eq!(
+        cc_of(&tools[0]).unwrap(),
+        &json!({ "type": "ephemeral", "ttl": "5m" }),
+        "real tool cached after the deferred breakpoint is reclaimed"
+    );
+}
+
+// Finding 2 (characterization): empty tools array is a no-op for tool caching —
+// the `is_empty` guard sends it to the None arm, no panic.
+#[test]
+fn inject_handles_empty_tools_array() {
+    let mut body = json!({
+        "tools": [],
+        "messages": [ { "role": "user", "content": [ { "type": "text", "text": "hi" } ] } ]
+    });
+    inject_breakpoint_if_absent(&mut body, CacheTtl::FiveMin);
+    assert!(
+        body["tools"].as_array().unwrap().is_empty(),
+        "empty tools array untouched"
+    );
+}
+
+// Finding 3 (characterization): a legitimate client breakpoint on a real tool is
+// preserved, and a co-present deferred tool stays uncached — pino adds nothing.
+#[test]
+fn inject_keeps_client_breakpoint_on_real_tool_and_skips_deferred() {
+    let mut body = json!({
+        "tools": [
+            { "name": "Bash", "cache_control": { "type": "ephemeral", "ttl": "5m" } },
+            { "name": "mcp__Space__put_merge_request", "defer_loading": true }
+        ],
+        "messages": [ { "role": "user", "content": [ { "type": "text", "text": "hi" } ] } ]
+    });
+    inject_breakpoint_if_absent(&mut body, CacheTtl::FiveMin);
+    let tools = body["tools"].as_array().unwrap();
+    assert_eq!(
+        cc_of(&tools[0]).unwrap(),
+        &json!({ "type": "ephemeral", "ttl": "5m" }),
+        "client breakpoint on the real tool preserved"
+    );
+    assert!(cc_of(&tools[1]).is_none(), "deferred tool stays uncached");
+}
+
+#[test]
 fn inject_converts_string_system_to_cached_array() {
     let mut body = json!({
         "system": "you are a helpful assistant",
@@ -1379,6 +1529,64 @@ fn auto_cache_disabled_does_not_inject_any_breakpoint() {
     });
     t.transform(&mut body, &main_ctx()).unwrap();
     assert_eq!(count_cache_breakpoints(&body), 0);
+}
+
+// Regression guard for issue #5: the full `transform` path (auto_cache on) never
+// stamps cache_control onto a deferred tool; the breakpoint lands on the last
+// non-deferred tool at the per-agent ttl. `inject_breakpoint_if_absent` is the
+// only site that writes a tool breakpoint, so this pins the public behavior.
+#[test]
+fn auto_cache_never_stamps_deferred_tool() {
+    let t = PinoTransform {
+        settings: auto_cache_settings(CacheTtl::OneHour, CacheTtl::FiveMin),
+    };
+    let mut body = json!({
+        "tools": [
+            { "name": "Bash" },
+            { "name": "mcp__Space__put_merge_request", "defer_loading": true }
+        ],
+        "messages": [
+            { "role": "user", "content": [ { "type": "text", "text": "first" } ] },
+            { "role": "assistant", "content": [ { "type": "text", "text": "ok" } ] },
+            { "role": "user", "content": [ { "type": "text", "text": "latest" } ] }
+        ]
+    });
+    t.transform(&mut body, &main_ctx()).unwrap();
+    let tools = body["tools"].as_array().unwrap();
+    assert!(cc_of(&tools[1]).is_none(), "deferred tool never receives cache_control");
+    assert_eq!(
+        cc_of(&tools[0]).unwrap(),
+        &json!({ "type": "ephemeral", "ttl": "1h" }),
+        "breakpoint lands on the non-deferred tool at main_ttl"
+    );
+}
+
+// Regression guard for issue #5 (review Finding 1): the full `transform` path
+// strips a client-supplied breakpoint off a deferred tool — otherwise
+// rewrite_cache_control would bump its ttl and forward a 400-triggering body.
+#[test]
+fn auto_cache_strips_client_breakpoint_from_deferred_tool() {
+    let t = PinoTransform {
+        settings: auto_cache_settings(CacheTtl::OneHour, CacheTtl::FiveMin),
+    };
+    let mut body = json!({
+        "tools": [
+            { "name": "Bash" },
+            { "name": "mcp__Space__put_merge_request", "defer_loading": true,
+              "cache_control": { "type": "ephemeral", "ttl": "5m" } }
+        ],
+        "messages": [
+            { "role": "user", "content": [ { "type": "text", "text": "first" } ] },
+            { "role": "assistant", "content": [ { "type": "text", "text": "ok" } ] },
+            { "role": "user", "content": [ { "type": "text", "text": "latest" } ] }
+        ]
+    });
+    t.transform(&mut body, &main_ctx()).unwrap();
+    let tools = body["tools"].as_array().unwrap();
+    assert!(
+        cc_of(&tools[1]).is_none(),
+        "deferred tool carries no cache_control after transform"
+    );
 }
 
 // Finding 1/8: prove restructureV123 runs BEFORE injection inside transform and the

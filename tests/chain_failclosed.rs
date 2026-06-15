@@ -75,6 +75,7 @@ async fn readiness_failure_via_manager_tears_down_started_hops() {
         proxy: hop,
         run_id: run_id.clone(),
         log_file: std::env::temp_dir().join("pm-failclosed-pino.log"),
+        stderr_log: std::env::temp_dir().join("pm-failclosed-pino.stderr.log"),
     };
     let tail = Upstream {
         url: Url::parse("https://api.anthropic.com").unwrap(),
@@ -105,6 +106,11 @@ fn point_self_spawn_at_real_binary() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
         std::env::set_var("POVERTY_PROXY_EXE", env!("CARGO_BIN_EXE_poverty-mode"));
+        // Isolate run dirs into the system temp dir so chain tests never write
+        // into the real user state directory (hermetic-test guarantee, R23j).
+        let log_dir = std::env::temp_dir().join("poverty-mode-chain-test-runs");
+        std::fs::create_dir_all(&log_dir).ok();
+        std::env::set_var("POVERTY_LOG_DIR", log_dir);
     });
 }
 

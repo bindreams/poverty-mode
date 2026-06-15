@@ -486,7 +486,7 @@ pub async fn bind_engine_with_boxed_transform(
 /// The orchestrator builds each hop's body-log path BEFORE the OS assigns the
 /// ephemeral port, so it embeds the literal token `{port}`; only the engine knows
 /// the real bound port. Substituting here makes the on-disk file land at the
-/// design-spec §5.11 name `<state>/runs/<run-id>/<proxy>-<port>.log` that
+/// design-spec §5.11 name `<log_dir>/<run-id>/<proxy>-<port>.log` that
 /// `status::enumerate_runs` parses. A literal path (no token — e.g. standalone
 /// `poverty-mode proxy ... --body-log-file FILE`) passes through unchanged.
 fn resolve_log_file(path: Option<PathBuf>, port: u16) -> Option<PathBuf> {

@@ -94,6 +94,7 @@ async fn serve_chain(run_id: &'static str) -> LiveChain {
 #[tokio::test(flavor = "multi_thread")]
 async fn run_empty_chain_execs_agent_unchanged() {
     let cfg_home = tempfile::tempdir().unwrap();
+    let run_empty_log = tempfile::tempdir().unwrap();
 
     #[cfg(unix)]
     let agent_args: Vec<&str> = vec!["--", "true"];
@@ -102,6 +103,7 @@ async fn run_empty_chain_execs_agent_unchanged() {
 
     let mut cmd = StdCommand::new(env!("CARGO_BIN_EXE_poverty-mode"));
     cmd.env("XDG_CONFIG_HOME", cfg_home.path())
+        .env("POVERTY_LOG_DIR", run_empty_log.path())
         .env("POVERTY_PROXY_CHAIN", "") // explicit empty chain
         .env_remove("ANTHROPIC_BASE_URL")
         .arg("run")
@@ -131,9 +133,11 @@ async fn run_reuses_live_chain_via_nested_guard() {
     // reused base so a direct hit is recorded.
     let exe = env!("CARGO_BIN_EXE_poverty-mode");
     let target = format!("{base}/v1/messages");
+    let reuse_live_log = tempfile::tempdir().unwrap();
 
     let mut cmd = StdCommand::new(exe);
     cmd.env("XDG_CONFIG_HOME", cfg_home.path())
+        .env("POVERTY_LOG_DIR", reuse_live_log.path())
         .env("POVERTY_PROXY_CHAIN", "pino")
         .env("POVERTY_PROXY_HEAD", &base)
         .arg("run")
@@ -176,6 +180,7 @@ async fn nested_reuse_fires_when_desired_sig_matches_env_and_live() {
     let chain = serve_chain("any").await;
     let base = format!("http://127.0.0.1:{}", chain.port);
     let cfg_home = tempfile::tempdir().unwrap();
+    let nested_reuse_log = tempfile::tempdir().unwrap();
     let exe = env!("CARGO_BIN_EXE_poverty-mode");
 
     let mut args = vec!["--proxies".to_string(), "pino".to_string()];
@@ -183,6 +188,7 @@ async fn nested_reuse_fires_when_desired_sig_matches_env_and_live() {
 
     let out = StdCommand::new(exe)
         .env("XDG_CONFIG_HOME", cfg_home.path())
+        .env("POVERTY_LOG_DIR", nested_reuse_log.path())
         .env("POVERTY_PROXY_CHAIN", "pino")
         .env("POVERTY_PROXY_HEAD", &base)
         .arg("run")
@@ -208,6 +214,7 @@ async fn cli_proxies_override_env_in_resolution_signature() {
     let chain = serve_chain("any").await;
     let base = format!("http://127.0.0.1:{}", chain.port);
     let cfg_home = tempfile::tempdir().unwrap();
+    let cli_proxies_log = tempfile::tempdir().unwrap();
     let exe = env!("CARGO_BIN_EXE_poverty-mode");
 
     let mut args = vec!["--proxies".to_string(), "headroom".to_string()];
@@ -215,6 +222,7 @@ async fn cli_proxies_override_env_in_resolution_signature() {
 
     let out = StdCommand::new(exe)
         .env("XDG_CONFIG_HOME", cfg_home.path())
+        .env("POVERTY_LOG_DIR", cli_proxies_log.path())
         .env("POVERTY_PROXY_CHAIN", "headroom") // match the cli resolution
         .env("POVERTY_PROXY_HEAD", &base)
         .arg("run")
@@ -254,8 +262,10 @@ async fn run_codex_requires_central_errors_without_central() {
     // binary at the codex path is never executed (the guard fires first), so a
     // non-existent path is fine.
     let cfg_home = tempfile::tempdir().unwrap();
+    let codex_requires_log = tempfile::tempdir().unwrap();
     let out = StdCommand::new(env!("CARGO_BIN_EXE_poverty-mode"))
         .env("XDG_CONFIG_HOME", cfg_home.path())
+        .env("POVERTY_LOG_DIR", codex_requires_log.path())
         .env_remove("POVERTY_PROXY_CHAIN")
         .arg("run")
         .args(["--proxies", "pino"])
@@ -281,10 +291,12 @@ async fn run_codex_reuses_live_chain_end_to_end() {
     let chain = serve_chain("any").await;
     let base = format!("http://127.0.0.1:{}", chain.port);
     let cfg_home = tempfile::tempdir().unwrap();
+    let codex_reuse_log = tempfile::tempdir().unwrap();
     let (_dir, codex) = codex_named_copy();
 
     let out = StdCommand::new(env!("CARGO_BIN_EXE_poverty-mode"))
         .env("XDG_CONFIG_HOME", cfg_home.path())
+        .env("POVERTY_LOG_DIR", codex_reuse_log.path())
         .env("POVERTY_PROXY_CHAIN", "pino,central")
         .env("POVERTY_PROXY_HEAD", &base)
         .arg("run")
@@ -372,9 +384,11 @@ fn exit0_agent() -> Vec<&'static str> {
 #[tokio::test(flavor = "multi_thread")]
 async fn run_save_persists_setting_override_cli_source() {
     let cfg_home = tempfile::tempdir().unwrap();
+    let save_cli_log = tempfile::tempdir().unwrap();
 
     let mut cmd = StdCommand::new(env!("CARGO_BIN_EXE_poverty-mode"));
     cmd.env("XDG_CONFIG_HOME", cfg_home.path())
+        .env("POVERTY_LOG_DIR", save_cli_log.path())
         .env_remove("POVERTY_PROXY_CHAIN")
         .env_remove("ANTHROPIC_BASE_URL")
         .arg("run")
@@ -409,6 +423,7 @@ async fn run_save_persists_setting_override_cli_source() {
 #[tokio::test(flavor = "multi_thread")]
 async fn run_save_persists_setting_override_file_source() {
     let cfg_home = tempfile::tempdir().unwrap();
+    let save_file_log = tempfile::tempdir().unwrap();
 
     // Pre-write a config with pino ENABLED at the default 5m sub-ttl.
     let mut seed = Config::default_all_disabled();
@@ -423,6 +438,7 @@ async fn run_save_persists_setting_override_file_source() {
 
     let mut cmd = StdCommand::new(env!("CARGO_BIN_EXE_poverty-mode"));
     cmd.env("XDG_CONFIG_HOME", cfg_home.path())
+        .env("POVERTY_LOG_DIR", save_file_log.path())
         .env_remove("POVERTY_PROXY_CHAIN")
         .env_remove("ANTHROPIC_BASE_URL")
         .arg("run")
@@ -457,9 +473,11 @@ async fn run_save_persists_setting_override_file_source() {
 #[tokio::test(flavor = "multi_thread")]
 async fn run_save_persists_override_on_disabled_proxy() {
     let cfg_home = tempfile::tempdir().unwrap();
+    let save_disabled_log = tempfile::tempdir().unwrap();
 
     let mut cmd = StdCommand::new(env!("CARGO_BIN_EXE_poverty-mode"));
     cmd.env("XDG_CONFIG_HOME", cfg_home.path())
+        .env("POVERTY_LOG_DIR", save_disabled_log.path())
         .env_remove("POVERTY_PROXY_CHAIN")
         .env_remove("ANTHROPIC_BASE_URL")
         .arg("run")

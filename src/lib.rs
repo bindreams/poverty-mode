@@ -31,6 +31,28 @@ pub use error::{Error, Result};
 pub fn run() -> anyhow::Result<()> {
     use clap::Parser;
     let cli = cli::Cli::parse();
-    logging::init_tracing(cli.log_file.as_deref())?;
-    cli::dispatch(cli)
+
+    // For `run`, every byte of the session's logs lands in one findable dir under
+    // the user log dir; the parent's own tracing goes to `<dir>/main.log` unless an
+    // explicit `--log-file` overrides it. The dir is created BEFORE `init_tracing`
+    // so the global subscriber never targets the terminal the agent will own.
+    let run_id = matches!(cli.command, cli::Command::Run { .. }).then(paths::new_session_name);
+    let session_dir = match &run_id {
+        Some(id) => Some(paths::ensure_run_dir(id)?),
+        None => None,
+    };
+    let log_file = cli
+        .log_file
+        .clone()
+        .or_else(|| session_dir.as_ref().map(|d| d.join("main.log")));
+    logging::init_tracing(log_file.as_deref())?;
+
+    // Emit an info event so that the log file is created on the first startup, even
+    // if no subsequent events reach it in a short-lived run (the MakeWriter opens the
+    // file lazily on first write).
+    if let Some(ref dir) = session_dir {
+        tracing::info!(session_dir = %dir.display(), "poverty-mode run started");
+    }
+
+    cli::dispatch(cli, run_id)
 }

@@ -21,10 +21,13 @@ use super::{health_chain_id, proxy_child_args, read_ready_line, ProxyHopSpec};
 pub struct HopSpec {
     /// The resolved proxy (name + settings → transform flags via `proxy_child_args`).
     pub proxy: ResolvedProxy,
-    /// Per-run ULID identity shared by all hops (R10), stamped as `--run-id`.
+    /// Per-run session name shared by all hops (R10), stamped as `--run-id`.
     pub run_id: String,
     /// `--log-file` destination for this hop.
     pub log_file: PathBuf,
+    /// Per-hop file the child's stderr (its tracing sink) is redirected to, so no
+    /// hop log line reaches the parent terminal.
+    pub stderr_log: PathBuf,
 }
 
 impl HopSpec {
@@ -118,7 +121,7 @@ impl EphemeralManager {
             };
             let spawned = self
                 .group
-                .spawn(&exe, &args, &extra_env)
+                .spawn_with_stderr(&exe, &args, &extra_env, Some(&hop.stderr_log))
                 .map_err(|e| anyhow::anyhow!("spawning proxy hop '{}': {e}", hop.name().as_str()))?;
             let stdout = spawned
                 .stdout
