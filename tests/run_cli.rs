@@ -135,7 +135,7 @@ async fn run_reuses_live_chain_via_nested_guard() {
     let mut cmd = StdCommand::new(exe);
     cmd.env("XDG_CONFIG_HOME", cfg_home.path())
         .env("POVERTY_PROXY_CHAIN", "pino")
-        .env("ANTHROPIC_BASE_URL", &base)
+        .env("POVERTY_PROXY_HEAD", &base)
         .arg("run")
         .args(["--proxies", "pino"])
         .arg("--")
@@ -189,7 +189,7 @@ async fn nested_reuse_fires_when_desired_sig_matches_env_and_live() {
     let out = StdCommand::new(exe)
         .env("XDG_CONFIG_HOME", cfg_home.path())
         .env("POVERTY_PROXY_CHAIN", "pino")
-        .env("ANTHROPIC_BASE_URL", &base)
+        .env("POVERTY_PROXY_HEAD", &base)
         .arg("run")
         .args(&args)
         .output()
@@ -228,7 +228,7 @@ async fn cli_proxies_override_env_in_resolution_signature() {
     let out = StdCommand::new(exe)
         .env("XDG_CONFIG_HOME", cfg_home.path())
         .env("POVERTY_PROXY_CHAIN", "headroom") // match the cli resolution
-        .env("ANTHROPIC_BASE_URL", &base)
+        .env("POVERTY_PROXY_HEAD", &base)
         .arg("run")
         .args(&args)
         .output()

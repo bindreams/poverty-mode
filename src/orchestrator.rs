@@ -639,8 +639,8 @@ pub fn health_chain_id(base: &url::Url) -> Option<String> {
 
 /// Pure nested-reuse decision (design §7 / R10). Reuse the live chain iff:
 /// the desired chain signature is non-empty, the env `POVERTY_PROXY_CHAIN`
-/// equals it, the env `ANTHROPIC_BASE_URL` parses, and that base is LIVE
-/// (probe returns true). Returns `Some(base)` to reuse, else `None`.
+/// equals it, the env `POVERTY_PROXY_HEAD` (the agent-agnostic head; C1) parses,
+/// and that base is LIVE (probe returns true). Returns `Some(base)` to reuse, else `None`.
 ///
 /// The chain-signature match is against the env value (the live chain's
 /// signature), NOT the `/__pm/health` body — the body carries the per-run
@@ -669,14 +669,15 @@ pub fn nested_reuse_decision(
 }
 
 /// Design §7 nested-invocation guard. If our env has `POVERTY_PROXY_CHAIN` equal
-/// to `desired_chain`'s signature and `ANTHROPIC_BASE_URL` set to a LIVE
-/// `/__pm/health`, return `Some(base)` so the caller execs the agent against the
-/// live chain (no second chain). Else `None`. SYNCHRONOUS (calls `health_probe`)
+/// to `desired_chain`'s signature and `POVERTY_PROXY_HEAD` (the agent-agnostic
+/// head; C1) set to a LIVE `/__pm/health`, return `Some(base)` so the caller
+/// execs the agent against the live chain (no second chain). Else `None`.
+/// SYNCHRONOUS (calls `health_probe`)
 /// — invoke via `spawn_blocking` from async (R5; see `run_command`).
 pub fn nested_reuse_check(desired_chain: &[ResolvedProxy]) -> Option<url::Url> {
     let desired_sig = serialize_chain(desired_chain);
     let env_chain = std::env::var("POVERTY_PROXY_CHAIN").ok();
-    let env_base = std::env::var("ANTHROPIC_BASE_URL").ok();
+    let env_base = std::env::var("POVERTY_PROXY_HEAD").ok();
     nested_reuse_decision(&desired_sig, env_chain, env_base, |u| {
         health_probe(u).is_some()
     })
@@ -709,8 +710,10 @@ pub async fn run_command(
         .await
         .map_err(|e| anyhow::anyhow!("nested-reuse probe task join error: {e}"))?;
     if let Some(base) = reuse {
-        let env = compute_agent_env(&chain, central_is_tail(&chain), enable_tool_search, &base);
-        let cmd = agent.build_command(argv, &base, &env);
+        let central_tail = central_is_tail(&chain);
+        let env = compute_agent_env(&chain, central_tail, enable_tool_search, &base);
+        let agent_base = agent_base_for(&base, &agent, central_tail)?;
+        let cmd = agent.build_command(argv, &agent_base, &env);
         return run_agent_forwarding_signals(cmd, agent.name()).await;
     }
 
