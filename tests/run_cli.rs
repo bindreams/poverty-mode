@@ -238,21 +238,34 @@ async fn cli_proxies_override_env_in_resolution_signature() {
     assert!(!stdout.trim().eq("pino"), "must not be the stale env value: {stdout:?}");
 }
 
-/// Copy the test binary to a temp dir under the basename `codex` (`codex.exe` on
-/// Windows) so `select_agent` picks `CodexAgent` for `run -- <copy> …`.
-fn codex_named_copy() -> (tempfile::TempDir, std::path::PathBuf) {
-    let dir = tempfile::tempdir().unwrap();
+/// A `codex`-named hard link to the prebuilt `poverty-mode` binary, so `select_agent` picks
+/// `CodexAgent` for `run -- <link> …`. A hard link (vs `std::fs::copy`) writes no executable
+/// bytes, so the orchestrator's later exec of it has no write-then-exec `ETXTBSY` window —
+/// copying the 186 MB binary held a write fd open long enough for a concurrent in-process fork to
+/// inherit it and busy the exec under parallel load. The link lives in a unique subdir *next to*
+/// the prebuilt binary (same filesystem, since hard links cannot cross devices) and is removed
+/// when the returned guard drops; it inherits the source inode's `0755` mode, so no chmod needed.
+fn codex_named_link() -> (CodexLink, std::path::PathBuf) {
+    let src = std::path::PathBuf::from(env!("CARGO_BIN_EXE_poverty-mode"));
+    let bindir = src.parent().expect("CARGO_BIN_EXE_poverty-mode has a parent directory");
+    // Process-unique, parallel-safe subdir name (no Date/rand needed).
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = bindir.join(format!("codexlink-{}-{}", std::process::id(), n));
+    std::fs::create_dir_all(&dir).expect("create codex link dir");
     let name = if cfg!(windows) { "codex.exe" } else { "codex" };
-    let dst = dir.path().join(name);
-    std::fs::copy(env!("CARGO_BIN_EXE_poverty-mode"), &dst).expect("copy codex binary");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&dst).unwrap().permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&dst, perms).unwrap();
+    let link = dir.join(name);
+    std::fs::hard_link(&src, &link).expect("hard link codex binary");
+    (CodexLink(dir), link)
+}
+
+/// Removes the temporary `codex` hard-link directory created by [`codex_named_link`].
+struct CodexLink(std::path::PathBuf);
+
+impl Drop for CodexLink {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
     }
-    (dir, dst)
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -284,15 +297,15 @@ async fn run_codex_requires_central_errors_without_central() {
 #[tokio::test(flavor = "multi_thread")]
 async fn run_codex_reuses_live_chain_end_to_end() {
     // Full selection→guard→reuse→codex-exec path through the real CLI. A codex-named
-    // copy makes select_agent pick CodexAgent; the desired chain is `pino,central`
+    // link makes select_agent pick CodexAgent; the desired chain is `pino,central`
     // (central-tail, so the guard passes); POVERTY_PROXY_HEAD points at a fake live
-    // chain so reuse short-circuits (NO real central started). The agent is the copy
+    // chain so reuse short-circuits (NO real central started). The agent is the link
     // running `__codexpost`, which posts <head>/codex/openai/responses → 200.
     let chain = serve_chain("any").await;
     let base = format!("http://127.0.0.1:{}", chain.port);
     let cfg_home = tempfile::tempdir().unwrap();
     let codex_reuse_log = tempfile::tempdir().unwrap();
-    let (_dir, codex) = codex_named_copy();
+    let (_guard, codex) = codex_named_link();
 
     let out = StdCommand::new(env!("CARGO_BIN_EXE_poverty-mode"))
         .env("XDG_CONFIG_HOME", cfg_home.path())

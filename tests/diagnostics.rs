@@ -3,9 +3,6 @@ use predicates::prelude::*;
 use std::path::Path;
 use tempfile::TempDir;
 
-mod common;
-use common::fakebin::write_fake_jbcentral;
-
 /// Build a Command for the binary with explicit, injected state/cache/config roots.
 fn pm(home: &TempDir) -> Command {
     let mut cmd = Command::cargo_bin("poverty-mode").unwrap();
@@ -85,8 +82,9 @@ fn status_reports_configured_external_central() {
     // `--version` first line, not the managed cache. A fake jbcentral keeps this
     // deterministic regardless of what (if anything) is on the runner's PATH.
     let home = TempDir::new().unwrap();
-    // `--version` => known line; `status` => exit 1 (logged out).
-    let exe = write_fake_jbcentral(home.path(), "jbcentral 9.9.9 (fake)", 1);
+    // `--version` => known line; `status` => exit 1 (logged out). Built once at build time
+    // (build.rs) and exec'd, never written here — avoids the write-then-exec ETXTBSY race.
+    let exe = std::path::Path::new(env!("PM_FAKE_JBCENTRAL_VERSION"));
     seed_central_config(&home, &format!("    executable: {}\n", exe.display()));
 
     pm(&home)
