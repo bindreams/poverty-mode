@@ -946,3 +946,31 @@ fn agent_env_includes_poverty_proxy_head() {
     let env = compute_agent_env(&chain, false, true, &head);
     assert_eq!(get(&env, "POVERTY_PROXY_HEAD"), Some("http://127.0.0.1:4100/"));
 }
+
+/// Regression guard for the parent-side SIGTERM race: `run_agent_forwarding_signals` must arm the
+/// SIGINT/SIGTERM handlers BEFORE spawning the agent, so a signal racing the agent's startup is
+/// forwarded rather than taking SIGTERM's default (orchestrator-killing) disposition. The ordering
+/// is invisible to the `chain_signals` integration test (it raises SIGTERM only after the agent's
+/// STARTED marker, which is causally after both spawn and arm), so this drives the real function
+/// and asserts the arm step is stamped before the spawn step (see `super::arm_order`).
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn sigterm_handler_armed_before_agent_spawn() {
+    use std::sync::atomic::Ordering::SeqCst;
+    super::arm_order::reset();
+    // A trivially-exiting agent; only the arm-vs-spawn order recorded during setup matters.
+    let status = super::run_agent_forwarding_signals(tokio::process::Command::new("true"), "guard")
+        .await
+        .expect("run_agent_forwarding_signals");
+    assert!(status.success(), "the `true` agent exits 0");
+    let arm = super::arm_order::ARM_TICK.load(SeqCst);
+    let spawn = super::arm_order::SPAWN_TICK.load(SeqCst);
+    assert!(
+        arm > 0 && spawn > 0,
+        "both steps must be stamped (arm={arm}, spawn={spawn})"
+    );
+    assert!(
+        arm < spawn,
+        "SIGTERM handler must be armed (tick {arm}) before the agent is spawned (tick {spawn})"
+    );
+}

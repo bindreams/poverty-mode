@@ -346,18 +346,30 @@ async fn run_agent_forwarding_signals(
     mut cmd: tokio::process::Command,
     agent_name: &str,
 ) -> anyhow::Result<std::process::ExitStatus> {
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| anyhow::anyhow!("spawning agent '{agent_name}': {e}"))?;
-
     #[cfg(unix)]
     {
-        let child_pid = child.id();
         use tokio::signal::unix::{signal, SignalKind};
+        // Arm the SIGINT/SIGTERM handlers BEFORE spawning the agent. Tokio installs the
+        // process-global OS handler when the `Signal` is created and records a signal delivered
+        // after creation even before the first `recv()` poll, so arming-then-spawning is a real
+        // happens-before edge: a signal racing the agent's startup is caught and forwarded, never
+        // taking the default (orchestrator-killing) disposition. Arming AFTER spawn left a window
+        // in which a forwarded SIGTERM could kill the orchestrator itself.
         let mut sigint =
             signal(SignalKind::interrupt()).map_err(|e| anyhow::anyhow!("installing SIGINT handler: {e}"))?;
         let mut sigterm =
             signal(SignalKind::terminate()).map_err(|e| anyhow::anyhow!("installing SIGTERM handler: {e}"))?;
+        // Regression seam (test-only, zero cost in production): stamp that arming completed before
+        // the spawn below, so `orchestrator_tests::sigterm_handler_armed_before_agent_spawn` can
+        // assert arm-before-spawn — an ordering the `chain_signals` integration test cannot observe.
+        #[cfg(test)]
+        arm_order::stamp_arm();
+        #[cfg(test)]
+        arm_order::stamp_spawn();
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| anyhow::anyhow!("spawning agent '{agent_name}': {e}"))?;
+        let child_pid = child.id();
         loop {
             tokio::select! {
                 status = child.wait() => {
@@ -375,6 +387,9 @@ async fn run_agent_forwarding_signals(
 
     #[cfg(windows)]
     {
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| anyhow::anyhow!("spawning agent '{agent_name}': {e}"))?;
         loop {
             tokio::select! {
                 status = child.wait() => {
@@ -830,6 +845,38 @@ fn ensure_central_started_with(chain: &[ResolvedProxy], ops: &dyn CentralOps) ->
         anyhow::bail!("JB Central started but /health did not report healthy");
     }
     Ok(info)
+}
+
+/// Test-only instrumentation for the parent-side SIGTERM ordering guard
+/// (`orchestrator_tests::sigterm_handler_armed_before_agent_spawn`). Stamps are test-only — zero
+/// cost in production and absent from the (non-test) lib that integration tests link. Gated on
+/// `unix` too: the stamps live in the `#[cfg(unix)]` arm and the guard test is `#[cfg(unix)]`, so
+/// on Windows nothing references this module (a bare `#[cfg(test)]` would be dead code there).
+#[cfg(all(test, unix))]
+pub(crate) mod arm_order {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static CLOCK: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static ARM_TICK: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SPAWN_TICK: AtomicU64 = AtomicU64::new(0);
+
+    fn tick() -> u64 {
+        CLOCK.fetch_add(1, Ordering::SeqCst) + 1
+    }
+    /// Reset the stamps before driving `run_agent_forwarding_signals` in the guard test.
+    pub(crate) fn reset() {
+        CLOCK.store(0, Ordering::SeqCst);
+        ARM_TICK.store(0, Ordering::SeqCst);
+        SPAWN_TICK.store(0, Ordering::SeqCst);
+    }
+    /// Stamp the moment the SIGINT/SIGTERM handlers finished arming.
+    pub(crate) fn stamp_arm() {
+        ARM_TICK.store(tick(), Ordering::SeqCst);
+    }
+    /// Stamp the moment just before the agent is spawned.
+    pub(crate) fn stamp_spawn() {
+        SPAWN_TICK.store(tick(), Ordering::SeqCst);
+    }
 }
 
 #[cfg(test)]
