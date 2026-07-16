@@ -182,6 +182,12 @@ impl BodyTransform for PinoTransform {
         if !body.is_object() {
             return Ok(());
         }
+        // An already-invalid input (CC's choice) is transformed normally and left for the
+        // API to arbitrate; the guard below only catches REGRESSING a valid one.
+        let input_valid = messages_structure_is_api_valid(body);
+        if !input_valid {
+            tracing::debug!("pino: input messages array was already API-invalid before transform");
+        }
         // Operation order mirrors reference/pino/src/server.js lines 70-98:
         // 1. model override (replaces body.model + rewrites system self-references).
         if let Some(model) = self.settings.model_override.as_deref() {
@@ -200,7 +206,7 @@ impl BodyTransform for PinoTransform {
             };
             apply_auto_cache(body, ttl);
         }
-        Ok(())
+        check_invariant(input_valid, body)
     }
 
     // R6: apply the 1h-cache beta header only when auto_cache is on (matches
@@ -427,14 +433,21 @@ fn scrub_reminders_from_messages(body: &mut Value, drop: &[String]) {
 
 // --- restructureV123 (default.js lines 126-208) ----------------------------------------------------------------------
 
-// Ported verbatim from reference/pino/src/transforms/default.js restructureV123
-// (lines 126-208). Normalizes string content to arrays, extracts core-context
-// blocks (ToolSearch / claudeMd / .claude paths) into messages[0], removes stale
-// scaffolding from non-tail history, dedupes core blocks, sets msg0.role=user, and
-// prunes emptied messages. R19: full parity, runs before cache injection. The Node
-// source wraps the body in try/catch (logs and swallows); this port is panic-free
-// by construction (pure serde_json::Value manipulation), so no catch is needed —
-// the only cosmetic divergence is the absence of console logging.
+// Ported from reference/pino/src/transforms/default.js restructureV123 (lines 126-208):
+// normalizes string content to arrays, hoists core-context blocks (ToolSearch / claudeMd
+// / .claude paths) into the first user message, removes stale scaffolding from non-tail
+// history, dedupes core blocks, and prunes emptied messages. Runs before cache injection.
+//
+// DELIBERATE divergence from the reference (which the reference lacks because it was only
+// ever exercised on Opus 4.7): the reference scavenges every message and prunes anything
+// it empties, which on Opus 4.8 traffic corrupts the array three ways — pruning the tail
+// task-notification (ends-on-assistant), pruning a mid-conversation role:"system"
+// predecessor (orphaned system), and stripping an assistant turn's trailing text to leave
+// a `thinking` block. So here: only role:"user" messages are scavenged, load-bearing
+// messages are never emptied or pruned (see compute_load_bearing), and core is hoisted
+// into the first user message (never a non-user msg0, so a directive/assistant turn is
+// never role-stomped). messages_structure_is_api_valid + check_invariant back this with a
+// passthrough guard. Panic-free by construction; no try/catch needed.
 
 fn is_core_context(t: &str) -> bool {
     if t.contains("<local-command-stdout>") || t.contains("<local-command-caveat>") {
@@ -448,6 +461,48 @@ fn is_stale_removable(t: &str) -> bool {
         || t.starts_with("<local-command-stdout>")
         || t.starts_with("<local-command-caveat>")
         || t.starts_with("<command-name>")
+}
+
+/// Flags each message that must not be emptied or pruned by restructuring: the tail, a
+/// `role:"system"` message, or the immediate predecessor of one. Divergence from
+/// reference pino. (msg0 is intentionally NOT blanket-protected: step-3 assembly already
+/// keeps it non-empty when core context exists, and blanket protection would reopen a
+/// within-msg0 content duplication.)
+fn compute_load_bearing(messages: &[Value]) -> Vec<bool> {
+    let n = messages.len();
+    let role = |i: usize| messages[i].get("role").and_then(|r| r.as_str());
+    (0..n)
+        .map(|i| i == n - 1 || role(i) == Some("system") || (i + 1 < n && role(i + 1) == Some("system")))
+        .collect()
+}
+
+/// What restructuring does with one content block. Computed once per block and reused by
+/// the "would anything survive?" pre-check and the partition, so the two can't drift.
+enum BlockFate {
+    Extract, // core-context: hoist into the first user message
+    Drop,    // stale scaffolding in history
+    Keep,    // everything else: tool_use / tool_result / image / normal text / tail reminders
+}
+
+/// Only `role:"user"` messages are scavenged (`is_user`): core context is user-side
+/// (reminders / tool-results), and scavenging an assistant turn can strip its trailing
+/// text and leave it ending in a `thinking` block, while scavenging a system message
+/// would corrupt a directive. A core block is never dropped as stale — core-ness shields
+/// it. Extracted core is hoisted into the first user message (step 3), never into a
+/// non-user `messages[0]`, so no directive/assistant turn is ever role-stomped.
+fn classify_block(block: &Value, is_tail: bool, is_user: bool) -> BlockFate {
+    if !is_user {
+        return BlockFate::Keep;
+    }
+    if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+        if is_core_context(text) {
+            return BlockFate::Extract;
+        }
+        if !is_tail && is_stale_removable(text) {
+            return BlockFate::Drop;
+        }
+    }
+    BlockFate::Keep
 }
 
 fn restructure_v123(body: &mut Value) {
@@ -471,34 +526,50 @@ fn restructure_v123(body: &mut Value) {
     }
 
     let last_index = messages.len() - 1;
+    let load_bearing = compute_load_bearing(messages);
     let mut core_blocks: Vec<Value> = Vec::new();
 
-    // 2. Process ALL messages: extract core context, drop stale scaffolding from history.
+    // 2. Extract core context / drop stale scaffolding from user messages only — but
+    //    NEVER empty a load-bearing message: if processing would leave it with zero
+    //    blocks, keep it verbatim.
     for (i, msg) in messages.iter_mut().enumerate() {
+        let is_user = msg.get("role").and_then(|r| r.as_str()) == Some("user");
         let content = match msg.get_mut("content").and_then(|c| c.as_array_mut()) {
             Some(c) => c,
-            None => continue, // Node: if (!Array.isArray(msg.content)) continue;
+            None => continue,
         };
         let is_tail = i == last_index;
         let old = std::mem::take(content);
-        let mut new_content: Vec<Value> = Vec::new();
-        for block in old.into_iter() {
-            if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                if is_core_context(text) {
-                    core_blocks.push(block);
-                    continue;
-                }
-                if !is_tail && is_stale_removable(text) {
-                    continue;
-                }
-            }
-            // Preserve everything else: tool_results, normal text, tool_use, tail reminders.
-            new_content.push(block);
+
+        let fates: Vec<BlockFate> = old.iter().map(|b| classify_block(b, is_tail, is_user)).collect();
+        let survives_any = fates.iter().any(|f| matches!(f, BlockFate::Keep));
+        if load_bearing[i] && !survives_any {
+            *content = old;
+            continue;
         }
+
+        let mut new_content: Vec<Value> = Vec::new();
+        for (block, fate) in old.into_iter().zip(fates) {
+            match fate {
+                BlockFate::Extract => core_blocks.push(block),
+                BlockFate::Drop => {}
+                BlockFate::Keep => new_content.push(block),
+            }
+        }
+        // Structural invariant; the survives_any pre-check guarantees it, and this stays
+        // visible in release (not only the debug build) because a violation would 400.
+        if load_bearing[i] && new_content.is_empty() {
+            tracing::error!(target: "pino::invariant", "load-bearing message {i} emptied by restructure (pino bug)");
+        }
+        debug_assert!(
+            !load_bearing[i] || !new_content.is_empty(),
+            "load-bearing message {i} emptied"
+        );
         *content = new_content;
     }
 
-    // 3. Assemble msg0 with deduped core blocks (first occurrence wins, order preserved).
+    // 3. Hoist deduped core blocks (first occurrence wins) into the first user message.
+    //    Core came from a user message, so a user target always exists.
     if !core_blocks.is_empty() {
         let mut unique_core: Vec<Value> = Vec::new();
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -508,28 +579,153 @@ fn restructure_v123(body: &mut Value) {
                 unique_core.push(b);
             }
         }
-        if let Some(msg0) = messages.get_mut(0) {
-            if let Some(obj) = msg0.as_object_mut() {
-                let existing = obj
-                    .get_mut("content")
-                    .and_then(|c| c.as_array_mut())
-                    .map(std::mem::take)
-                    .unwrap_or_default();
-                let mut combined = unique_core;
-                combined.extend(existing);
-                obj.insert("content".to_string(), Value::Array(combined));
-                obj.insert("role".to_string(), Value::String("user".to_string()));
+        let target = messages
+            .iter()
+            .position(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"));
+        // Core came from a user message, so a user target always exists. Kept visible in
+        // release (like the emptied-load-bearing check) — a violation silently drops content.
+        if target.is_none() {
+            tracing::error!(
+                target: "pino::invariant",
+                "core extracted but no user message to hoist into (pino bug); {} core blocks dropped",
+                unique_core.len()
+            );
+        }
+        debug_assert!(target.is_some(), "core extracted but no user message to hoist into");
+        if let Some(obj) = target.and_then(|idx| messages[idx].as_object_mut()) {
+            let existing = obj
+                .get_mut("content")
+                .and_then(|c| c.as_array_mut())
+                .map(std::mem::take)
+                .unwrap_or_default();
+            let mut combined = unique_core;
+            // Dedup existing against the hoisted core so a target that already holds the
+            // same core text cannot end up with a duplicated block.
+            for b in existing.into_iter() {
+                let dup = b
+                    .get("text")
+                    .and_then(|t| t.as_str())
+                    .map(|t| seen.contains(t))
+                    .unwrap_or(false);
+                if !dup {
+                    combined.push(b);
+                }
             }
+            obj.insert("content".to_string(), Value::Array(combined));
         }
     }
 
-    // 4. Remove completely empty messages (Node: m.content && m.content.length > 0).
+    // 4. Prune emptied messages — but NEVER a load-bearing one. `load_bearing` still
+    //    aligns with `messages` (steps 2-3 never added or removed a message). This keeps
+    //    a directive-only `role:"system"` message that arrived with content:[].
+    let mut i = 0usize;
     messages.retain(|m| {
-        m.get("content")
-            .and_then(|c| c.as_array())
-            .map(|a| !a.is_empty())
-            .unwrap_or(false)
+        let keep = load_bearing[i]
+            || m.get("content")
+                .and_then(|c| c.as_array())
+                .map(|a| !a.is_empty())
+                .unwrap_or(false);
+        i += 1;
+        keep
     });
+}
+
+/// True when a message carries no meaningful content — matching what step-1
+/// normalization produces from an empty string, so the verdict is identical whether the
+/// content arrives as a string or an already-normalized array.
+fn content_is_empty(message: &Value) -> bool {
+    match message.get("content") {
+        None => true,
+        Some(Value::String(s)) => s.is_empty(),
+        Some(Value::Array(blocks)) => blocks.iter().all(|b| {
+            b.get("type").and_then(|t| t.as_str()) == Some("text")
+                && b.get("text")
+                    .and_then(|t| t.as_str())
+                    .map(|s| s.is_empty())
+                    .unwrap_or(true)
+        }),
+        Some(_) => false,
+    }
+}
+
+/// True when `body`'s `messages` array cannot trip the three Anthropic structural rules
+/// this transform must never violate — mirrored verbatim from the three 400 response
+/// bodies pino was observed to produce, nothing more:
+///
+/// 1. "must end with a user message" — the last message must have role "user".
+/// 2. "role 'system' must follow a 'user' message or an 'assistant' message ending in a
+///    server tool result; the directive-only form (content: [] with output_config) is
+///    accepted at any position" — a content-bearing system needs a user/assistant
+///    predecessor; only the directive-only form (content-empty AND output_config) is
+///    legal anywhere.
+/// 3. "the final block in an assistant message cannot be `thinking`" (nor the same
+///    thinking-class `redacted_thinking`).
+///
+/// New behavior; reference pino modelled none of these shapes. The assistant-predecessor
+/// arm is deliberately lenient (any assistant, not only one "ending in a server tool
+/// result"): the precise predicate risks false positives, and load-bearing protection —
+/// not this backstop — is what keeps a system predecessor legal. `content_is_empty`
+/// matches step-1 normalization so the verdict is identical before and after it.
+pub(crate) fn messages_structure_is_api_valid(body: &Value) -> bool {
+    let messages = match body.get("messages").and_then(|m| m.as_array()) {
+        Some(m) => m,
+        None => return true,
+    };
+    let Some(last) = messages.last() else {
+        return false;
+    };
+    if last.get("role").and_then(|r| r.as_str()) != Some("user") {
+        return false;
+    }
+    for (i, m) in messages.iter().enumerate() {
+        match m.get("role").and_then(|r| r.as_str()) {
+            Some("system") => {
+                // The directive-only form — content: [] WITH output_config — is accepted
+                // at any position (string #2). Anything else obeys the predecessor rule.
+                if content_is_empty(m) && m.get("output_config").is_some() {
+                    continue;
+                }
+                if i == 0 {
+                    return false;
+                }
+                match messages[i - 1].get("role").and_then(|r| r.as_str()) {
+                    Some("user") | Some("assistant") => {}
+                    _ => return false,
+                }
+            }
+            Some("assistant") => {
+                // "final block cannot be `thinking`" — `redacted_thinking` is the same
+                // thinking-class block (see headroom HOT_ZONE_BLOCK_TYPES), so it applies too.
+                let last_type = m
+                    .get("content")
+                    .and_then(|c| c.as_array())
+                    .and_then(|a| a.last())
+                    .and_then(|b| b.get("type"))
+                    .and_then(|t| t.as_str());
+                if matches!(last_type, Some("thinking") | Some("redacted_thinking")) {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
+/// Belt-and-suspenders post-transform guard. Returns `Err` — so the engine forwards the
+/// ORIGINAL bytes (known-valid; CC produced them) instead of a 400-shaped body — iff a
+/// valid input was regressed to an invalid output. With the load-bearing protection this
+/// never fires in practice; a firing is a pino bug, logged loudly (distinct target)
+/// rather than swallowed by the engine's generic transform-error warning.
+fn check_invariant(input_valid: bool, body: &Value) -> Result<()> {
+    if input_valid && !messages_structure_is_api_valid(body) {
+        tracing::error!(
+            target: "pino::invariant",
+            "pino regressed a valid messages array to API-invalid; forwarding original body (pino bug)"
+        );
+        anyhow::bail!("pino transform regressed a valid messages array to API-invalid");
+    }
+    Ok(())
 }
 
 fn apply_default_transform(body: &mut Value, settings: &PinoSettings) {
