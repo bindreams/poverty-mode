@@ -1952,3 +1952,717 @@ fn transform_bytes_strip_ansi_on_returns_some() {
     let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
     assert_eq!(v["messages"][0]["content"], json!("red"), "ANSI stripped");
 }
+
+// API-structure validator: mirrors the three observed 400s ============================================================
+
+#[test]
+fn api_valid_true_for_conversation_ending_on_user() {
+    let body = json!({ "messages": [
+        { "role": "user", "content": [{ "type": "text", "text": "hi" }] },
+        { "role": "assistant", "content": [{ "type": "text", "text": "hello" }] },
+        { "role": "user", "content": [{ "type": "text", "text": "more" }] }
+    ]});
+    assert!(messages_structure_is_api_valid(&body));
+}
+
+#[test]
+fn api_valid_false_for_conversation_ending_on_assistant() {
+    // 400 #1: "must end with a user message".
+    let body = json!({ "messages": [
+        { "role": "user", "content": [{ "type": "text", "text": "hi" }] },
+        { "role": "assistant", "content": [{ "type": "text", "text": "hello" }] }
+    ]});
+    assert!(!messages_structure_is_api_valid(&body));
+}
+
+#[test]
+fn api_valid_false_for_empty_messages_array() {
+    assert!(!messages_structure_is_api_valid(&json!({ "messages": [] })));
+}
+
+#[test]
+fn api_valid_true_when_no_messages_field() {
+    assert!(messages_structure_is_api_valid(&json!({ "model": "x" })));
+}
+
+#[test]
+fn api_valid_true_for_directive_only_system_anywhere() {
+    // 400 #2: "directive-only form (content: [] with output_config) accepted at any
+    // position", incl. first.
+    let body = json!({ "messages": [
+        { "role": "system", "content": [], "output_config": {} },
+        { "role": "user", "content": [{ "type": "text", "text": "hi" }] }
+    ]});
+    assert!(messages_structure_is_api_valid(&body));
+}
+
+#[test]
+fn api_valid_content_empty_system_without_output_config_obeys_placement() {
+    // content:[] WITHOUT output_config is NOT the directive-only form -> it obeys the
+    // predecessor rule: invalid at index 0, valid after a user.
+    let at_zero = json!({ "messages": [
+        { "role": "system", "content": [] },
+        { "role": "user", "content": [{ "type": "text", "text": "hi" }] }
+    ]});
+    assert!(!messages_structure_is_api_valid(&at_zero));
+    let after_user = json!({ "messages": [
+        { "role": "user", "content": [{ "type": "text", "text": "hi" }] },
+        { "role": "system", "content": [] },
+        { "role": "user", "content": [{ "type": "text", "text": "more" }] }
+    ]});
+    assert!(messages_structure_is_api_valid(&after_user));
+}
+
+#[test]
+fn api_valid_false_for_content_bearing_system_as_first_message() {
+    let body = json!({ "messages": [
+        { "role": "system", "content": [{ "type": "text", "text": "directive" }] },
+        { "role": "user", "content": [{ "type": "text", "text": "hi" }] }
+    ]});
+    assert!(!messages_structure_is_api_valid(&body));
+}
+
+#[test]
+fn api_valid_true_for_content_system_following_user() {
+    let body = json!({ "messages": [
+        { "role": "user", "content": [{ "type": "text", "text": "hi" }] },
+        { "role": "system", "content": [{ "type": "text", "text": "directive" }] },
+        { "role": "user", "content": [{ "type": "text", "text": "more" }] }
+    ]});
+    assert!(messages_structure_is_api_valid(&body));
+}
+
+#[test]
+fn api_valid_true_for_content_system_following_assistant() {
+    // Exercises the lenient assistant-predecessor arm.
+    let body = json!({ "messages": [
+        { "role": "user", "content": [{ "type": "text", "text": "hi" }] },
+        { "role": "assistant", "content": [{ "type": "text", "text": "ok" }] },
+        { "role": "system", "content": [{ "type": "text", "text": "directive" }] },
+        { "role": "user", "content": [{ "type": "text", "text": "more" }] }
+    ]});
+    assert!(messages_structure_is_api_valid(&body));
+}
+
+#[test]
+fn api_valid_content_bearing_system_string_and_array_agree() {
+    // A system message with STRING content "directive" must be judged content-bearing
+    // (not directive-only), matching how it reads after step-1 array-normalization.
+    let as_string = json!({ "messages": [
+        { "role": "system", "content": "directive" },
+        { "role": "user", "content": [{ "type": "text", "text": "hi" }] }
+    ]});
+    let as_array = json!({ "messages": [
+        { "role": "system", "content": [{ "type": "text", "text": "directive" }] },
+        { "role": "user", "content": [{ "type": "text", "text": "hi" }] }
+    ]});
+    assert_eq!(
+        messages_structure_is_api_valid(&as_string),
+        messages_structure_is_api_valid(&as_array)
+    );
+    assert!(!messages_structure_is_api_valid(&as_string));
+}
+
+#[test]
+fn api_valid_empty_string_and_singleton_empty_text_array_agree_for_system() {
+    // `content: ""` and its normalized form `[{text:""}]` must be judged the same (both
+    // content-empty), or the guard bails spuriously after step-1 normalization. With
+    // output_config present, both are the directive-only form -> valid anywhere.
+    let as_string = json!({ "messages": [
+        { "role": "system", "content": "", "output_config": {} },
+        { "role": "user", "content": [{ "type": "text", "text": "hi" }] }
+    ]});
+    let normalized = json!({ "messages": [
+        { "role": "system", "content": [{ "type": "text", "text": "" }], "output_config": {} },
+        { "role": "user", "content": [{ "type": "text", "text": "hi" }] }
+    ]});
+    assert_eq!(
+        messages_structure_is_api_valid(&as_string),
+        messages_structure_is_api_valid(&normalized)
+    );
+    assert!(
+        messages_structure_is_api_valid(&as_string),
+        "empty-content system with output_config is valid anywhere"
+    );
+}
+
+#[test]
+fn api_valid_false_for_content_system_following_system() {
+    // Two content-bearing systems: the second's predecessor is "system" -> invalid.
+    let body = json!({ "messages": [
+        { "role": "user", "content": [{ "type": "text", "text": "hi" }] },
+        { "role": "system", "content": [{ "type": "text", "text": "d1" }] },
+        { "role": "system", "content": [{ "type": "text", "text": "d2" }] },
+        { "role": "user", "content": [{ "type": "text", "text": "more" }] }
+    ]});
+    assert!(!messages_structure_is_api_valid(&body));
+}
+
+#[test]
+fn api_valid_false_for_assistant_ending_in_thinking() {
+    // 400 #3: "the final block in an assistant message cannot be `thinking`".
+    let body = json!({ "messages": [
+        { "role": "user", "content": [{ "type": "text", "text": "hi" }] },
+        { "role": "assistant", "content": [{ "type": "thinking", "thinking": "hmm", "signature": "s" }] },
+        { "role": "user", "content": [{ "type": "text", "text": "more" }] }
+    ]});
+    assert!(!messages_structure_is_api_valid(&body));
+}
+
+#[test]
+fn api_valid_true_for_assistant_ending_in_text_after_thinking() {
+    let body = json!({ "messages": [
+        { "role": "user", "content": [{ "type": "text", "text": "hi" }] },
+        { "role": "assistant", "content": [
+            { "type": "thinking", "thinking": "hmm", "signature": "s" },
+            { "type": "text", "text": "answer" }
+        ]},
+        { "role": "user", "content": [{ "type": "text", "text": "more" }] }
+    ]});
+    assert!(messages_structure_is_api_valid(&body));
+}
+
+#[test]
+fn api_valid_false_for_assistant_ending_in_redacted_thinking() {
+    // `redacted_thinking` is the same thinking-class block as `thinking` (400 #3).
+    let body = json!({ "messages": [
+        { "role": "user", "content": [{ "type": "text", "text": "hi" }] },
+        { "role": "assistant", "content": [{ "type": "redacted_thinking", "data": "xyz" }] },
+        { "role": "user", "content": [{ "type": "text", "text": "more" }] }
+    ]});
+    assert!(!messages_structure_is_api_valid(&body));
+}
+
+#[test]
+fn api_valid_system_content_absent_is_empty_but_null_is_content_bearing() {
+    // content ABSENT => content-empty: directive-only with output_config (valid at index 0),
+    // else obeys the predecessor rule (invalid at index 0).
+    let absent_with_oc = json!({ "messages": [
+        { "role": "system", "output_config": {} },
+        { "role": "user", "content": [{ "type": "text", "text": "hi" }] }
+    ]});
+    assert!(messages_structure_is_api_valid(&absent_with_oc));
+    let absent_no_oc = json!({ "messages": [
+        { "role": "system" },
+        { "role": "user", "content": [{ "type": "text", "text": "hi" }] }
+    ]});
+    assert!(!messages_structure_is_api_valid(&absent_no_oc));
+    // content: null is a present, non-empty value => content-bearing: NOT directive-only,
+    // so invalid at index 0 even with output_config.
+    let null_with_oc = json!({ "messages": [
+        { "role": "system", "content": null, "output_config": {} },
+        { "role": "user", "content": [{ "type": "text", "text": "hi" }] }
+    ]});
+    assert!(!messages_structure_is_api_valid(&null_with_oc));
+}
+
+// invariant guard: bail / ok / skip paths =============================================================================
+
+#[test]
+fn invariant_guard_bails_when_valid_input_regressed_to_invalid() {
+    // input_valid=true + an invalid body (ends on assistant) -> Err (engine forwards original).
+    let invalid = json!({ "messages": [
+        { "role": "user", "content": [{ "type": "text", "text": "hi" }] },
+        { "role": "assistant", "content": [{ "type": "text", "text": "bye" }] }
+    ]});
+    assert!(check_invariant(true, &invalid).is_err());
+}
+
+#[test]
+fn invariant_guard_ok_when_output_valid() {
+    let valid = json!({ "messages": [
+        { "role": "user", "content": [{ "type": "text", "text": "hi" }] },
+        { "role": "assistant", "content": [{ "type": "text", "text": "ok" }] },
+        { "role": "user", "content": [{ "type": "text", "text": "more" }] }
+    ]});
+    assert!(check_invariant(true, &valid).is_ok());
+}
+
+#[test]
+fn invariant_guard_skips_when_input_already_invalid() {
+    // input_valid=false -> never bail, even on an invalid body (CC's choice).
+    let invalid = json!({ "messages": [
+        { "role": "user", "content": [{ "type": "text", "text": "hi" }] },
+        { "role": "assistant", "content": [{ "type": "text", "text": "bye" }] }
+    ]});
+    assert!(check_invariant(false, &invalid).is_ok());
+}
+
+// restructure must not corrupt load-bearing messages ==================================================================
+
+/// A faithful post-workflow `<task-notification>` tail block: its `<diagnostics>` line
+/// references `.claude/projects/.../subagents`, the substring that trips
+/// `is_core_context` in every real failing transcript.
+fn task_notification_text() -> &'static str {
+    "<task-notification>\n<task-id>wy3eba3li</task-id>\n<tool-use-id>toolu_01ABC</tool-use-id>\n\
+     <result>Review panel complete: 0 must_fix.</result>\n\
+     <diagnostics>Per-agent results: /Users/me/.claude/projects/-Users-me-src-proj/abc/subagents</diagnostics>\n\
+     </task-notification>"
+}
+
+fn last_role(body: &serde_json::Value) -> Option<String> {
+    body["messages"]
+        .as_array()?
+        .last()?
+        .get("role")?
+        .as_str()
+        .map(|s| s.to_string())
+}
+
+#[test]
+fn repro_prefill_variant_tail_task_notification_is_not_pruned() {
+    // Post-workflow shape: an assistant "running in the background" turn, then a tail user
+    // message whose ONLY block is the core-context task-notification.
+    let t = PinoTransform {
+        settings: restructure_settings(),
+    };
+    let mut body = json!({ "messages": [
+        { "role": "user", "content": [{ "type": "text", "text": "please run the review panel in the background" }] },
+        { "role": "assistant", "content": [{ "type": "text", "text": "The review panel is running in the background. I'll report when it finishes." }] },
+        { "role": "user", "content": [{ "type": "text", "text": task_notification_text() }] }
+    ]});
+    t.transform(&mut body, &main_ctx()).unwrap();
+    // Independent (not validator-derived) checks: ends on user, and the tail is verbatim.
+    assert_eq!(
+        last_role(&body).as_deref(),
+        Some("user"),
+        "must still end on the user task-notification"
+    );
+    let tail = body["messages"].as_array().unwrap().last().unwrap();
+    assert_eq!(
+        tail,
+        &json!({ "role": "user", "content": [{ "type": "text", "text": task_notification_text() }] }),
+        "the load-bearing tail must be preserved verbatim"
+    );
+}
+
+#[test]
+fn repro_system_variant_predecessor_is_not_pruned() {
+    // A mid-conversation role:"system" message whose predecessor user message is
+    // all-core-context; that predecessor must survive restructuring intact.
+    let t = PinoTransform {
+        settings: restructure_settings(),
+    };
+    let mut body = json!({ "messages": [
+        { "role": "user", "content": [{ "type": "text", "text": "start" }] },
+        { "role": "assistant", "content": [{ "type": "text", "text": "working" }] },
+        { "role": "user", "content": [{ "type": "text", "text": "<system-reminder>deferred tools: ToolSearch catalog</system-reminder>" }] },
+        { "role": "system", "content": [{ "type": "text", "text": "Opus 4.8 mid-conversation directive" }] },
+        { "role": "user", "content": [{ "type": "text", "text": "normal final question" }] }
+    ]});
+    t.transform(&mut body, &main_ctx()).unwrap();
+    // Independent check: the system message keeps a user predecessor (not orphaned).
+    let msgs = body["messages"].as_array().unwrap();
+    let sys_idx = msgs
+        .iter()
+        .position(|m| m["role"] == json!("system"))
+        .expect("system message present");
+    assert!(sys_idx > 0, "system message must not be first");
+    assert_eq!(
+        msgs[sys_idx - 1]["role"],
+        json!("user"),
+        "system message must keep its user predecessor"
+    );
+}
+
+#[test]
+fn repro_thinking_final_variant_assistant_not_left_ending_in_thinking() {
+    // An assistant turn [thinking, text] whose trailing text mentions a .claude/projects
+    // path. Current code extracts that core-context text, leaving [thinking].
+    let t = PinoTransform {
+        settings: restructure_settings(),
+    };
+    let mut body = json!({ "messages": [
+        { "role": "user", "content": [{ "type": "text", "text": "start" }] },
+        { "role": "assistant", "content": [
+            { "type": "thinking", "thinking": "planning next step", "signature": "sig" },
+            { "type": "text", "text": "The panel is running; per-agent results under /Users/me/.claude/projects/proj/subagents." }
+        ]},
+        { "role": "user", "content": [{ "type": "text", "text": "next question" }] }
+    ]});
+    t.transform(&mut body, &main_ctx()).unwrap();
+    // Independent check: the assistant turn is preserved verbatim (so its last block is the
+    // text, not thinking).
+    assert_eq!(
+        body["messages"][1]["content"],
+        json!([
+            { "type": "thinking", "thinking": "planning next step", "signature": "sig" },
+            { "type": "text", "text": "The panel is running; per-agent results under /Users/me/.claude/projects/proj/subagents." }
+        ]),
+        "the assistant turn must be preserved verbatim (never scavenged, never left ending in thinking)"
+    );
+}
+
+// compute_load_bearing: tail, system, and system-predecessor protection ===============================================
+
+#[test]
+fn load_bearing_flags_tail_only_in_plain_conversation() {
+    let msgs = json!([
+        { "role": "user", "content": [] },
+        { "role": "assistant", "content": [] },
+        { "role": "user", "content": [] }
+    ]);
+    assert_eq!(compute_load_bearing(msgs.as_array().unwrap()), vec![false, false, true]);
+}
+
+#[test]
+fn load_bearing_flags_system_and_its_predecessor() {
+    let msgs = json!([
+        { "role": "user", "content": [] },      // 0: predecessor of system@1 -> LB
+        { "role": "system", "content": [] },     // 1: system -> LB
+        { "role": "assistant", "content": [] },  // 2: not LB
+        { "role": "user", "content": [] }         // 3: tail -> LB
+    ]);
+    assert_eq!(
+        compute_load_bearing(msgs.as_array().unwrap()),
+        vec![true, true, false, true]
+    );
+}
+
+#[test]
+fn load_bearing_flags_system_as_first_and_as_tail() {
+    let first = json!([
+        { "role": "system", "content": [] },
+        { "role": "user", "content": [] }
+    ]);
+    assert_eq!(compute_load_bearing(first.as_array().unwrap()), vec![true, true]);
+    let tail_sys = json!([
+        { "role": "user", "content": [] },
+        { "role": "system", "content": [] }
+    ]);
+    assert_eq!(compute_load_bearing(tail_sys.as_array().unwrap()), vec![true, true]);
+}
+
+#[test]
+fn load_bearing_flags_adjacent_systems_and_shared_predecessor() {
+    let msgs = json!([
+        { "role": "user", "content": [] },
+        { "role": "system", "content": [] },
+        { "role": "system", "content": [] },
+        { "role": "user", "content": [] }
+    ]);
+    assert_eq!(
+        compute_load_bearing(msgs.as_array().unwrap()),
+        vec![true, true, true, true]
+    );
+}
+
+// pipeline coverage: e2e, over-protection, system-msg0, predecessors, consecutive systems =============================
+
+/// Feature-complete settings (auto_cache + strip_ansi + a representative drop_tools list)
+/// so the e2e test drives the full pipeline. Illustrative, not a mirror of any user config.
+fn full_feature_settings() -> PinoSettings {
+    PinoSettings {
+        auto_cache: true,
+        main_ttl: CacheTtl::OneHour,
+        sub_ttl: CacheTtl::FiveMin,
+        drop_tools: vec!["NotebookEdit".to_string(), "Monitor".to_string()],
+        strip_ansi: true,
+        model_override: None,
+    }
+}
+
+#[test]
+fn post_workflow_body_through_full_pipeline_is_api_valid_and_still_cached() {
+    // Full pipeline, realistic post-workflow shape: API-valid AND still cached (proves the
+    // fix keeps the transform running — it did NOT bail to passthrough).
+    let t = PinoTransform {
+        settings: full_feature_settings(),
+    };
+    let mut body = json!({
+        "model": "claude-opus-4-8",
+        "system": [{ "type": "text", "text": "You are a helpful assistant. ".repeat(50) }],
+        "messages": [
+            { "role": "user", "content": [{ "type": "text", "text": "kick off the review panel in the background" }] },
+            { "role": "assistant", "content": [
+                { "type": "text", "text": "Running the review panel in the background now." },
+                { "type": "tool_use", "id": "toolu_1", "name": "Workflow", "input": {} }
+            ]},
+            { "role": "user", "content": [{ "type": "tool_result", "tool_use_id": "toolu_1", "content": "started" }] },
+            { "role": "user", "content": [{ "type": "text", "text": task_notification_text() }] }
+        ]
+    });
+    t.transform(&mut body, &main_ctx()).unwrap();
+    assert!(messages_structure_is_api_valid(&body), "must be API-valid end-to-end");
+    assert_eq!(last_role(&body).as_deref(), Some("user"));
+    assert!(
+        count_cache_breakpoints(&body) > 0,
+        "auto_cache must still inject breakpoints (not bailed)"
+    );
+}
+
+#[test]
+fn fully_core_mid_history_message_is_still_pruned_and_deduped() {
+    // No over-protection: a fully-core message at a non-load-bearing mid position is still
+    // extracted-and-pruned, its core deduped into msg0 (caching preserved).
+    let t = PinoTransform {
+        settings: restructure_settings(),
+    };
+    let mut body = json!({ "messages": [
+        { "role": "user", "content": [{ "type": "text", "text": "msg0" }] },
+        { "role": "user", "content": [{ "type": "text", "text": "ToolSearch catalog A" }] },
+        { "role": "assistant", "content": [{ "type": "text", "text": "mid" }] },
+        { "role": "user", "content": [{ "type": "text", "text": "tail prose" }] }
+    ]});
+    t.transform(&mut body, &main_ctx()).unwrap();
+    let roles: Vec<&str> = body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["role"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        roles,
+        vec!["user", "assistant", "user"],
+        "fully-core mid-history message still pruned"
+    );
+    assert_eq!(
+        body["messages"][0]["content"][0]["text"],
+        json!("ToolSearch catalog A"),
+        "core hoisted to msg0"
+    );
+}
+
+#[test]
+fn no_duplicate_core_when_protected_msg0_shares_text_with_history() {
+    // msg0 is all-core AND load-bearing (predecessor of system@1), so it is kept verbatim.
+    // A later message carries the SAME core string, which IS extracted. Step-3 must dedup
+    // msg0's kept copy against the hoisted copy so msg0 holds that block exactly once.
+    let t = PinoTransform {
+        settings: restructure_settings(),
+    };
+    let mut body = json!({ "messages": [
+        { "role": "user", "content": [{ "type": "text", "text": "ToolSearch catalog A" }] },
+        { "role": "system", "content": [{ "type": "text", "text": "directive" }] },
+        { "role": "user", "content": [
+            { "type": "text", "text": "ToolSearch catalog A" },
+            { "type": "text", "text": "tail prose" }
+        ]}
+    ]});
+    t.transform(&mut body, &main_ctx()).unwrap();
+    let count = body["messages"][0]["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|b| b["text"] == json!("ToolSearch catalog A"))
+        .count();
+    assert_eq!(count, 1, "core string must appear once in msg0, not duplicated");
+    assert!(messages_structure_is_api_valid(&body));
+}
+
+#[test]
+fn directive_only_system_at_index_zero_survives_with_core_elsewhere() {
+    // System directive at index 0 + core context elsewhere. Hoisting is disabled for a
+    // system-role msg0, so the directive is NOT converted to a user turn.
+    let t = PinoTransform {
+        settings: restructure_settings(),
+    };
+    let mut body = json!({ "messages": [
+        { "role": "system", "content": [], "output_config": {} },
+        { "role": "user", "content": [{ "type": "text", "text": "context with claudeMd reference" }] },
+        { "role": "assistant", "content": [{ "type": "text", "text": "ok" }] },
+        { "role": "user", "content": [{ "type": "text", "text": "final" }] }
+    ]});
+    t.transform(&mut body, &main_ctx()).unwrap();
+    assert_eq!(
+        body["messages"][0]["role"],
+        json!("system"),
+        "system directive at index 0 must not be stomped to user"
+    );
+    // The core block is hoisted into the first user message (index 1), not dropped.
+    let survives = body["messages"].as_array().unwrap().iter().any(|m| {
+        m["content"]
+            .as_array()
+            .is_some_and(|bs| bs.iter().any(|b| b["text"] == json!("context with claudeMd reference")))
+    });
+    assert!(
+        survives,
+        "core-context block must survive (hoisted into the first user message)"
+    );
+    assert!(messages_structure_is_api_valid(&body));
+}
+
+#[test]
+fn directive_only_system_mid_conversation_is_not_pruned() {
+    let t = PinoTransform {
+        settings: restructure_settings(),
+    };
+    let mut body = json!({ "messages": [
+        { "role": "user", "content": [{ "type": "text", "text": "start" }] },
+        { "role": "system", "content": [], "output_config": {} },
+        { "role": "user", "content": [{ "type": "text", "text": "final" }] }
+    ]});
+    t.transform(&mut body, &main_ctx()).unwrap();
+    let has_system = body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|m| m["role"] == json!("system"));
+    assert!(has_system, "directive-only system message must not be pruned");
+    assert!(messages_structure_is_api_valid(&body));
+}
+
+#[test]
+fn system_with_assistant_predecessor_survives_core_pruning() {
+    // A system message whose immediate predecessor is an assistant turn, with a nearby
+    // all-core user message that IS pruned — exercises the assistant-predecessor arm.
+    let t = PinoTransform {
+        settings: restructure_settings(),
+    };
+    let mut body = json!({ "messages": [
+        { "role": "user", "content": [{ "type": "text", "text": "start" }] },
+        { "role": "user", "content": [{ "type": "text", "text": "<system-reminder>ToolSearch catalog</system-reminder>" }] },
+        { "role": "assistant", "content": [{ "type": "text", "text": "ok" }] },
+        { "role": "system", "content": [{ "type": "text", "text": "directive" }] },
+        { "role": "user", "content": [{ "type": "text", "text": "final" }] }
+    ]});
+    t.transform(&mut body, &main_ctx()).unwrap();
+    assert!(messages_structure_is_api_valid(&body));
+    let msgs = body["messages"].as_array().unwrap();
+    assert_eq!(
+        msgs.len(),
+        4,
+        "the non-load-bearing all-core reminder at index 1 must be pruned"
+    );
+    let sys_idx = msgs.iter().position(|m| m["role"] == json!("system")).unwrap();
+    assert_eq!(
+        msgs[sys_idx - 1]["role"],
+        json!("assistant"),
+        "system keeps its assistant predecessor"
+    );
+}
+
+#[test]
+fn consecutive_system_messages_survive_restructure() {
+    // Two adjacent mid-conversation system directives. Index 0 is the predecessor of
+    // system@1, so it is load-bearing and kept verbatim (not pruned despite being core).
+    let t = PinoTransform {
+        settings: restructure_settings(),
+    };
+    let mut body = json!({ "messages": [
+        { "role": "user", "content": [{ "type": "text", "text": "<system-reminder>ToolSearch</system-reminder>" }] },
+        { "role": "system", "content": [{ "type": "text", "text": "d1" }] },
+        { "role": "system", "content": [{ "type": "text", "text": "d2" }] },
+        { "role": "user", "content": [{ "type": "text", "text": "final" }] }
+    ]});
+    t.transform(&mut body, &main_ctx()).unwrap();
+    assert_eq!(
+        body["messages"].as_array().unwrap().len(),
+        4,
+        "index-0 predecessor is protected, nothing pruned"
+    );
+    let count = body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["role"] == json!("system"))
+        .count();
+    assert_eq!(count, 2, "both system messages must survive");
+    assert_eq!(last_role(&body).as_deref(), Some("user"));
+    assert_eq!(
+        body["messages"][0]["content"],
+        json!([{ "type": "text", "text": "<system-reminder>ToolSearch</system-reminder>" }]),
+        "protected index-0 content is kept verbatim, not self-duplicated"
+    );
+}
+
+#[test]
+fn assistant_core_context_preserved_while_user_core_still_hoisted() {
+    // Variant 3 at full scale: an assistant turn [thinking, text(.claude path)] keeps its
+    // text (not scavenged), while a user-side reminder IS still hoisted to msg0.
+    let t = PinoTransform {
+        settings: restructure_settings(),
+    };
+    let mut body = json!({ "messages": [
+        { "role": "user", "content": [{ "type": "text", "text": "msg0" }] },
+        { "role": "user", "content": [{ "type": "text", "text": "<system-reminder>ToolSearch catalog</system-reminder>" }] },
+        { "role": "assistant", "content": [
+            { "type": "thinking", "thinking": "t", "signature": "s" },
+            { "type": "text", "text": "results in /Users/me/.claude/projects/p/subagents" }
+        ]},
+        { "role": "user", "content": [{ "type": "text", "text": "final" }] }
+    ]});
+    t.transform(&mut body, &main_ctx()).unwrap();
+    assert!(messages_structure_is_api_valid(&body));
+    let assistant = body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["role"] == json!("assistant"))
+        .unwrap();
+    let last = assistant["content"].as_array().unwrap().last().unwrap();
+    assert_eq!(last["type"], json!("text"), "assistant not left ending in thinking");
+    assert!(
+        last["text"].as_str().unwrap().contains(".claude/projects"),
+        "assistant core-context text preserved"
+    );
+    let msg0_has_toolsearch = body["messages"][0]["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|b| b["text"].as_str().map(|t| t.contains("ToolSearch")).unwrap_or(false));
+    assert!(
+        msg0_has_toolsearch,
+        "user-side core still hoisted to the first user message"
+    );
+}
+
+// classify_block: direct branch matrix ================================================================================
+
+#[test]
+fn classify_block_keeps_everything_in_non_user_messages() {
+    let core = json!({ "type": "text", "text": "ToolSearch catalog" });
+    let stale = json!({ "type": "text", "text": "<system-reminder>x</system-reminder>" });
+    assert!(matches!(classify_block(&core, false, false), BlockFate::Keep));
+    assert!(matches!(classify_block(&stale, false, false), BlockFate::Keep));
+}
+
+#[test]
+fn classify_block_extracts_core_and_drops_history_stale_in_user_messages() {
+    let core = json!({ "type": "text", "text": "claudeMd path" });
+    let stale = json!({ "type": "text", "text": "<command-name>foo</command-name>" });
+    let plain = json!({ "type": "text", "text": "hello" });
+    let tool = json!({ "type": "tool_use", "id": "t1", "name": "X", "input": {} });
+    assert!(matches!(classify_block(&core, false, true), BlockFate::Extract));
+    assert!(matches!(classify_block(&stale, false, true), BlockFate::Drop)); // non-tail history
+    assert!(matches!(classify_block(&stale, true, true), BlockFate::Keep)); // tail shields stale
+    assert!(matches!(classify_block(&plain, false, true), BlockFate::Keep));
+    assert!(matches!(classify_block(&tool, false, true), BlockFate::Keep)); // non-text block
+}
+
+#[test]
+fn classify_block_core_shields_a_stale_looking_block_from_drop() {
+    // Text that is BOTH core-context (ToolSearch) AND stale-removable (<system-reminder>)
+    // must be Extracted, not Dropped — core-ness wins.
+    let both = json!({ "type": "text", "text": "<system-reminder>ToolSearch catalog</system-reminder>" });
+    assert!(matches!(classify_block(&both, false, true), BlockFate::Extract));
+}
+
+#[test]
+fn load_bearing_single_message_is_trivially_load_bearing() {
+    let one = json!([{ "role": "user", "content": [] }]);
+    assert_eq!(compute_load_bearing(one.as_array().unwrap()), vec![true]);
+}
+
+#[test]
+fn transform_leaves_an_already_invalid_array_alone_without_bailing() {
+    // Input ends on an assistant turn (already API-invalid). transform must run to
+    // completion and return Ok — the guard fires only on a REGRESSION, and input_valid is
+    // computed before mutation. This drives the !input_valid path through transform itself.
+    let t = PinoTransform {
+        settings: full_feature_settings(),
+    };
+    let mut body = json!({
+        "system": [{ "type": "text", "text": "You are helpful. ".repeat(50) }],
+        "messages": [
+            { "role": "user", "content": [{ "type": "text", "text": "hi" }] },
+            { "role": "assistant", "content": [{ "type": "text", "text": "done" }] }
+        ]
+    });
+    assert!(
+        !messages_structure_is_api_valid(&body),
+        "precondition: input is already invalid"
+    );
+    t.transform(&mut body, &main_ctx())
+        .expect("already-invalid input must not bail");
+}
