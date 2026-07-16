@@ -2666,3 +2666,117 @@ fn transform_leaves_an_already_invalid_array_alone_without_bailing() {
     t.transform(&mut body, &main_ctx())
         .expect("already-invalid input must not bail");
 }
+
+// property fuzz: transform never regresses a valid array ==============================================================
+
+/// Small deterministic PRNG (no external dep, no time/entropy) so the fuzz is reproducible.
+struct Lcg(u64);
+impl Lcg {
+    fn next_u64(&mut self) -> u64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        self.0 >> 33
+    }
+    fn pick(&mut self, n: usize) -> usize {
+        (self.next_u64() as usize) % n
+    }
+    fn chance(&mut self, num: u64, den: u64) -> bool {
+        self.next_u64() % den < num
+    }
+}
+
+/// One content block, drawn to cover every fate and the block types real traffic carries:
+/// plain / core / core+stale / stale text, tool_use, tool_result, image, and (for
+/// assistants) thinking.
+fn fuzz_block(rng: &mut Lcg, allow_thinking: bool) -> serde_json::Value {
+    let choices = if allow_thinking { 9 } else { 8 };
+    match rng.pick(choices) {
+        0 => json!({ "type": "text", "text": "plain prose" }),
+        1 => json!({ "type": "text", "text": "context with ToolSearch catalog" }),
+        2 => json!({ "type": "text", "text": "results in /Users/x/.claude/projects/p/subagents" }),
+        3 => json!({ "type": "text", "text": "<system-reminder>ToolSearch deferred tools</system-reminder>" }),
+        4 => json!({ "type": "text", "text": "<command-name>foo</command-name>" }),
+        5 => json!({ "type": "tool_use", "id": "t", "name": "X", "input": {} }),
+        6 => json!({ "type": "tool_result", "tool_use_id": "t", "content": "tool output text" }),
+        7 => json!({ "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "abc" } }),
+        _ => json!({ "type": "thinking", "thinking": "hmm", "signature": "s" }),
+    }
+}
+
+/// A message array that is API-valid by construction: last message is `user`; a
+/// content-bearing system only appears after a user/assistant (else it is directive-only);
+/// an assistant never ends in a thinking block.
+fn fuzz_valid_case(seed: u64) -> serde_json::Value {
+    let mut rng = Lcg(seed);
+    let n = 2 + rng.pick(9); // 2..=10 messages
+    let mut msgs: Vec<serde_json::Value> = Vec::new();
+    for i in 0..n {
+        let is_last = i == n - 1;
+        let role = if is_last {
+            "user"
+        } else {
+            match rng.pick(6) {
+                0 => "system",
+                1 => "assistant",
+                _ => "user",
+            }
+        };
+        if role == "system" {
+            let prev_ok = msgs
+                .last()
+                .and_then(|m| m["role"].as_str())
+                .is_some_and(|r| r == "user" || r == "assistant");
+            if prev_ok && rng.chance(1, 2) {
+                msgs.push(json!({ "role": "system", "content": [{ "type": "text", "text": "directive" }] }));
+            } else {
+                msgs.push(json!({ "role": "system", "content": [], "output_config": {} }));
+            }
+        } else {
+            let k = 1 + rng.pick(4);
+            let mut blocks: Vec<serde_json::Value> =
+                (0..k).map(|_| fuzz_block(&mut rng, role == "assistant")).collect();
+            if role == "assistant" {
+                let ends_thinking = blocks
+                    .last()
+                    .and_then(|b| b["type"].as_str())
+                    .is_some_and(|t| t == "thinking" || t == "redacted_thinking");
+                if ends_thinking {
+                    blocks.push(json!({ "type": "text", "text": "final answer" }));
+                }
+            }
+            msgs.push(json!({ "role": role, "content": blocks }));
+        }
+    }
+    json!({ "messages": msgs })
+}
+
+#[test]
+fn transform_never_regresses_a_valid_array_fuzz() {
+    // For a broad, deterministic space of VALID inputs, the transform must return Ok with
+    // an API-valid output. This is a DRIFT guard between the enforcement (classify_block /
+    // compute_load_bearing) and the validator's known rules: if restructure ever violates
+    // a modeled rule on a valid input, check_invariant bails (Err -> unwrap panic here) or
+    // the output is invalid. It does NOT discover a genuinely-unknown API rule — the
+    // generator and the oracle share the same validator, so a new rule needs empirical
+    // discovery plus a matching fix (as with the original three variants).
+    let settings = [restructure_settings(), full_feature_settings()];
+    for seed in 0..2000u64 {
+        let input = fuzz_valid_case(seed);
+        assert!(
+            messages_structure_is_api_valid(&input),
+            "generator produced an invalid input at seed {seed}: {input}"
+        );
+        for s in &settings {
+            let t = PinoTransform { settings: s.clone() };
+            let mut body = input.clone();
+            t.transform(&mut body, &main_ctx())
+                .unwrap_or_else(|e| panic!("transform bailed on a valid input (seed {seed}): {e}\ninput: {input}"));
+            assert!(
+                messages_structure_is_api_valid(&body),
+                "transform produced an API-invalid output (seed {seed})\ninput:  {input}\noutput: {body}"
+            );
+        }
+    }
+}

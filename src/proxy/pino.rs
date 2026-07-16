@@ -463,6 +463,20 @@ fn is_stale_removable(t: &str) -> bool {
         || t.starts_with("<command-name>")
 }
 
+// The three Anthropic structural rules this transform must never violate are mirrored
+// from observed 400 responses. Each is CHECKED by `messages_structure_is_api_valid` and
+// PREVENTED by a matching enforcement below; a fourth rule must extend BOTH, and the
+// `transform_never_regresses_a_valid_array_fuzz` property test is the net that catches
+// drift between the two:
+//
+//   rule                              enforced by
+//   last message is `user`            the tail is load-bearing (compute_load_bearing)
+//   role:"system" placement           a system and its predecessor are load-bearing
+//   assistant not ending in thinking  assistant messages are never scavenged (classify_block)
+//
+// Load-bearing also preserves CONTENT (the newest tail turn, a system directive), which is
+// not itself a validity rule, so it cannot be derived purely from the validator.
+
 /// Flags each message that must not be emptied or pruned by restructuring: the tail, a
 /// `role:"system"` message, or the immediate predecessor of one. Divergence from
 /// reference pino. (msg0 is intentionally NOT blanket-protected: step-3 assembly already
