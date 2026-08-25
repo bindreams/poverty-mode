@@ -380,17 +380,23 @@ fn health_url_targets_loopback_health_route() {
 
 #[test]
 fn state_files_resolve_under_dot_jetbrains_central() {
-    // Literal expectations: rebuilding them with the same `join` calls the implementation uses
-    // would restate the code and pass no matter which directory it picked.
+    // Assert on components, not a joined string: a `/`-separated literal fails on Windows, and
+    // rebuilding the expectation with the same `join` calls the implementation uses would restate
+    // the code and pass whichever directory it picked.
     let home = std::path::Path::new("/home/someone");
-    assert_eq!(
-        wire_config_path_in(home).to_str().unwrap(),
-        "/home/someone/.jetbrains-central/config.json"
-    );
-    assert_eq!(
-        proxy_pid_path_in(home).to_str().unwrap(),
-        "/home/someone/.jetbrains-central/proxy.pid"
-    );
+    for (path, file) in [
+        (wire_config_path_in(home), "config.json"),
+        (proxy_pid_path_in(home), "proxy.pid"),
+    ] {
+        assert!(path.starts_with(home), "{}", path.display());
+        assert_eq!(path.file_name().unwrap(), file, "{}", path.display());
+        assert_eq!(
+            path.parent().unwrap().file_name().unwrap(),
+            ".jetbrains-central",
+            "{}",
+            path.display()
+        );
+    }
 }
 
 #[test]
