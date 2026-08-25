@@ -287,7 +287,7 @@ pub fn render_status(report: &StatusReport) -> String {
     out
 }
 
-/// Minimal parsed view of `~/.wire/config.json` for the live central probe.
+/// Minimal parsed view of central's `config.json` for the live central probe.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WireConfig {
     pub port: Option<u16>,
@@ -296,7 +296,7 @@ pub struct WireConfig {
 /// Build a Download-mode `CentralProbe` from the independent sources (pure).
 ///
 /// - `install`: the cache-scanned install state (`NotInstalled` or `Installed`).
-/// - `wire`: the parsed `~/.wire/config.json`, if any.
+/// - `wire`: the parsed central `config.json`, if any.
 /// - `login`: the tri-state parsed from `jbcentral status` (Unknown if not probed).
 ///
 /// `running` is left `false` here; the caller flips it to the real `/health` result
@@ -331,7 +331,7 @@ pub async fn probe_health_blocking(port: u16) -> Result<bool> {
     Ok(running)
 }
 
-/// Parse the live-probe port out of `~/.wire/config.json` text. Pure (no I/O).
+/// Parse the live-probe port out of central's `config.json` text. Pure (no I/O).
 ///
 /// Mirrors `central::parse_wire_config`'s port coercion (some jbcentral builds write
 /// `proxy_port` as a string), but unlike that helper this never requires `proxy_secret`:
@@ -346,16 +346,23 @@ pub(crate) fn parse_wire_config_port(contents: &str) -> Option<u16> {
     }
 }
 
-/// Read `~/.wire/config.json` and return its live-probe port. Missing/invalid -> `None`.
+/// Read central's `config.json` and return its live-probe port. Missing/invalid -> `None`.
 /// Blocking filesystem I/O (R5). Secret-free by design (see [`parse_wire_config_port`]).
+///
+/// Delegates path resolution to `central::wire_config_path` so status can never disagree with
+/// the start path about where central's state lives.
 pub(crate) fn wire_config_port() -> Option<u16> {
-    let home = directories::BaseDirs::new()?.home_dir().to_path_buf();
-    let cfg = home.join(".wire").join("config.json");
-    let text = std::fs::read_to_string(&cfg).ok()?;
+    wire_config_port_in(&crate::central::home_dir().ok()?)
+}
+
+/// [`wire_config_port`] against an explicit `home`, so the resolution status actually uses is
+/// testable without touching the real `$HOME` (which resolves either layout via a compat symlink).
+pub(crate) fn wire_config_port_in(home: &std::path::Path) -> Option<u16> {
+    let text = std::fs::read_to_string(crate::central::wire_config_path_in(home)).ok()?;
     parse_wire_config_port(&text)
 }
 
-/// Read `~/.wire/config.json` for the live central probe. Missing/invalid -> port None.
+/// Read central's `config.json` for the live central probe. Missing/invalid -> port None.
 fn read_wire_config() -> Option<WireConfig> {
     Some(WireConfig {
         port: wire_config_port(),

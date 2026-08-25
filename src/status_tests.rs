@@ -407,7 +407,7 @@ fn assemble_probe_no_install_yields_dead_probe() {
 
 #[test]
 fn assemble_probe_installed_no_wire_config() {
-    // Installed but no ~/.wire/config.json: no port, so not running; login from arg.
+    // Installed but no central config.json: no port, so not running; login from arg.
     let install = CentralInstall::Installed {
         versions: vec!["0.2.9".to_string()],
     };
@@ -455,4 +455,25 @@ async fn run_status_async_entry_does_not_panic_on_blocking_probe() {
     let running = probe_health_blocking(port).await.unwrap();
     assert!(running, "fake /health should report running");
     server.join().unwrap();
+}
+
+// #33: status must resolve central's config from the same place the start path does.
+#[test]
+fn wire_config_port_reads_the_central_state_dir() {
+    let home = tempfile::tempdir().unwrap();
+    assert_eq!(wire_config_port_in(home.path()), None);
+
+    // A legacy ~/.wire config is not consulted (single-path resolution).
+    std::fs::create_dir_all(home.path().join(".wire")).unwrap();
+    std::fs::write(
+        home.path().join(".wire").join("config.json"),
+        r#"{ "proxy_port": 111 }"#,
+    )
+    .unwrap();
+    assert_eq!(wire_config_port_in(home.path()), None);
+
+    let dir = home.path().join(".jetbrains-central");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("config.json"), r#"{ "proxy_port": 19516 }"#).unwrap();
+    assert_eq!(wire_config_port_in(home.path()), Some(19516));
 }
