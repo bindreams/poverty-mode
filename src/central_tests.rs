@@ -16,7 +16,7 @@ fn central_wire_upstream_renders_jetbrains_wire_url() {
     assert_eq!(up.host_header(), "127.0.0.1:19516");
 }
 
-// R20: the secret is read from an external file (`~/.wire/config.json`) and may
+// R20: the secret is read from an external file (central's `config.json`) and may
 // contain URL-significant bytes. It MUST be percent-encoded into a single path
 // segment — raw interpolation silently mis-routes the central hop (a `#` truncates
 // the path into a fragment; a `?` injects a query string that later 502s every
@@ -36,7 +36,7 @@ fn central_wire_upstream_percent_encodes_special_secret() {
     assert_eq!(up.host_header(), "127.0.0.1:19516");
 }
 
-// M8.5: central constants (R4) + `~/.wire/config.json` -> CentralInfo parsing.
+// M8.5: central constants (R4) + central `config.json` -> CentralInfo parsing.
 
 #[test]
 fn constants_are_default_version_and_tool_dir() {
@@ -374,14 +374,113 @@ fn health_url_targets_loopback_health_route() {
     assert_eq!(health_url(19516), "http://127.0.0.1:19516/health");
 }
 
+// central state dir (#33) =============================================================================================
+// central was renamed from `jbcentral` at 1.0 and moved its state dir from `~/.wire` to
+// `~/.jetbrains-central`. Resolution is single-path: the legacy dir is never consulted.
+
 #[test]
-fn proxy_pid_path_is_under_dot_wire() {
-    let p = proxy_pid_path().unwrap();
-    assert!(
-        p.ends_with(std::path::Path::new(".wire").join("proxy.pid")),
-        "{}",
-        p.display()
-    );
+fn state_files_resolve_under_dot_jetbrains_central() {
+    // Assert on components, not a joined string: a `/`-separated literal fails on Windows, and
+    // rebuilding the expectation with the same `join` calls the implementation uses would restate
+    // the code and pass whichever directory it picked.
+    let home = std::path::Path::new("/home/someone");
+    for (path, file) in [
+        (wire_config_path_in(home), "config.json"),
+        (proxy_pid_path_in(home), "proxy.pid"),
+    ] {
+        assert!(path.starts_with(home), "{}", path.display());
+        assert_eq!(path.file_name().unwrap(), file, "{}", path.display());
+        assert_eq!(
+            path.parent().unwrap().file_name().unwrap(),
+            ".jetbrains-central",
+            "{}",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn real_home_resolution_matches_the_injectable_seam() {
+    // Pins `home_dir()` into the tested path: the no-arg resolvers must be the `_in` variants
+    // applied to $HOME, not a second, drifting copy of the layout rule.
+    let home = home_dir().unwrap();
+    assert_eq!(wire_config_path().unwrap(), wire_config_path_in(&home));
+    assert_eq!(proxy_pid_path().unwrap(), proxy_pid_path_in(&home));
+}
+
+#[test]
+fn absent_config_is_none_but_corrupt_config_is_an_error() {
+    let home = tempfile::tempdir().unwrap();
+    // Never written: nothing to reuse.
+    assert_eq!(existing_config_in(home.path()).unwrap(), None);
+
+    // Present but unparseable: an error, not a silent "start a second daemon over it".
+    let dir = home.path().join(".jetbrains-central");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("config.json"), "{ not json").unwrap();
+    let err = existing_config_in(home.path()).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(msg.contains("config.json"), "error must name the file: {msg}");
+
+    // Well-formed: parsed through.
+    std::fs::write(
+        dir.join("config.json"),
+        r#"{ "proxy_port": 19516, "proxy_secret": "s" }"#,
+    )
+    .unwrap();
+    assert_eq!(existing_config_in(home.path()).unwrap().unwrap().port, 19516);
+}
+
+#[test]
+fn read_failures_name_the_file_they_came_from() {
+    let home = tempfile::tempdir().unwrap();
+    let missing = format!("{:#}", read_wire_config_in(home.path()).unwrap_err());
+    assert!(missing.contains("config.json"), "{missing}");
+
+    let dir = home.path().join(".jetbrains-central");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("config.json"), "{ \"proxy_port\": 1 }").unwrap();
+    let corrupt = format!("{:#}", read_wire_config_in(home.path()).unwrap_err());
+    assert!(corrupt.contains("config.json"), "{corrupt}");
+    assert!(corrupt.contains("proxy_secret"), "{corrupt}");
+}
+
+#[test]
+fn legacy_dot_wire_layout_is_not_consulted() {
+    // A pre-1.0 `~/.wire` next to no `~/.jetbrains-central` must NOT be picked up: resolution
+    // names the post-1.0 path regardless of what else is on disk.
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join(".wire")).unwrap();
+    std::fs::write(
+        home.path().join(".wire").join("config.json"),
+        r#"{ "proxy_port": 19516, "proxy_secret": "legacy" }"#,
+    )
+    .unwrap();
+
+    let resolved = wire_config_path_in(home.path());
+    assert_eq!(resolved, home.path().join(".jetbrains-central").join("config.json"));
+    assert!(!resolved.exists(), "legacy dir must not satisfy resolution");
+}
+
+#[cfg(unix)]
+#[test]
+fn compat_symlink_layout_resolves_through_to_the_live_config() {
+    // Compat install (this repo's dev Mac): `~/.jetbrains-central` is a symlink to `~/.wire`.
+    // Resolution must read the live config through it.
+    let home = tempfile::tempdir().unwrap();
+    let legacy = home.path().join(".wire");
+    std::fs::create_dir_all(&legacy).unwrap();
+    std::fs::write(
+        legacy.join("config.json"),
+        r#"{ "proxy_port": 19516, "proxy_secret": "live" }"#,
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(&legacy, home.path().join(".jetbrains-central")).unwrap();
+
+    let resolved = wire_config_path_in(home.path());
+    let info = parse_wire_config(&std::fs::read_to_string(&resolved).unwrap()).unwrap();
+    assert_eq!(info.port, 19516);
+    assert_eq!(info.secret, "live");
 }
 
 #[test]

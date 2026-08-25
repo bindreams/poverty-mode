@@ -4,7 +4,7 @@
 //! provides the items the orchestrator (M6) consumes — the started `CentralInfo`
 //! (port + wire secret) and `central_wire_upstream`, which renders the JetBrains
 //! wire URL the pre-central hop (or a central-only agent) targets — plus the M8.5
-//! constants (R4) and `~/.wire/config.json` parsing.
+//! constants (R4) and central `config.json` parsing.
 //!
 //! **R5 contract:** every function here that does filesystem I/O (`read_wire_config`)
 //! — and, as later M8 tasks fill them, every function that shells out or hits the
@@ -29,7 +29,7 @@ pub const INSTALL_TOOL_DIR: &str = "jbcentral";
 /// Characters that must be percent-encoded so the wire secret stays a single,
 /// faithful path segment (R20). Beyond the C0 controls, this encodes the path
 /// terminators (`?`, `#`), the segment separator (`/`), space, and every other
-/// generic-URI delimiter — so an arbitrary secret from `~/.wire/config.json`
+/// generic-URI delimiter — so an arbitrary secret from central's `config.json`
 /// cannot become a fragment, a query, or an extra path component.
 const WIRE_SECRET_SET: &AsciiSet = &CONTROLS
     .add(b' ')
@@ -58,7 +58,7 @@ const WIRE_SECRET_SET: &AsciiSet = &CONTROLS
     .add(b';');
 
 /// What `central::start` reports once central is running: the loopback port it
-/// bound and the wire secret read from `~/.wire/config.json` (design §6).
+/// bound and the wire secret read from central's `config.json` (design §6).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CentralInfo {
     /// The loopback port central bound.
@@ -89,7 +89,7 @@ pub fn central_wire_upstream(info: &CentralInfo) -> anyhow::Result<Upstream> {
     Ok(Upstream { url })
 }
 
-/// Parse the contents of `~/.wire/config.json` into a [`CentralInfo`].
+/// Parse the contents of central's `config.json` into a [`CentralInfo`].
 ///
 /// Fails closed (error, never a default) when the file is unparseable or missing fields, so the
 /// caller never silently bypasses wire. The error message never echoes the raw JSON (it may carry the
@@ -98,7 +98,7 @@ pub fn central_wire_upstream(info: &CentralInfo) -> anyhow::Result<Upstream> {
 /// numeric-string port is coerced.
 pub fn parse_wire_config(contents: &str) -> anyhow::Result<CentralInfo> {
     let value: serde_json::Value =
-        serde_json::from_str(contents).map_err(|_| anyhow!("~/.wire/config.json is not valid JSON"))?;
+        serde_json::from_str(contents).map_err(|_| anyhow!("central's config.json is not valid JSON"))?;
 
     let port = match value.get("proxy_port") {
         Some(serde_json::Value::Number(n)) => n
@@ -110,32 +110,75 @@ pub fn parse_wire_config(contents: &str) -> anyhow::Result<CentralInfo> {
             .parse::<u16>()
             .map_err(|_| anyhow!("proxy_port string is not a u16"))?,
         Some(_) => bail!("proxy_port has an unexpected type"),
-        None => bail!("~/.wire/config.json missing \"proxy_port\""),
+        None => bail!("central's config.json is missing \"proxy_port\""),
     };
 
     let secret = match value.get("proxy_secret") {
         Some(serde_json::Value::String(s)) if !s.is_empty() => s.clone(),
         Some(_) => bail!("proxy_secret has an unexpected type or is empty"),
-        None => bail!("~/.wire/config.json missing \"proxy_secret\""),
+        None => bail!("central's config.json is missing \"proxy_secret\""),
     };
 
     Ok(CentralInfo { port, secret })
 }
 
-/// Default location of the wire config: `~/.wire/config.json`.
-pub fn wire_config_path() -> anyhow::Result<PathBuf> {
-    let home = directories::BaseDirs::new()
+/// The directory name central keeps its state in, under `$HOME`.
+///
+/// central moved here from `~/.wire` when it was renamed from `jbcentral` at 1.0. The legacy
+/// directory is never consulted: a compat install symlinks this name to it, and an external
+/// central 1.0+ writes here directly. A DOWNLOADED central is 0.x and writes `~/.wire` only,
+/// so Download mode cannot be read — see #34, which removes it.
+pub const STATE_DIR: &str = ".jetbrains-central";
+
+/// `$HOME`, or an error naming the failure (never a guess).
+pub(crate) fn home_dir() -> anyhow::Result<PathBuf> {
+    Ok(directories::BaseDirs::new()
         .ok_or_else(|| anyhow!("cannot determine home directory"))?
         .home_dir()
-        .to_path_buf();
-    Ok(home.join(".wire").join("config.json"))
+        .to_path_buf())
 }
 
-/// Read + parse `~/.wire/config.json`. Blocking filesystem I/O (R5).
+/// Central's state directory under `home` (see [`STATE_DIR`]).
+pub fn state_dir_in(home: &Path) -> PathBuf {
+    home.join(STATE_DIR)
+}
+
+/// Location of the wire config under `home`.
+pub fn wire_config_path_in(home: &Path) -> PathBuf {
+    state_dir_in(home).join("config.json")
+}
+
+/// Location of the wire config: `~/.jetbrains-central/config.json`.
+pub fn wire_config_path() -> anyhow::Result<PathBuf> {
+    Ok(wire_config_path_in(&home_dir()?))
+}
+
+/// Read + parse the wire config. Blocking filesystem I/O (R5).
 pub fn read_wire_config() -> anyhow::Result<CentralInfo> {
-    let path = wire_config_path()?;
+    read_wire_config_in(&home_dir()?)
+}
+
+/// Read + parse the wire config under `home`. Both failure modes name the file, so a corrupt
+/// config is never mistaken for a missing one in the surfaced error.
+pub fn read_wire_config_in(home: &Path) -> anyhow::Result<CentralInfo> {
+    let path = wire_config_path_in(home);
     let contents = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-    parse_wire_config(&contents)
+    parse_wire_config(&contents).with_context(|| format!("parsing {}", path.display()))
+}
+
+/// The existing wire config, or `None` when central has never written one.
+///
+/// A config that exists but does not parse is an Err, NOT a `None`: treating a corrupt state dir
+/// as "nothing to reuse" would start a second daemon over it and bury the real cause.
+pub fn existing_config_in(home: &Path) -> anyhow::Result<Option<CentralInfo>> {
+    let path = wire_config_path_in(home);
+    match std::fs::read_to_string(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+        Ok(contents) => Ok(Some(
+            parse_wire_config(&contents).with_context(|| format!("parsing {}", path.display()))?,
+        )),
+    }
 }
 
 /// `…/jbcentral/latest/version.txt` — where the live latest version is published (R4).
@@ -382,13 +425,14 @@ pub fn health_url(port: u16) -> String {
     format!("http://127.0.0.1:{port}/health")
 }
 
-/// Path to jbcentral's daemon PID file: `~/.wire/proxy.pid` (spec 5.7).
+/// Path to central's daemon PID file under `home`.
+pub fn proxy_pid_path_in(home: &Path) -> PathBuf {
+    state_dir_in(home).join("proxy.pid")
+}
+
+/// Path to central's daemon PID file: `~/.jetbrains-central/proxy.pid` (spec 5.7).
 pub fn proxy_pid_path() -> anyhow::Result<PathBuf> {
-    let home = directories::BaseDirs::new()
-        .ok_or_else(|| anyhow!("cannot determine home directory"))?
-        .home_dir()
-        .to_path_buf();
-    Ok(home.join(".wire").join("proxy.pid"))
+    Ok(proxy_pid_path_in(&home_dir()?))
 }
 
 /// Per-request bound for the blocking central health probe (see [`health`]). Bounds
@@ -439,17 +483,17 @@ fn reuse_decision(existing: Option<CentralInfo>, healthy: bool) -> Option<Centra
 
 /// If a wire config already exists AND its daemon answers `/health`, return that `CentralInfo`
 /// (singleton reuse — spec 5.7/§9). The returned `port` is the LIVE daemon's port read from
-/// `~/.wire/config.json`, which may differ from a caller's requested port — see [`start`]'s reuse
+/// central's `config.json`, which may differ from a caller's requested port — see [`start`]'s reuse
 /// note. Returns `None` when there is nothing healthy to reuse.
-fn reuse_if_healthy() -> Option<CentralInfo> {
-    let info = read_wire_config().ok()?;
-    let healthy = health(info.port);
-    reuse_decision(Some(info), healthy)
+fn reuse_if_healthy() -> anyhow::Result<Option<CentralInfo>> {
+    let existing = existing_config_in(&home_dir()?)?;
+    let healthy = existing.as_ref().is_some_and(|info| health(info.port));
+    Ok(reuse_decision(existing, healthy))
 }
 
 /// Start (or reuse) the central singleton. Idempotent: a healthy daemon described
-/// by `~/.wire/config.json` is reused without spawning `bin`. poverty-mode never
-/// runs `config set` (that would mutate the global `~/.wire` shared with the user's
+/// by central's `config.json` is reused without spawning `bin`. poverty-mode never
+/// runs `config set` (that would mutate the global state dir shared with the user's
 /// own central). Login is assumed.
 ///
 /// **Port semantics on reuse:** `port` is a REQUEST honored only when we actually start a new daemon.
@@ -461,7 +505,7 @@ fn reuse_if_healthy() -> Option<CentralInfo> {
 /// **R5 contract:** synchronous (spawns a child process + blocking health GET). Call
 /// via `spawn_blocking` from async code.
 pub fn start(bin: &Path, port: Option<u16>) -> anyhow::Result<CentralInfo> {
-    if let Some(info) = reuse_if_healthy() {
+    if let Some(info) = reuse_if_healthy()? {
         return Ok(info);
     }
     let mut cmd = std::process::Command::new(bin);
@@ -476,8 +520,8 @@ pub fn start(bin: &Path, port: Option<u16>) -> anyhow::Result<CentralInfo> {
         bail!("`jbcentral proxy start` failed (exit {:?})", status.code());
     }
 
-    // jbcentral writes the actual port+secret here after the daemon binds; read it (do not guess).
-    let info = read_wire_config().context("reading ~/.wire/config.json after jbcentral proxy start")?;
+    // central writes the actual port+secret here after the daemon binds; read it (do not guess).
+    let info = read_wire_config().context("reading central's config.json after `central proxy start`")?;
     Ok(info)
 }
 

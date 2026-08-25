@@ -29,7 +29,7 @@ cargo install --path .
 
 This installs a single self-contained `poverty-mode` binary. The first-party `pino`
 and `headroom` proxies are compiled in. The `central` proxy runs `jbcentral` (see
-below): assumed logged in, with poverty-mode never writing `~/.wire` config or
+below): assumed logged in, with poverty-mode never writing central's config or
 driving login.
 
 ## Central executable
