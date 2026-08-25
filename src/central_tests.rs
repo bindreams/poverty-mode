@@ -374,7 +374,7 @@ fn health_url_targets_loopback_health_route() {
     assert_eq!(health_url(19516), "http://127.0.0.1:19516/health");
 }
 
-// central state dir (#33) ============================================================================================
+// central state dir (#33) =============================================================================================
 // central was renamed from `jbcentral` at 1.0 and moved its state dir from `~/.wire` to
 // `~/.jetbrains-central`. Resolution is single-path: the legacy dir is never consulted.
 
