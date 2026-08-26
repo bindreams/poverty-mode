@@ -117,7 +117,7 @@ fn central_executable_edits_and_commits() {
     };
     assert_eq!(c.executable, None);
     // Unset executable renders as the download-fallback marker, not "(default)".
-    assert_eq!(render_value(&s, SettingId::Executable), "(download)");
+    assert_eq!(render_value(&s, SettingId::Executable), "(central)");
     assert!(CENTRAL_SETTINGS.contains(&SettingId::Executable));
 }
 #[test]

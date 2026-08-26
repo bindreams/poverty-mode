@@ -127,13 +127,12 @@ pub fn render_clean_plan(plan: &CleanPlan) -> String {
     out
 }
 
-/// Locate the central binary for `--stop-central`.
+/// The central binary `--stop-central` should spawn: the configured name, UNRESOLVED.
 ///
-/// Uses the ADVISORY locator on purpose: `clean` is not a run, so a best-effort lookup is the right
-/// tool — absence means "nothing to stop" rather than a hard failure.
-fn resolve_central_bin(executable: Option<&str>) -> Result<Option<PathBuf>> {
-    let exe = crate::central::central_executable(executable);
-    Ok(crate::central::locate_executable(&exe))
+/// Deliberately not a lookup. Resolving here would both diverge from what actually spawns and turn a
+/// shadowed non-executable file into a hard `clean` failure; `central::stop` reports absence instead.
+fn central_stop_target(executable: Option<&str>) -> PathBuf {
+    crate::central::central_executable(executable)
 }
 
 /// Read a yes/no answer from stdin. Returns true only for an explicit y/yes.
@@ -156,19 +155,21 @@ fn confirm(prompt: &str) -> Result<bool> {
 /// surfaced (central::stop normalizes "not running" to Ok, so any Err is a real failure).
 fn execute_confirmed_clean(
     plan: &CleanPlan,
-    resolve_bin: impl FnOnce() -> Result<Option<PathBuf>>,
-    stop: impl FnOnce(&Path) -> Result<()>,
+    resolve_bin: impl FnOnce() -> Result<PathBuf>,
+    stop: impl FnOnce(&Path) -> Result<crate::central::StopOutcome>,
 ) -> Result<()> {
-    // Central stop, only if opted in. Resolve + stop BEFORE the cache is cleared so
-    // a `--clear-cache` clean cannot delete the binary out from under the stop step.
+    // Central stop, only if opted in, and BEFORE the filesystem side so a stop failure aborts
+    // without having touched the user's runs or cache.
     if plan.stop_central {
-        match resolve_bin()? {
-            Some(bin) => stop(&bin)?,
-            None => println!("central not installed; nothing to stop"),
+        let bin = resolve_bin()?;
+        match stop(&bin)? {
+            crate::central::StopOutcome::Stopped => {}
+            crate::central::StopOutcome::NotInstalled => {
+                println!("central not installed; nothing to stop");
+            }
         }
     }
 
-    // Filesystem side last (may wipe the cache that held the central binary).
     execute_clean_plan(plan)?;
     Ok(())
 }
@@ -195,9 +196,9 @@ pub fn run_clean(keep: usize, clear_cache: bool, stop_central: bool, assume_yes:
     // Config is read lazily — only when actually stopping central, so a plain `clean` (no
     // `--stop-central`) never loads or parses config. `execute_confirmed_clean` invokes this
     // closure only under `plan.stop_central`.
-    let resolve_bin = || -> Result<Option<PathBuf>> {
+    let resolve_bin = || -> Result<PathBuf> {
         let executable = crate::config::Config::load_or_default()?.central_executable();
-        resolve_central_bin(executable.as_deref())
+        Ok(central_stop_target(executable.as_deref()))
     };
     execute_confirmed_clean(&plan, resolve_bin, crate::central::stop)?;
 

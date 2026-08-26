@@ -903,7 +903,7 @@ async fn sigterm_handler_armed_before_agent_spawn() {
     );
 }
 
-// #34: the run path must NOT pre-resolve the binary. `Path::is_file()` is not executability, so a
+// the run path must NOT pre-resolve the binary. `Path::is_file()` is not executability, so a
 // resolved-then-spawned path can pick a non-executable file that execvp would have skipped.
 #[test]
 fn run_never_pre_resolves_the_binary() {

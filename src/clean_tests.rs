@@ -166,15 +166,15 @@ fn execute_clean_plan_tolerates_already_absent_paths() {
 }
 
 #[test]
-fn resolve_central_bin_uses_an_explicit_executable_verbatim() {
-    // An explicitly configured central must be returned as-is, so a running external singleton is
-    // stopped rather than reported "not installed; nothing to stop".
-    let tmp = tempfile::tempdir().unwrap();
-    let explicit = tmp.path().join("central");
-    std::fs::write(&explicit, "x").unwrap();
-
-    let resolved = resolve_central_bin(Some(explicit.to_str().unwrap())).unwrap();
-    assert_eq!(resolved, Some(explicit));
+fn central_stop_target_is_the_configured_name_unresolved() {
+    // Never a lookup: resolving here would diverge from what actually spawns, and a shadowed
+    // non-executable file on PATH would turn `clean` into a hard failure.
+    assert_eq!(
+        central_stop_target(Some("/opt/jb/central")),
+        PathBuf::from("/opt/jb/central")
+    );
+    assert_eq!(central_stop_target(Some("  ")), PathBuf::from("central"));
+    assert_eq!(central_stop_target(None), PathBuf::from("central"));
 }
 
 #[test]
@@ -195,10 +195,10 @@ fn stop_central_uses_external_executable_when_resolver_returns_it() {
     let stopped: std::cell::RefCell<Option<PathBuf>> = std::cell::RefCell::new(None);
     execute_confirmed_clean(
         &plan,
-        || resolve_central_bin(Some(external.to_str().unwrap())),
+        || Ok(central_stop_target(Some(external.to_str().unwrap()))),
         |bin| {
             *stopped.borrow_mut() = Some(bin.to_path_buf());
-            Ok(())
+            Ok(crate::central::StopOutcome::Stopped)
         },
     )
     .unwrap();
@@ -279,9 +279,9 @@ fn render_clean_plan_empty_says_nothing_to_do() {
     assert!(out.contains("nothing to clean"), "got: {out}");
 }
 
-// #34: when central cannot be located, `clean --stop-central` reports it and does NOT invoke stop.
+// `clean --stop-central` reports an unspawnable central instead of failing the whole clean.
 #[test]
-fn clean_stop_central_is_a_noop_when_binary_is_absent() {
+fn clean_reports_absence_without_aborting_the_filesystem_side() {
     let tmp = tempfile::tempdir().unwrap();
     let runs = tmp.path().join("runs");
     std::fs::create_dir_all(&runs).unwrap();
@@ -293,16 +293,16 @@ fn clean_stop_central_is_a_noop_when_binary_is_absent() {
 
     execute_confirmed_clean(
         &plan,
-        || Ok(None),
+        || Ok(PathBuf::from("poverty-mode-no-such-central-xyz")),
         |_bin| {
             *stopped.borrow_mut() = true;
-            Ok(())
+            Ok(crate::central::StopOutcome::NotInstalled)
         },
     )
     .unwrap();
 
     assert!(
-        !stopped.into_inner(),
-        "stop must not be invoked when the binary could not be located"
+        stopped.into_inner(),
+        "stop is always attempted: only the OS can say whether central is spawnable"
     );
 }

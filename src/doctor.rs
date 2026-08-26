@@ -225,7 +225,7 @@ pub struct CentralConfig {
     pub pinned_version: Option<String>,
 }
 
-/// One `Warn` when a config still carries `pinned_version`: auto-download is gone (#34), so the key
+/// One `Warn` when a config still carries `pinned_version`: auto-download is gone, so the key
 /// is inert. Silently discarding it would leave the user believing they pinned something.
 pub fn analyze_dead_config_keys(pinned_version: Option<&str>) -> Vec<Finding> {
     match pinned_version {

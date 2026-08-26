@@ -9,6 +9,9 @@ use crate::config::ProxySettings;
 use crate::proxy::pino::CacheTtl;
 use crate::proxy::ProxyName;
 
+/// Shown for an unset `central.executable`: the name that will actually be spawned.
+const DEFAULT_PLACEHOLDER: &str = "(central)";
+
 #[cfg(test)]
 #[path = "settings_tests.rs"]
 mod settings_tests;
@@ -222,7 +225,7 @@ pub fn render_value(s: &ProxySettings, id: SettingId) -> String {
                 p.model_override.clone().unwrap_or_else(|| "(default)".to_string())
             }
             (SettingId::Executable, ProxySettings::Central(c)) => {
-                c.executable.clone().unwrap_or_else(|| "(download)".to_string())
+                c.executable.clone().unwrap_or_else(|| DEFAULT_PLACEHOLDER.to_string())
             }
             _ => "(default)".to_string(),
         },

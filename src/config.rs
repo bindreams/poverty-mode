@@ -76,7 +76,7 @@ pub struct CentralSettings {
     pub port: Option<u16>,
     /// DEAD KEY, retained for backward compatibility only.
     ///
-    /// Auto-download is gone (#34), so nothing reads this. It stays declared because
+    /// Auto-download is gone, so nothing reads this. It stays declared because
     /// `deny_unknown_fields` would otherwise turn an existing config that carries it into a hard
     /// load failure. `skip_serializing` keeps it out of anything poverty-mode writes, so it
     /// disappears on the next write instead of being advertised as live configuration. `doctor`
@@ -185,7 +185,7 @@ impl Config {
     }
 
     /// The configured central `pinned_version`, if any. Read ONLY so `doctor` can warn that the key
-    /// is inert (#34) — never used to resolve anything.
+    /// is inert — never used to resolve anything.
     pub fn central_pinned_version(&self) -> Option<String> {
         self.proxies
             .iter()

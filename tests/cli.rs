@@ -32,15 +32,13 @@ fn library_dispatch_is_reachable_for_config_subcommand() {
 // M1.6. They lock in the stub contract so a later milestone wiring a real
 // handler gets an immediate failing test. Not a red->green cycle. ----
 
-/// M10.3 wired `status` to the real handler (R23g): the M3 NotImplemented arm is
-/// gone, so the end-to-end `status` invocation now succeeds. Fully hermetic: an
-/// isolated `XDG_CONFIG_HOME` carries a Download-mode config (`executable: null`) so
-/// status scans the empty `POVERTY_CACHE_DIR` and renders "not installed" without
-/// spawning any external binary; `HOME`/`USERPROFILE` are pinned to the temp dir so
-/// the probe's `~/.wire/config.json` read finds nothing (no real port, no real
+/// End-to-end `status`, fully hermetic: an isolated `XDG_CONFIG_HOME` leaves `executable` unset so
+/// the `central` default is used, and `PATH` is pinned to an empty dir so the spawn reports absence
+/// and "not found" renders without running any external binary. `HOME`/`USERPROFILE` point at the
+/// temp dir so the probe's read of central's `config.json` finds nothing (no real port, no real
 /// `/health` call). An empty `POVERTY_LOG_DIR` yields "no live runs".
 ///
-/// The configured-External path is covered hermetically and cross-platform by
+/// The present-central path is covered hermetically and cross-platform by
 /// `tests/diagnostics.rs::status_reports_configured_external_central`.
 #[test]
 fn status_subcommand_runs_and_renders() {

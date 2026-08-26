@@ -71,7 +71,7 @@ impl CentralOverride {
         if let Some(v) = self.port {
             base.port = Some(v);
         }
-        // Unlike port (where Some always sets), an empty or
+        // Unlike `port` (where `Some` always sets), an empty or
         // whitespace-only executable is a deliberate, explicit clear to Download mode.
         if let Some(v) = &self.executable {
             base.executable = if v.trim().is_empty() { None } else { Some(v.clone()) };

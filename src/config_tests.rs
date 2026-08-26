@@ -769,9 +769,9 @@ fn characterization_default_yaml_has_spec_5_2_shape() {
     assert!(yaml.contains("strip_ansi: true"), "yaml:\n{yaml}");
     // Headroom + central settings shape.
     assert!(yaml.contains("compression: true"), "yaml:\n{yaml}");
-    // Central defaults to the external `central` binary, found on PATH (#34).
+    // Central defaults to the external `central` binary, found on PATH.
     assert!(yaml.contains("executable: central"), "yaml:\n{yaml}");
-    // The dead `pinned_version` key is never written back (#34).
+    // The dead `pinned_version` key is never written back.
     assert!(!yaml.contains("pinned_version"), "yaml:\n{yaml}");
     // central's fields round-trip; re-parsing yields the canonical default.
     let back: Config = serde_yaml::from_str(&yaml).unwrap();
@@ -1019,7 +1019,7 @@ fn entries_for_chain_forces_central_last_even_if_in_chain_middle() {
     assert!(entries.last().unwrap().enabled);
 }
 
-// #34: `pinned_version` is retained ONLY so an existing config still parses under
+// `pinned_version` is retained ONLY so an existing config still parses under
 // `deny_unknown_fields`. It is inert: never read for resolution, never written back.
 
 #[test]

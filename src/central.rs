@@ -133,11 +133,69 @@ pub fn central_executable(configured: Option<&str>) -> PathBuf {
 
 /// The shared "central is not installed" error, naming what was looked for.
 pub fn missing_central_error(exe: &Path) -> anyhow::Error {
+    if is_explicit_path(exe) {
+        return anyhow!(
+            "configured central executable `{}` does not exist — install JetBrains Central or fix `central.executable`",
+            exe.display()
+        );
+    }
     anyhow!(
-        "central executable `{}` not found on PATH — install JetBrains Central and make sure `{}` is on your PATH",
-        exe.display(),
-        DEFAULT_CENTRAL_EXECUTABLE
+        "central executable `{}` not found on PATH — install JetBrains Central and make sure it is on your PATH",
+        exe.display()
     )
+}
+
+/// True when `exe` is a path rather than a bare file name, i.e. `Command` will NOT search `PATH`
+/// for it. Mirrors std's `path::is_file_name` check.
+fn is_explicit_path(exe: &Path) -> bool {
+    exe.components().count() > 1 || exe.is_absolute()
+}
+
+/// Whether a central binary can be spawned at all, and how to label it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Presence {
+    /// `<bin> --version` spawned. `display` is its first non-empty stdout line, or the path when the
+    /// binary ran but produced nothing usable.
+    Present { display: String },
+    /// Spawning reported `NotFound`: for a bare name that means `execvp`/`CreateProcessW` searched
+    /// `PATH` and found nothing runnable.
+    Absent,
+}
+
+/// Ask the OS whether central is really there, by spawning `<bin> --version`.
+///
+/// This is the ONLY presence check callers may act on. It cannot disagree with what a run does,
+/// because it uses the same spawn machinery — unlike [`locate_executable`], whose `is_file` walk
+/// diverges from `execvp` (a non-executable file earlier on `PATH` matches `is_file` but is skipped
+/// by `execvp`, and `.exe` probing rules differ).
+///
+/// **R5 contract:** spawns a child process — call via `spawn_blocking` from async code.
+pub fn probe_presence(bin: &Path) -> Presence {
+    let fallback = || bin.display().to_string();
+    let output = match std::process::Command::new(bin).arg("--version").output() {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Presence::Absent,
+        Err(_) => return Presence::Present { display: fallback() },
+        Ok(o) => o,
+    };
+    if !output.status.success() {
+        return Presence::Present { display: fallback() };
+    }
+    let display = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(fallback);
+    Presence::Present { display }
+}
+
+/// What [`stop`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StopOutcome {
+    /// `central proxy stop` ran (a not-running daemon counts: it is stopped either way).
+    Stopped,
+    /// central could not be spawned at all, so there was nothing to stop.
+    NotInstalled,
 }
 
 /// Map a failure to SPAWN `bin` into a useful error: a `NotFound` means central is not installed,
@@ -150,11 +208,15 @@ fn spawn_error(bin: &Path, e: std::io::Error, subcommand: &str) -> anyhow::Error
     anyhow::Error::new(e).context(format!("running {} {subcommand}", bin.display()))
 }
 
-/// Locate `exe` for REPORTING ONLY — `status` labels, `doctor` findings.
+/// Locate `exe` for ADVISORY REPORTING ONLY — `doctor`'s readiness warning.
 ///
-/// **Never gate a run on this.** `is_file()` is not executability: a `chmod 000` file earlier on
-/// PATH satisfies it, while `execvp` skips such a file and keeps searching. Deciding from here would
-/// fail a setup that actually works. The run path spawns the name and maps `NotFound` instead.
+/// **Never act on this.** `is_file()` is not executability: a `chmod 000` file earlier on `PATH`
+/// matches here while `execvp` skips it and keeps searching. Anything that spawns central must use
+/// [`probe_presence`] or just spawn and map `NotFound`.
+///
+/// The probing rules mirror std's `resolve_exe` so the warning does not contradict a working run:
+/// an explicit path also tries the `.exe`-suffixed form (std appends it), while a bare name gets
+/// `.exe` appended ONLY when it contains no dot at all (std treats any dot as "has an extension").
 pub fn locate_executable(exe: &Path) -> Option<PathBuf> {
     locate_executable_in(exe, std::env::var_os("PATH").as_deref())
 }
@@ -162,33 +224,50 @@ pub fn locate_executable(exe: &Path) -> Option<PathBuf> {
 /// [`locate_executable`] against an explicit `path_var`, so PATH semantics are testable without
 /// mutating the process environment.
 ///
-/// An explicit path (absolute, or carrying any separator) is checked on disk and NEVER searched on
-/// PATH. A bare name is searched across `path_var`, skipping empty entries: POSIX reads an empty
-/// entry as the current directory, which would let the caller's CWD decide which central is
-/// reported. On Windows the `.exe` suffix is APPENDED (`OsString::push`), never applied via
-/// `Path::with_extension`, which truncates at the last dot (`central-0.6.0` -> `central-0.6.exe`).
+/// An explicit path is checked on disk and NEVER searched on `PATH`. A bare name is searched across
+/// `path_var`, skipping empty entries: POSIX reads an empty entry as the current directory, which
+/// would let the caller's CWD decide which central is reported.
 pub fn locate_executable_in(exe: &Path, path_var: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
-    let has_separator = exe.components().count() > 1 || exe.is_absolute();
-    if has_separator {
-        return exe.is_file().then(|| exe.to_path_buf());
+    if is_explicit_path(exe) {
+        return candidates_for(exe).into_iter().find(|c| c.is_file());
     }
     let path_var = path_var?;
     std::env::split_paths(path_var)
         .filter(|dir| !dir.as_os_str().is_empty())
-        .flat_map(|dir| candidates_in(&dir, exe))
+        .flat_map(|dir| candidates_for(&dir.join(exe)))
         .find(|candidate| candidate.is_file())
 }
 
-/// The filenames to probe for a bare `exe` inside `dir`: the name itself, plus `<name>.exe` on
-/// Windows.
-fn candidates_in(dir: &Path, exe: &Path) -> Vec<PathBuf> {
-    let plain = dir.join(exe);
+/// The on-disk candidates for `candidate`, in the order std would try them.
+///
+/// Non-Windows: just the path. Windows: `.exe` is appended only when std would append it — never
+/// when the file name already contains a dot, since std's rule is "no dot at all means no
+/// extension". Appending is done with `OsString::push`, never `Path::with_extension`, which
+/// truncates at the last dot (`central-0.6.0` -> `central-0.6.exe`).
+fn candidates_for(candidate: &Path) -> Vec<PathBuf> {
     if !cfg!(windows) {
-        return vec![plain];
+        return vec![candidate.to_path_buf()];
     }
-    let mut with_exe = plain.clone().into_os_string();
+    let name = candidate
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase();
+    if name.ends_with(".exe") {
+        return vec![candidate.to_path_buf()];
+    }
+    let mut with_exe = candidate.to_path_buf().into_os_string();
     with_exe.push(".exe");
-    vec![plain, PathBuf::from(with_exe)]
+    let with_exe = PathBuf::from(with_exe);
+    // An explicit path tries `.exe` first (std does), then the bare path. A bare name only gets the
+    // `.exe` form when it has no dot at all.
+    if is_explicit_path(candidate) {
+        return vec![with_exe, candidate.to_path_buf()];
+    }
+    if name.contains('.') {
+        return vec![candidate.to_path_buf()];
+    }
+    vec![candidate.to_path_buf(), with_exe]
 }
 
 /// The directory name central keeps its state in, under `$HOME`.
@@ -421,17 +500,20 @@ pub fn start(bin: &Path, port: Option<u16>) -> anyhow::Result<CentralInfo> {
     Ok(info)
 }
 
-/// Stop the central singleton daemon (`central proxy stop`). Best-effort: a not-running daemon is
-/// treated as already stopped (central returns non-zero in that case, which is still "stopped").
+/// Stop the central singleton daemon (`central proxy stop`).
+///
+/// Best-effort: a not-running daemon is treated as already stopped (central returns non-zero in that
+/// case, which is still "stopped"). A central that cannot be spawned at all is `NotInstalled` rather
+/// than an error — there is nothing to stop, and callers report that instead of failing.
 ///
 /// **R5 contract:** synchronous (spawns a child process). Call via `spawn_blocking` from async code.
-pub fn stop(bin: &Path) -> anyhow::Result<()> {
-    let status = std::process::Command::new(bin)
-        .args(proxy_stop_argv())
-        .status()
-        .map_err(|e| spawn_error(bin, e, "proxy stop"))?;
-    let _ = status;
-    Ok(())
+pub fn stop(bin: &Path) -> anyhow::Result<StopOutcome> {
+    let status = std::process::Command::new(bin).args(proxy_stop_argv()).status();
+    match status {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(StopOutcome::NotInstalled),
+        Err(e) => Err(spawn_error(bin, e, "proxy stop")),
+        Ok(_) => Ok(StopOutcome::Stopped),
+    }
 }
 
 #[cfg(test)]

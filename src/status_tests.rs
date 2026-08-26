@@ -110,9 +110,8 @@ fn probe_with_install(running: bool, login: CentralLogin, port: Option<u16>, ins
     }
 }
 
-/// A probe whose install is derived from `cache_dir`, matching today's
-/// download-cache behavior so the cache-driven install tests keep exercising
-/// `central_versions`. `build_status_report` no longer reads the cache itself.
+/// A probe with a canned install state: `found` picks `Found` vs `NotFound`. Presence is decided by
+/// an actual spawn in `probe_central`, so the pure report builder just takes the verdict.
 fn probe(found: bool, running: bool, login: CentralLogin, port: Option<u16>) -> CentralProbe {
     let install = if found {
         CentralInstall::Found {
@@ -338,15 +337,15 @@ fn status_commands_agree_on_liveness_for_secretless_wire_config() {
 // --- probe assembly permutations (pure) ------------------------------------------------------------------------------
 
 #[test]
-fn assemble_probe_not_found_yields_dead_probe() {
-    // Even if a wire config exists, with no binary we never probe.
+fn assemble_probe_keeps_the_port_when_the_binary_is_absent() {
+    // A missing binary makes login unknowable, but the daemon may still be up (started earlier,
+    // binary since moved). Dropping the port here would report a live daemon as stopped.
     let wire = WireConfig { port: Some(53117) };
     let absent = CentralInstall::NotFound {
         looked_for: "central".to_string(),
     };
     let probe = assemble_probe(absent.clone(), Some(wire), CentralLogin::LoggedIn);
-    assert!(!probe.running);
-    assert_eq!(probe.port, None);
+    assert_eq!(probe.port, Some(53117), "the wire port must survive an absent binary");
     assert_eq!(probe.login, CentralLogin::Unknown);
     assert_eq!(probe.install, absent);
 }
@@ -424,9 +423,9 @@ fn wire_config_port_reads_the_central_state_dir() {
     assert_eq!(wire_config_port_in(home.path()), Some(19516));
 }
 
-// #34: central is external-only. Absence is reported, never fatal.
+// Central is external-only: absence is reported, never fatal.
 #[test]
-fn assemble_probe_reports_not_found_without_login_or_port() {
+fn assemble_probe_forces_unknown_login_when_the_binary_is_absent() {
     let probe = assemble_probe(
         CentralInstall::NotFound {
             looked_for: "central".to_string(),
@@ -434,13 +433,12 @@ fn assemble_probe_reports_not_found_without_login_or_port() {
         Some(WireConfig { port: Some(19516) }),
         CentralLogin::LoggedIn,
     );
-    assert!(!probe.running);
-    assert_eq!(probe.port, None, "a missing binary must not claim a port");
     assert_eq!(
         probe.login,
         CentralLogin::Unknown,
         "login is unknowable without a binary to ask"
     );
+    assert_eq!(probe.port, Some(19516), "run-state is independent of the binary");
 }
 
 #[test]

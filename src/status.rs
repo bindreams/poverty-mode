@@ -262,14 +262,12 @@ pub struct WireConfig {
 /// probe so login is forced Unknown by `build_status_report`. External mode does not
 /// use this helper — `run_status` builds its probe directly.
 pub fn assemble_probe(install: CentralInstall, wire: Option<WireConfig>, login: CentralLogin) -> CentralProbe {
-    if matches!(install, CentralInstall::NotFound { .. }) {
-        return CentralProbe {
-            running: false,
-            login: CentralLogin::Unknown,
-            port: None,
-            install,
-        };
-    }
+    // A missing binary makes login unknowable, but says nothing about the daemon: one started
+    // earlier can still be live, so the wire port is carried through and `/health` still decides.
+    let login = match install {
+        CentralInstall::NotFound { .. } => CentralLogin::Unknown,
+        CentralInstall::Found { .. } => login,
+    };
     CentralProbe {
         running: false,
         login,
@@ -332,63 +330,34 @@ fn configured_central_executable() -> Result<Option<String>> {
     Ok(crate::config::Config::load_or_default()?.central_executable())
 }
 
-/// Best-effort human label for an external central binary: the first non-empty,
-/// trimmed line of `<exe> --version`'s stdout (e.g. `jbcentral 0.2.10 (commit: ...)`).
-/// On ANY failure (spawn error, non-zero exit, no usable line) fall back to the path.
-/// This spawns a child process (R5), so it belongs in the blocking probe — never in
-/// the pure `build_status_report`.
-fn external_display(exe: &Path) -> String {
-    let fallback = || exe.display().to_string();
-    let Ok(output) = std::process::Command::new(exe).arg("--version").output() else {
-        return fallback();
-    };
-    if !output.status.success() {
-        return fallback();
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(fallback)
-}
-
-/// Blocking central probe (R5): resolve install + login + run-state honoring the
-/// configured `executable`. External mode labels the binary via `external_display`
-/// and classifies login by running `<exe> status`; Download mode scans the managed
-/// cache exactly as before. Run-state (`/health` on the wire-config port) applies to
-/// both. Called via `spawn_blocking` from `run_status`.
+/// Blocking central probe (R5): resolve presence + login + run-state honoring the configured
+/// `executable`.
+///
+/// Presence comes from `central::probe_presence`, i.e. an actual spawn — NOT from
+/// `central::locate_executable`, whose `is_file` walk can disagree with what a run does. Login is
+/// classified by running `<exe> status` with the SAME unresolved name the run would spawn. Run-state
+/// (`/health` on the wire-config port) is independent of both: a daemon can be up even when the
+/// binary has since been moved. Called via `spawn_blocking` from `run_status`.
 fn probe_central() -> Result<CentralProbe> {
     let executable = configured_central_executable()?;
     let exe = crate::central::central_executable(executable.as_deref());
     let wire = read_wire_config();
 
-    // Advisory locate for REPORTING only (never gates a run — see central::locate_executable).
-    let mut probe = match crate::central::locate_executable(&exe) {
-        None => assemble_probe(
-            CentralInstall::NotFound {
-                looked_for: exe.display().to_string(),
-            },
-            wire,
-            CentralLogin::Unknown,
-        ),
-        Some(resolved) => {
-            // Login truth from `<exe> status` (R20/R23c): exit code + output through the canonical
-            // classifier. Unknown if the binary cannot be run.
-            let login = crate::central::run_status_classified(&resolved)
-                .map(CentralLogin::from)
-                .unwrap_or(CentralLogin::Unknown);
-            assemble_probe(
-                CentralInstall::Found {
-                    display: external_display(&resolved),
-                },
-                wire,
-                login,
-            )
-        }
+    let install = match crate::central::probe_presence(&exe) {
+        crate::central::Presence::Absent => CentralInstall::NotFound {
+            looked_for: exe.display().to_string(),
+        },
+        crate::central::Presence::Present { display } => CentralInstall::Found { display },
+    };
+    // Login truth from `<exe> status` (R20/R23c), only worth asking when central is present.
+    let login = match &install {
+        CentralInstall::NotFound { .. } => CentralLogin::Unknown,
+        CentralInstall::Found { .. } => crate::central::run_status_classified(&exe)
+            .map(CentralLogin::from)
+            .unwrap_or(CentralLogin::Unknown),
     };
 
+    let mut probe = assemble_probe(install, wire, login);
     if let Some(port) = probe.port {
         probe.running = crate::central::health(port);
     }

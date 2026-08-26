@@ -146,10 +146,6 @@ fn wire_url_helper_and_upstream_agree_on_encoded_secret() {
     assert_eq!(up.url.as_str(), central_wire_envelope_url(&info));
 }
 
-// version resolution (pure) ===========================================================================================
-
-// install layout ======================================================================================================
-
 // login state classification ==========================================================================================
 
 #[test]
@@ -202,11 +198,16 @@ fn run_status_classified_reports_logged_out_on_nonzero_exit() {
 
 #[test]
 fn run_status_classified_errors_when_binary_is_missing() {
-    // A missing binary is "central is not installed", not "the status call failed".
+    // A missing binary is "central is not installed", not "the status call failed". An EXPLICIT path
+    // must not claim PATH was searched — it never is, for a path.
     let missing = std::path::Path::new("/nonexistent/pm-central-does-not-exist");
     let err = format!("{:#}", run_status_classified(missing).unwrap_err());
     assert!(err.contains("pm-central-does-not-exist"), "{err}");
-    assert!(err.contains("PATH"), "{err}");
+    assert!(err.contains("does not exist"), "{err}");
+    assert!(
+        !err.contains("on PATH"),
+        "an explicit path is never searched on PATH: {err}"
+    );
 }
 
 // start/health argv + env =============================================================================================
@@ -378,7 +379,7 @@ fn start_reuse_keeps_live_daemon_port() {
     assert_eq!(reuse_decision(None, true), None);
 }
 
-// central executable resolution (#34) =================================================================================
+// central executable resolution =======================================================================================
 // central is an external tool found on PATH. `central_executable` yields the NAME to spawn (execvp
 // does the lookup); `locate_executable*` is ADVISORY reporting only and must never gate a run.
 
@@ -439,30 +440,53 @@ fn absent_name_and_absent_path_var_resolve_to_nothing() {
 
 #[cfg(windows)]
 #[test]
-fn dotted_names_keep_their_suffix_when_probing_exe() {
-    // `Path::with_extension` would truncate at the last dot and probe `central-0.6.exe`.
+fn bare_name_exe_probing_matches_std() {
+    // std's rule (`sys::process::windows::resolve_exe`) is "any dot means it already has an
+    // extension": a dotted bare name is NOT given `.exe`. Probing `central-0.6.0.exe` here would
+    // report a binary `Command` cannot spawn.
     let dir = tempfile::tempdir().unwrap();
-    let found = dir.path().join("central-0.6.0.exe");
-    std::fs::write(&found, "x").unwrap();
+    std::fs::write(dir.path().join("central-0.6.0.exe"), "x").unwrap();
     let path_var = std::ffi::OsString::from(dir.path());
     assert_eq!(
         locate_executable_in(std::path::Path::new("central-0.6.0"), Some(&path_var)),
+        None,
+        "std would not append .exe to a dotted bare name"
+    );
+
+    // A dotless bare name DOES get `.exe`.
+    let found = dir.path().join("central.exe");
+    std::fs::write(&found, "x").unwrap();
+    assert_eq!(
+        locate_executable_in(std::path::Path::new("central"), Some(&path_var)),
         Some(found)
     );
 }
 
+#[cfg(windows)]
 #[test]
-fn spawn_sites_report_an_install_hint_when_the_binary_is_missing() {
-    // A missing BINARY is not the same as a not-running daemon: it must name itself, not surface a
-    // bare OS error. `stop` and `run_status_classified` are the env-independent spawn sites (`start`
-    // short-circuits on a live local config).
+fn explicit_path_gets_the_exe_suffix_like_std() {
+    // For an explicit path std DOES append `.exe`; not probing it would warn about a central that
+    // actually runs.
+    let dir = tempfile::tempdir().unwrap();
+    let with_exe = dir.path().join("central.exe");
+    std::fs::write(&with_exe, "x").unwrap();
+    let explicit = dir.path().join("central"); // no `.exe`, does not exist as-is
+    assert_eq!(locate_executable_in(&explicit, None), Some(with_exe));
+}
+
+#[test]
+fn absence_is_reported_by_the_os_not_a_pre_check() {
+    // A bare name that nothing on PATH satisfies. `stop` reports it as NotInstalled (there is
+    // nothing to stop, which is not a failure); `run_status_classified` errors, naming the binary
+    // and PATH so the user knows where it was looked for.
     let missing = std::path::Path::new("poverty-mode-no-such-central-xyz");
 
-    let stop_err = format!("{:#}", stop(missing).unwrap_err());
-    assert!(stop_err.contains("no-such-central-xyz"), "{stop_err}");
-    assert!(stop_err.contains("PATH"), "{stop_err}");
+    assert_eq!(stop(missing).unwrap(), StopOutcome::NotInstalled);
 
     let status_err = format!("{:#}", run_status_classified(missing).unwrap_err());
     assert!(status_err.contains("no-such-central-xyz"), "{status_err}");
     assert!(status_err.contains("PATH"), "{status_err}");
+
+    // And presence is answered by an actual spawn, never by an is_file walk.
+    assert_eq!(probe_presence(missing), Presence::Absent);
 }

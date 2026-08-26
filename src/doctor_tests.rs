@@ -285,7 +285,7 @@ fn render_findings_groups_errors_before_warnings_and_reports_ok() {
     assert!(out.contains("WARN"));
 }
 
-// #34: central readiness is a PATH lookup, not an asset check.
+// central readiness is a PATH lookup, not an asset check.
 #[test]
 fn doctor_warns_once_when_central_is_missing() {
     let findings = analyze_central(Some("poverty-mode-no-such-central-xyz"));
@@ -304,7 +304,7 @@ fn doctor_is_silent_when_central_resolves() {
     assert!(analyze_central(Some(exe.to_str().unwrap())).is_empty());
 }
 
-// #34: an inert key must be surfaced, not silently discarded.
+// an inert key must be surfaced, not silently discarded.
 #[test]
 fn doctor_warns_that_pinned_version_is_ignored() {
     let exe = resolvable_executable();
