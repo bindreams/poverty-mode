@@ -127,29 +127,13 @@ pub fn render_clean_plan(plan: &CleanPlan) -> String {
     out
 }
 
-/// Locate the newest installed central binary, delegating to the shared
-/// `crate::status::newest_central_binary` (which uses the canonical
-/// `central::installed_binary_path_in` resolver). This resolves BOTH the flat
-/// (`<cache>/bin/jbcentral/<ver>/jbcentral`) and nested (`.../jbcentral-<ver>/jbcentral`)
-/// archive layouts, and orders versions SEMANTICALLY (R23f). Sharing the resolver keeps
-/// `clean --stop-central` from disagreeing with `status`: a flat-only lookup here would
-/// miss a nested install and falsely report "not installed", silently leaving the running
-/// singleton up — the exact action the user asked to perform.
-fn newest_central_binary(cache_dir: &Path) -> Result<Option<PathBuf>> {
-    crate::status::newest_central_binary(cache_dir)
-}
-
-/// Resolve the central binary the way the *run* does, honoring the configured mode:
-/// an external `executable` is used verbatim (never consulting the cache); otherwise
-/// fall back to the newest install in the managed download cache. Sharing
-/// `central::central_source` keeps `clean --stop-central` from disagreeing with the
-/// orchestrator and `status` (a blank/whitespace executable is Download, matching the run),
-/// so a running external central is stopped instead of falsely reported "not installed".
-fn resolve_central_bin(executable: Option<&str>, cache: &Path) -> Result<Option<PathBuf>> {
-    Ok(match crate::central::central_source(executable) {
-        crate::central::CentralSource::External(p) => Some(p),
-        crate::central::CentralSource::Download => newest_central_binary(cache)?,
-    })
+/// Locate the central binary for `--stop-central`.
+///
+/// Uses the ADVISORY locator on purpose: `clean` is not a run, so a best-effort lookup is the right
+/// tool — absence means "nothing to stop" rather than a hard failure.
+fn resolve_central_bin(executable: Option<&str>) -> Result<Option<PathBuf>> {
+    let exe = crate::central::central_executable(executable);
+    Ok(crate::central::locate_executable(&exe))
 }
 
 /// Read a yes/no answer from stdin. Returns true only for an explicit y/yes.
@@ -164,16 +148,12 @@ fn confirm(prompt: &str) -> Result<bool> {
 
 /// Execute a confirmed plan: stop central first (if opted in), THEN run the
 /// filesystem side. `resolve_bin` and `stop` are injected so tests can drive the
-/// stop path without a real jbcentral binary or process.
+/// stop path without a real central binary or process.
 ///
-/// **Ordering is load-bearing.** The central binary lives under the cache
-/// (`<cache>/bin/jbcentral/<ver>/`); `--clear-cache` wipes that directory. The
-/// binary path is therefore resolved AND the daemon stopped BEFORE
-/// `execute_clean_plan` runs — otherwise `--clear-cache --stop-central` would
-/// delete the binary, find nothing to stop, and leave the very daemon the user
-/// asked to stop running while reporting "not installed; nothing to stop".
-/// Stop errors are surfaced (central::stop normalizes "not running" to Ok, so any
-/// Err is a real failure); a stop failure aborts before any filesystem mutation.
+/// **Ordering is load-bearing**, though no longer because of the binary: central is external and
+/// lives on `PATH`, so `--clear-cache` cannot delete it. Stopping first means a stop failure aborts
+/// BEFORE any filesystem mutation, leaving the user's runs and cache untouched. Stop errors are
+/// surfaced (central::stop normalizes "not running" to Ok, so any Err is a real failure).
 fn execute_confirmed_clean(
     plan: &CleanPlan,
     resolve_bin: impl FnOnce() -> Result<Option<PathBuf>>,
@@ -217,7 +197,7 @@ pub fn run_clean(keep: usize, clear_cache: bool, stop_central: bool, assume_yes:
     // closure only under `plan.stop_central`.
     let resolve_bin = || -> Result<Option<PathBuf>> {
         let executable = crate::config::Config::load_or_default()?.central_executable();
-        resolve_central_bin(executable.as_deref(), &cache)
+        resolve_central_bin(executable.as_deref())
     };
     execute_confirmed_clean(&plan, resolve_bin, crate::central::stop)?;
 

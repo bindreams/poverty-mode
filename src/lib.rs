@@ -10,7 +10,6 @@ pub mod clean;
 pub mod cli;
 pub mod config;
 pub mod doctor;
-pub mod download;
 pub mod error;
 pub mod logging;
 pub mod orchestrator;

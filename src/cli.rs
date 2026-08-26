@@ -99,7 +99,7 @@ pub enum Command {
         /// Number of newest run directories to keep.
         #[arg(long, default_value_t = crate::clean::DEFAULT_KEEP_RUNS)]
         keep: usize,
-        /// Also clear the downloaded-binary cache.
+        /// Also clear the cache dir (only holds leftovers from the removed auto-download).
         #[arg(long)]
         clear_cache: bool,
         /// Stop the shared central singleton (disrupts other live sessions; off by default).

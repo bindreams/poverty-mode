@@ -490,7 +490,7 @@ fn proxy_transform_kind_matches_chosen_proxy() {
 // These exercise the safe, hermetic arms of the new dispatch handlers. The env
 // guards (`crate::test_support`) serialize and isolate the config/cache roots so
 // the tests never touch the real user dirs (R13/R23j). The live central paths
-// (daemon start/health/stop against a real `jbcentral`) are covered by `#[ignore]`
+// (daemon start/health/stop against a real `central`) are covered by `#[ignore]`
 // live tests below.
 
 #[test]

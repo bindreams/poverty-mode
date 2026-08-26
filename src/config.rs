@@ -163,10 +163,10 @@ impl Config {
 
     /// The configured central `executable`, from the trailing `central` entry.
     /// `None` when central is absent or its `executable` is unset. Drives the
-    /// External-vs-Download decision (see [`crate::central::central_source`]); the
+    /// central executable resolution (see [`crate::central::central_executable`]); the
     /// extraction shared by the read-only consumers `status` and `doctor` (the
     /// orchestrator routes its own `ResolvedProxy.executable` through
-    /// `central_source` instead, never holding a `Config`). `validate` enforces
+    /// `central_executable` instead, never holding a `Config`). `validate` enforces
     /// central-last, so the first central found is the tail central.
     pub fn central_executable(&self) -> Option<String> {
         self.proxies

@@ -39,12 +39,6 @@ fn central_wire_upstream_percent_encodes_special_secret() {
 // M8.5: central constants (R4) + central `config.json` -> CentralInfo parsing.
 
 #[test]
-fn constants_are_default_version_and_tool_dir() {
-    assert_eq!(DEFAULT_JBCENTRAL_VERSION, "0.2.9");
-    assert_eq!(INSTALL_TOOL_DIR, "jbcentral");
-}
-
-#[test]
 fn parses_proxy_port_and_secret() {
     let json = r#"{
         "proxy_port": 19516,
@@ -154,131 +148,7 @@ fn wire_url_helper_and_upstream_agree_on_encoded_secret() {
 
 // version resolution (pure) ===========================================================================================
 
-#[test]
-fn pinned_version_uses_config_when_set() {
-    assert_eq!(pinned_version(Some("1.2.3")), "1.2.3");
-    assert_eq!(pinned_version(Some("  9.9.9  ")), "9.9.9"); // trimmed
-}
-
-#[test]
-fn pinned_version_falls_back_to_default_when_unset_or_blank() {
-    assert_eq!(pinned_version(None), DEFAULT_JBCENTRAL_VERSION);
-    assert_eq!(pinned_version(Some("")), DEFAULT_JBCENTRAL_VERSION);
-    assert_eq!(pinned_version(Some("   ")), DEFAULT_JBCENTRAL_VERSION);
-}
-
-#[test]
-fn parse_version_txt_takes_first_nonblank_line() {
-    assert_eq!(parse_version_txt("0.3.1\n").unwrap(), "0.3.1");
-    assert_eq!(parse_version_txt("\n  0.3.2  \nextra\n").unwrap(), "0.3.2");
-}
-
-#[test]
-fn parse_version_txt_rejects_empty_or_garbage() {
-    assert!(parse_version_txt("").is_err());
-    assert!(parse_version_txt("   \n  \n").is_err());
-    // A line that does not look like a dotted version is rejected.
-    assert!(parse_version_txt("not a version!").is_err());
-}
-
-#[test]
-fn latest_version_url_targets_latest_version_txt() {
-    assert_eq!(
-        latest_version_url(),
-        "https://jetbrains-central-cli.s3.eu-west-1.amazonaws.com/jbcentral/latest/version.txt"
-    );
-}
-
-// central source (external vs download) ===============================================================================
-
-#[test]
-fn central_source_external_vs_download() {
-    assert!(matches!(central_source(None), CentralSource::Download));
-    assert!(matches!(central_source(Some("")), CentralSource::Download));
-    assert!(matches!(central_source(Some("   ")), CentralSource::Download));
-    match central_source(Some("jbcentral")) {
-        CentralSource::External(p) => assert_eq!(p, std::path::PathBuf::from("jbcentral")),
-        _ => panic!("expected External"),
-    }
-    match central_source(Some("/opt/jb/jbcentral")) {
-        CentralSource::External(p) => assert_eq!(p, std::path::PathBuf::from("/opt/jb/jbcentral")),
-        _ => panic!("expected External"),
-    }
-}
-
 // install layout ======================================================================================================
-
-#[test]
-fn binary_name_is_platform_specific() {
-    let name = jbcentral_binary_name();
-    if cfg!(windows) {
-        assert_eq!(name, "jbcentral.exe");
-    } else {
-        assert_eq!(name, "jbcentral");
-    }
-}
-
-#[test]
-fn install_dir_uses_shared_tool_dir_constant() {
-    let root = std::path::Path::new("/tmp/pm-cache");
-    let dir = install_dir_in(root, "0.2.9");
-    let expected = root.join("bin").join(INSTALL_TOOL_DIR).join("0.2.9");
-    assert_eq!(dir, expected);
-    // The tool dir is the single shared constant — never "central".
-    assert!(dir.to_string_lossy().contains("jbcentral"));
-    assert!(!dir
-        .to_string_lossy()
-        .contains(&format!("bin{}central", std::path::MAIN_SEPARATOR)));
-}
-
-#[test]
-fn is_installed_in_false_when_absent_true_when_flat() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path();
-    assert!(!is_installed_in(root, "0.2.9"));
-
-    // Flat layout: binary directly under the version dir.
-    let dir = install_dir_in(root, "0.2.9");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join(jbcentral_binary_name()), b"fake").unwrap();
-    assert!(is_installed_in(root, "0.2.9"));
-}
-
-#[test]
-fn installed_binary_path_in_resolves_flat_layout() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path();
-    let dir = install_dir_in(root, "0.2.9");
-    std::fs::create_dir_all(&dir).unwrap();
-    let flat = dir.join(jbcentral_binary_name());
-    std::fs::write(&flat, b"fake").unwrap();
-
-    let resolved = installed_binary_path_in(root, "0.2.9").unwrap();
-    assert_eq!(resolved, flat);
-}
-
-#[test]
-fn installed_binary_path_in_resolves_nested_layout() {
-    // Nested layout: binary one dir deep (some archives nest under jbcentral-<ver>/).
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path();
-    let dir = install_dir_in(root, "0.2.9");
-    let nested = dir.join("jbcentral-0.2.9");
-    std::fs::create_dir_all(&nested).unwrap();
-    let bin = nested.join(jbcentral_binary_name());
-    std::fs::write(&bin, b"fake").unwrap();
-
-    // is_installed_in must ALSO see the nested binary (consistency with status/clean in M10).
-    assert!(is_installed_in(root, "0.2.9"));
-    let resolved = installed_binary_path_in(root, "0.2.9").unwrap();
-    assert_eq!(resolved, bin);
-}
-
-#[test]
-fn installed_binary_path_in_none_when_dir_missing() {
-    let tmp = tempfile::tempdir().unwrap();
-    assert!(installed_binary_path_in(tmp.path(), "0.2.9").is_none());
-}
 
 // login state classification ==========================================================================================
 
@@ -332,12 +202,11 @@ fn run_status_classified_reports_logged_out_on_nonzero_exit() {
 
 #[test]
 fn run_status_classified_errors_when_binary_is_missing() {
-    let missing = std::path::Path::new("/nonexistent/pm-jbcentral-does-not-exist");
-    let err = run_status_classified(missing).unwrap_err();
-    assert!(
-        err.to_string().contains("status"),
-        "error should name the failed `status` invocation: {err}"
-    );
+    // A missing binary is "central is not installed", not "the status call failed".
+    let missing = std::path::Path::new("/nonexistent/pm-central-does-not-exist");
+    let err = format!("{:#}", run_status_classified(missing).unwrap_err());
+    assert!(err.contains("pm-central-does-not-exist"), "{err}");
+    assert!(err.contains("PATH"), "{err}");
 }
 
 // start/health argv + env =============================================================================================
@@ -580,4 +449,20 @@ fn dotted_names_keep_their_suffix_when_probing_exe() {
         locate_executable_in(std::path::Path::new("central-0.6.0"), Some(&path_var)),
         Some(found)
     );
+}
+
+#[test]
+fn spawn_sites_report_an_install_hint_when_the_binary_is_missing() {
+    // A missing BINARY is not the same as a not-running daemon: it must name itself, not surface a
+    // bare OS error. `stop` and `run_status_classified` are the env-independent spawn sites (`start`
+    // short-circuits on a live local config).
+    let missing = std::path::Path::new("poverty-mode-no-such-central-xyz");
+
+    let stop_err = format!("{:#}", stop(missing).unwrap_err());
+    assert!(stop_err.contains("no-such-central-xyz"), "{stop_err}");
+    assert!(stop_err.contains("PATH"), "{stop_err}");
+
+    let status_err = format!("{:#}", run_status_classified(missing).unwrap_err());
+    assert!(status_err.contains("no-such-central-xyz"), "{status_err}");
+    assert!(status_err.contains("PATH"), "{status_err}");
 }

@@ -101,7 +101,7 @@ pub fn enumerate_runs(runs_root: &Path) -> Result<Vec<RunRecord>> {
 }
 
 /// Tri-state login, mirroring `crate::central::CentralLoginState`. Login truth is
-/// parsed from `jbcentral status` (R20), never inferred from a secret's presence.
+/// parsed from `central status` (R20), never inferred from a secret's presence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CentralLogin {
     Unknown,
@@ -138,15 +138,11 @@ pub struct CentralProbe {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CentralInstall {
-    NotInstalled,
-    Installed {
-        versions: Vec<String>,
-    },
-    /// An external `jbcentral` binary is configured; `display` is a best-effort
-    /// human label (its `--version` first line, falling back to the path).
-    External {
-        display: String,
-    },
+    /// central resolved; `display` is a best-effort human label (its `--version` first line,
+    /// falling back to the path).
+    Found { display: String },
+    /// central could not be located; `looked_for` is the executable name that was tried.
+    NotFound { looked_for: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -170,41 +166,6 @@ pub struct StatusReport {
     pub runs: Vec<RunRecord>,
 }
 
-/// Semantic sort key for a `major.minor.patch` version string (R23f). Components
-/// that fail to parse fall back to `0`, so a malformed dir name sorts as oldest
-/// rather than (lexicographically) jumping ahead of real versions. This guarantees
-/// `0.2.10` sorts AFTER `0.2.9`, which a plain string sort gets wrong. Shared with
-/// `crate::clean` so both modules agree on "newest installed version".
-pub(crate) fn version_sort_key(version: &str) -> (u64, u64, u64) {
-    let mut parts = version.split('.');
-    let major = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-    let minor = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-    let patch = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-    (major, minor, patch)
-}
-
-/// List installed central versions by reading `<cache>/bin/jbcentral/<version>/`
-/// (the canonical install dir, R4: `crate::central::INSTALL_TOOL_DIR`). Sorted
-/// SEMANTICALLY by `(major, minor, patch)` (R23f) so `0.2.10 > 0.2.9` — never
-/// lexicographically.
-pub(crate) fn central_versions(cache_dir: &Path) -> Result<Vec<String>> {
-    let bin = cache_dir.join("bin").join(crate::central::INSTALL_TOOL_DIR);
-    if !bin.exists() {
-        return Ok(Vec::new());
-    }
-    let mut versions: Vec<String> = Vec::new();
-    for entry in std::fs::read_dir(&bin)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            if let Some(name) = entry.file_name().to_str() {
-                versions.push(name.to_string());
-            }
-        }
-    }
-    versions.sort_by_key(|v| version_sort_key(v));
-    Ok(versions)
-}
-
 /// Assemble a full status report from explicit inputs (pure; no process spawning).
 ///
 /// Install resolution lives on the probe (`probe.install`), not here: External mode
@@ -221,7 +182,7 @@ pub fn build_status_report(runs_root: &Path, probe: &CentralProbe) -> Result<Sta
     // Login state is only meaningful if central is installed. Absent an install we
     // report Unknown; otherwise we pass the probe's tri-state through verbatim --
     // there is no heuristic that could manufacture a false LoggedIn.
-    let login = if install == CentralInstall::NotInstalled {
+    let login = if matches!(install, CentralInstall::NotFound { .. }) {
         CentralLogin::Unknown
     } else {
         probe.login
@@ -247,14 +208,11 @@ pub fn render_status(report: &StatusReport) -> String {
         let _ = writeln!(out, "  {fp} (built-in)");
     }
     match &report.central.install {
-        CentralInstall::NotInstalled => {
-            let _ = writeln!(out, "  central: not installed");
+        CentralInstall::Found { display } => {
+            let _ = writeln!(out, "  central: {display}");
         }
-        CentralInstall::Installed { versions } => {
-            let _ = writeln!(out, "  central: installed {}", versions.join(", "));
-        }
-        CentralInstall::External { display } => {
-            let _ = writeln!(out, "  central: external {display}");
+        CentralInstall::NotFound { looked_for } => {
+            let _ = writeln!(out, "  central: not found (looked for `{looked_for}`)");
         }
     }
 
@@ -304,11 +262,7 @@ pub struct WireConfig {
 /// probe so login is forced Unknown by `build_status_report`. External mode does not
 /// use this helper — `run_status` builds its probe directly.
 pub fn assemble_probe(install: CentralInstall, wire: Option<WireConfig>, login: CentralLogin) -> CentralProbe {
-    debug_assert!(
-        !matches!(install, CentralInstall::External { .. }),
-        "assemble_probe is the Download-mode helper; External probes are built directly in run_status"
-    );
-    if install == CentralInstall::NotInstalled {
+    if matches!(install, CentralInstall::NotFound { .. }) {
         return CentralProbe {
             running: false,
             login: CentralLogin::Unknown,
@@ -369,27 +323,9 @@ fn read_wire_config() -> Option<WireConfig> {
     })
 }
 
-/// Locate the newest installed central binary, delegating to the canonical
-/// `central::installed_binary_path_in` so BOTH the flat
-/// (`<cache>/bin/jbcentral/<ver>/jbcentral`) and nested (`.../jbcentral-<ver>/jbcentral`)
-/// archive layouts resolve consistently with install/clean. A flat-only lookup here would
-/// miss a nested install that `central_versions` still reports as present, forcing login to
-/// Unknown for a genuinely logged-in user.
-///
-/// Shared with `clean::run_clean` (its `--stop-central` path) so status and clean never
-/// disagree about whether — or where — central is installed.
-pub(crate) fn newest_central_binary(cache_dir: &Path) -> Result<Option<PathBuf>> {
-    let versions = central_versions(cache_dir)?;
-    let Some(latest) = versions.last() else {
-        return Ok(None);
-    };
-    Ok(crate::central::installed_binary_path_in(cache_dir, latest))
-}
-
-/// The configured central `executable`, read from the trailing Central entry of the
-/// loaded config. `None`/blank ⇒ Download mode; `Some(..)` ⇒ External (see
-/// [`crate::central::central_source`]). Mirrors the orchestrator's resolution so
-/// status reports the same binary the chain would run.
+/// The configured central `executable`, read from the trailing Central entry of the loaded config.
+/// `None`/blank means the `central` default. Mirrors the orchestrator's resolution so status reports
+/// the same binary the chain would run.
 fn configured_central_executable() -> Result<Option<String>> {
     // Read-only: `status` is a diagnostic and must never create `poverty-mode.yaml`
     // as a side effect (load_or_create would write the default on first run).
@@ -425,39 +361,31 @@ fn external_display(exe: &Path) -> String {
 /// both. Called via `spawn_blocking` from `run_status`.
 fn probe_central() -> Result<CentralProbe> {
     let executable = configured_central_executable()?;
+    let exe = crate::central::central_executable(executable.as_deref());
     let wire = read_wire_config();
 
-    let mut probe = match crate::central::central_source(executable.as_deref()) {
-        crate::central::CentralSource::External(exe) => {
-            // Login truth from `<exe> status` (R20/R23c): exit code + output through the
-            // canonical classifier. Unknown if the binary cannot be run.
-            let login = crate::central::run_status_classified(&exe)
+    // Advisory locate for REPORTING only (never gates a run — see central::locate_executable).
+    let mut probe = match crate::central::locate_executable(&exe) {
+        None => assemble_probe(
+            CentralInstall::NotFound {
+                looked_for: exe.display().to_string(),
+            },
+            wire,
+            CentralLogin::Unknown,
+        ),
+        Some(resolved) => {
+            // Login truth from `<exe> status` (R20/R23c): exit code + output through the canonical
+            // classifier. Unknown if the binary cannot be run.
+            let login = crate::central::run_status_classified(&resolved)
                 .map(CentralLogin::from)
                 .unwrap_or(CentralLogin::Unknown);
-            CentralProbe {
-                running: false,
-                login,
-                port: wire.and_then(|w| w.port),
-                install: CentralInstall::External {
-                    display: external_display(&exe),
+            assemble_probe(
+                CentralInstall::Found {
+                    display: external_display(&resolved),
                 },
-            }
-        }
-        crate::central::CentralSource::Download => {
-            let cache = crate::paths::cache_dir()?;
-            let versions = central_versions(&cache)?;
-            if versions.is_empty() {
-                assemble_probe(CentralInstall::NotInstalled, None, CentralLogin::Unknown)
-            } else {
-                // Login truth from `jbcentral status` (R20), not from any secret on disk.
-                let login = match newest_central_binary(&cache)? {
-                    Some(bin) => crate::central::run_status_classified(&bin)
-                        .map(CentralLogin::from)
-                        .unwrap_or(CentralLogin::Unknown),
-                    None => CentralLogin::Unknown,
-                };
-                assemble_probe(CentralInstall::Installed { versions }, wire, login)
-            }
+                wire,
+                login,
+            )
         }
     };
 

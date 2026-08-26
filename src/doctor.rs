@@ -197,15 +197,6 @@ pub fn target_is_supported(os: &str, arch: &str) -> bool {
     )
 }
 
-/// Whether a downloadable jbcentral asset exists for this (os, arch).
-/// JetBrains ships no windows-arm64 asset; everything else we support has one.
-pub fn central_asset_available(os: &str, arch: &str) -> bool {
-    if (os, arch) == ("windows", "aarch64") {
-        return false;
-    }
-    target_is_supported(os, arch)
-}
-
 /// Toolchain/target diagnostics for the given (os, arch). All findings are
 /// `FindingDomain::Toolchain` with `layer: None`.
 pub fn analyze_toolchain(os: &str, arch: &str) -> Vec<Finding> {
@@ -226,43 +217,24 @@ pub fn analyze_toolchain(os: &str, arch: &str) -> Vec<Finding> {
 /// file. An explicit path (absolute or with a directory component) must exist as a
 /// file; a bare name is searched on `PATH` (plus the `.exe` form for Windows).
 /// Std-only and intentionally lenient — `doctor` only warns, it does not gate.
-/// Central readiness, honoring the configured source. External: verify the
-/// executable resolves (on PATH or as a path). Download: verify a jbcentral asset
-/// exists for this target. All findings are `FindingDomain::Toolchain` with
-/// `layer: None`.
-pub fn analyze_central(source: crate::central::CentralSource, os: &str, arch: &str) -> Vec<Finding> {
-    let mut findings = Vec::new();
-    match source {
-        crate::central::CentralSource::External(exe) => {
-            // Resolve bare PATH names and explicit paths (std-only; no `which` dep).
-            if crate::central::locate_executable(&exe).is_none() {
-                findings.push(Finding {
-                    domain: FindingDomain::Toolchain,
-                    layer: None,
-                    severity: Severity::Warn,
-                    message: format!(
-                        "configured central executable {} not found on PATH or filesystem",
-                        exe.display()
-                    ),
-                    found_value: None,
-                });
-            }
-        }
-        crate::central::CentralSource::Download => {
-            if !central_asset_available(os, arch) {
-                findings.push(Finding {
-                    domain: FindingDomain::Toolchain,
-                    layer: None,
-                    severity: Severity::Warn,
-                    message: format!(
-                        "no jbcentral asset for {os}/{arch}; the central proxy cannot be used on this platform"
-                    ),
-                    found_value: None,
-                });
-            }
-        }
+/// Central readiness: verify the configured (or default `central`) executable resolves, on `PATH`
+/// or as an explicit path. One `Warn` finding when it does not; `FindingDomain::Toolchain`,
+/// `layer: None`. Never an Error — `doctor` reports, it does not gate.
+pub fn analyze_central(executable: Option<&str>) -> Vec<Finding> {
+    let exe = crate::central::central_executable(executable);
+    if crate::central::locate_executable(&exe).is_some() {
+        return Vec::new();
     }
-    findings
+    vec![Finding {
+        domain: FindingDomain::Toolchain,
+        layer: None,
+        severity: Severity::Warn,
+        message: format!(
+            "central executable `{}` not found on PATH or filesystem; install JetBrains Central",
+            exe.display()
+        ),
+        found_value: None,
+    }]
 }
 
 /// Render findings, errors first then warnings; pure.
@@ -285,7 +257,7 @@ pub fn render_findings(findings: &[Finding]) -> String {
 /// separate from `run_doctor` (which reads disk/env and prints) so the merge is
 /// directly testable.
 ///
-/// `central` is the resolved [`crate::central::CentralSource`] on success, or
+/// `central` is the configured central `executable` on success, or
 /// `Err(message)` when the on-disk config could not be read/parsed. As a read-only
 /// diagnostic, `doctor` never aborts on a broken config: an `Err` becomes a single
 /// `Warn` finding and the central readiness check is skipped (the rest of the
@@ -294,7 +266,7 @@ pub fn assemble_findings(
     sources: &[SettingsSource],
     os: &str,
     arch: &str,
-    central: std::result::Result<crate::central::CentralSource, String>,
+    central: std::result::Result<Option<String>, String>,
 ) -> Vec<Finding> {
     let mut findings = Vec::new();
     // `doctor` cannot know the ephemeral run port, so any non-empty
@@ -303,7 +275,7 @@ pub fn assemble_findings(
     findings.extend(analyze_base_url(sources, "\u{0}none"));
     findings.extend(analyze_toolchain(os, arch));
     match central {
-        Ok(source) => findings.extend(analyze_central(source, os, arch)),
+        Ok(executable) => findings.extend(analyze_central(executable.as_deref())),
         Err(message) => findings.push(Finding {
             domain: FindingDomain::Toolchain,
             layer: None,
@@ -334,7 +306,7 @@ pub fn run_doctor() -> Result<bool> {
         .collect();
 
     let central = crate::config::Config::load_or_default()
-        .map(|cfg| crate::central::central_source(cfg.central_executable().as_deref()))
+        .map(|cfg| cfg.central_executable())
         .map_err(|e| e.to_string());
 
     let findings = assemble_findings(&sources, std::env::consts::OS, std::env::consts::ARCH, central);

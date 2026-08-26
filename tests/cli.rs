@@ -67,14 +67,17 @@ fn status_subcommand_runs_and_renders() {
         .env("XDG_CONFIG_HOME", &config_home)
         .env("POVERTY_CACHE_DIR", tmp.path().join("cache"))
         .env("POVERTY_LOG_DIR", tmp.path().join("logs"))
-        // Isolate the probe's `~/.wire/config.json` read from the real home.
+        // Isolate the probe's read of central's `config.json` from the real home.
         .env("HOME", tmp.path())
         .env("USERPROFILE", tmp.path())
+        // Central is found on PATH now, so the lookup must be pinned to an empty dir — otherwise
+        // this asserts "not found" only on machines that happen not to have central installed.
+        .env("PATH", tmp.path())
         .assert()
         .success()
         .stdout(contains("pino (built-in)"))
         .stdout(contains("headroom (built-in)"))
-        .stdout(contains("central: not installed"))
+        .stdout(contains("central: not found"))
         .stdout(contains("no live runs"));
 }
 
