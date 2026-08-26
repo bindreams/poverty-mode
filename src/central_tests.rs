@@ -417,7 +417,9 @@ fn explicit_path_is_never_searched_on_path() {
 fn bare_name_is_found_across_path_entries() {
     let first = tempfile::tempdir().unwrap();
     let second = tempfile::tempdir().unwrap();
-    let found = second.path().join("central");
+    // The fixture must carry the platform's executable suffix: on Windows a dotless bare name is
+    // probed ONLY as `<name>.exe`, so an extensionless file is (correctly) not a candidate.
+    let found = second.path().join(format!("central{}", std::env::consts::EXE_SUFFIX));
     std::fs::write(&found, "x").unwrap();
 
     let path_var = std::env::join_paths([first.path(), second.path()]).unwrap();
