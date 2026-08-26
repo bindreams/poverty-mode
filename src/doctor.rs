@@ -217,6 +217,31 @@ pub fn analyze_toolchain(os: &str, arch: &str) -> Vec<Finding> {
 /// file. An explicit path (absolute or with a directory component) must exist as a
 /// file; a bare name is searched on `PATH` (plus the `.exe` form for Windows).
 /// Std-only and intentionally lenient — `doctor` only warns, it does not gate.
+/// The central config `doctor` inspects: the executable to look for, plus the dead `pinned_version`
+/// key so its presence can be surfaced instead of silently ignored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CentralConfig {
+    pub executable: Option<String>,
+    pub pinned_version: Option<String>,
+}
+
+/// One `Warn` when a config still carries `pinned_version`: auto-download is gone (#34), so the key
+/// is inert. Silently discarding it would leave the user believing they pinned something.
+pub fn analyze_dead_config_keys(pinned_version: Option<&str>) -> Vec<Finding> {
+    match pinned_version {
+        None => Vec::new(),
+        Some(_) => vec![Finding {
+            domain: FindingDomain::Toolchain,
+            layer: None,
+            severity: Severity::Warn,
+            message: "central.pinned_version is ignored (auto-download was removed); \
+                      it is safe to delete from your config"
+                .to_string(),
+            found_value: None,
+        }],
+    }
+}
+
 /// Central readiness: verify the configured (or default `central`) executable resolves, on `PATH`
 /// or as an explicit path. One `Warn` finding when it does not; `FindingDomain::Toolchain`,
 /// `layer: None`. Never an Error — `doctor` reports, it does not gate.
@@ -257,7 +282,7 @@ pub fn render_findings(findings: &[Finding]) -> String {
 /// separate from `run_doctor` (which reads disk/env and prints) so the merge is
 /// directly testable.
 ///
-/// `central` is the configured central `executable` on success, or
+/// `central` is the configured central settings on success, or
 /// `Err(message)` when the on-disk config could not be read/parsed. As a read-only
 /// diagnostic, `doctor` never aborts on a broken config: an `Err` becomes a single
 /// `Warn` finding and the central readiness check is skipped (the rest of the
@@ -266,7 +291,7 @@ pub fn assemble_findings(
     sources: &[SettingsSource],
     os: &str,
     arch: &str,
-    central: std::result::Result<Option<String>, String>,
+    central: std::result::Result<CentralConfig, String>,
 ) -> Vec<Finding> {
     let mut findings = Vec::new();
     // `doctor` cannot know the ephemeral run port, so any non-empty
@@ -275,7 +300,10 @@ pub fn assemble_findings(
     findings.extend(analyze_base_url(sources, "\u{0}none"));
     findings.extend(analyze_toolchain(os, arch));
     match central {
-        Ok(executable) => findings.extend(analyze_central(executable.as_deref())),
+        Ok(config) => {
+            findings.extend(analyze_central(config.executable.as_deref()));
+            findings.extend(analyze_dead_config_keys(config.pinned_version.as_deref()));
+        }
         Err(message) => findings.push(Finding {
             domain: FindingDomain::Toolchain,
             layer: None,
@@ -306,7 +334,10 @@ pub fn run_doctor() -> Result<bool> {
         .collect();
 
     let central = crate::config::Config::load_or_default()
-        .map(|cfg| cfg.central_executable())
+        .map(|cfg| CentralConfig {
+            executable: cfg.central_executable(),
+            pinned_version: cfg.central_pinned_version(),
+        })
         .map_err(|e| e.to_string());
 
     let findings = assemble_findings(&sources, std::env::consts::OS, std::env::consts::ARCH, central);

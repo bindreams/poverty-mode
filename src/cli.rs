@@ -325,9 +325,8 @@ pub struct RunSettingsArgs {
     pub headroom_no_compression: bool,
     #[arg(long = "central-port", value_name = "PORT")]
     pub central_port: Option<u16>,
-    #[arg(long = "central-pinned-version", value_name = "VERSION")]
-    pub central_pinned_version: Option<String>,
-    /// External jbcentral binary to use (path or PATH name). Empty value forces the download fallback.
+    /// The central binary to use: a path, or a bare name resolved on PATH. Empty selects the
+    /// `central` default.
     #[arg(long = "central-executable", value_name = "PATH")]
     pub central_executable: Option<String>,
 }
@@ -368,7 +367,6 @@ impl RunSettingsArgs {
             },
             central: CentralOverride {
                 port: self.central_port,
-                pinned_version: self.central_pinned_version.clone(),
                 executable: self.central_executable.clone(),
             },
         }

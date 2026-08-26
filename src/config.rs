@@ -68,17 +68,23 @@ pub enum ProxySettings {
     Central(CentralSettings),
 }
 
-/// JB Central settings. `port: null` => use the jbcentral default / managed value;
-/// `pinned_version: null` => use the poverty-mode default version.
+/// JB Central settings. `port: null` => use central's own default.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CentralSettings {
     #[serde(default)]
     pub port: Option<u16>,
-    #[serde(default)]
+    /// DEAD KEY, retained for backward compatibility only.
+    ///
+    /// Auto-download is gone (#34), so nothing reads this. It stays declared because
+    /// `deny_unknown_fields` would otherwise turn an existing config that carries it into a hard
+    /// load failure. `skip_serializing` keeps it out of anything poverty-mode writes, so it
+    /// disappears on the next write instead of being advertised as live configuration. `doctor`
+    /// warns when a non-null value is present.
+    #[serde(default, skip_serializing)]
     pub pinned_version: Option<String>,
-    /// External binary to use (path or PATH name). `Some` ⇒ use it as-is (no
-    /// download/version/config-set/login). `None`/empty ⇒ download fallback.
+    /// The central binary: a path, or a bare name resolved on `PATH`. `None`/empty means the
+    /// `central` default. Never downloaded — central is an external tool.
     #[serde(default)]
     pub executable: Option<String>,
 }
@@ -124,7 +130,7 @@ impl Config {
                     settings: ProxySettings::Central(CentralSettings {
                         port: None,
                         pinned_version: None,
-                        executable: Some("jbcentral".to_string()),
+                        executable: Some(crate::central::DEFAULT_CENTRAL_EXECUTABLE.to_string()),
                     }),
                 },
             ],
@@ -173,6 +179,18 @@ impl Config {
             .iter()
             .find_map(|entry| match &entry.settings {
                 ProxySettings::Central(c) => Some(c.executable.clone()),
+                _ => None,
+            })
+            .flatten()
+    }
+
+    /// The configured central `pinned_version`, if any. Read ONLY so `doctor` can warn that the key
+    /// is inert (#34) — never used to resolve anything.
+    pub fn central_pinned_version(&self) -> Option<String> {
+        self.proxies
+            .iter()
+            .find_map(|entry| match &entry.settings {
+                ProxySettings::Central(c) => Some(c.pinned_version.clone()),
                 _ => None,
             })
             .flatten()

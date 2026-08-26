@@ -58,7 +58,6 @@ fn default_all_disabled_has_expected_per_proxy_settings() {
 
     let central = central_of(&cfg.proxies[2].settings);
     assert_eq!(central.port, None);
-    assert_eq!(central.pinned_version, None);
 }
 
 #[test]
@@ -119,7 +118,6 @@ fn untagged_settings_parse_central() {
     let s: ProxySettings = serde_yaml::from_str("port: 5599\npinned_version: 1.2.3\n").unwrap();
     let c = central_of(&s);
     assert_eq!(c.port, Some(5599));
-    assert_eq!(c.pinned_version, Some("1.2.3".to_string()));
 }
 
 #[test]
@@ -130,23 +128,22 @@ fn central_settings_default_when_fields_omitted() {
     // fields; CentralSettings is the only all-optional variant, so it wins.
     let c = central_of(&s);
     assert_eq!(c.port, None);
-    assert_eq!(c.pinned_version, None);
     assert_eq!(c.executable, None);
 }
 
 #[test]
-fn default_central_executable_is_jbcentral() {
+fn default_central_executable_is_central() {
     let cfg = Config::default_all_disabled();
     let central = central_of(&cfg.proxies[2].settings);
-    assert_eq!(central.executable.as_deref(), Some("jbcentral"));
+    assert_eq!(central.executable.as_deref(), Some("central"));
 }
 
 #[test]
 fn central_executable_reads_trailing_central_entry() {
-    // The default config's central entry carries `jbcentral`.
+    // The default config's central entry carries `central`.
     assert_eq!(
         Config::default_all_disabled().central_executable().as_deref(),
-        Some("jbcentral")
+        Some("central")
     );
 }
 
@@ -772,8 +769,10 @@ fn characterization_default_yaml_has_spec_5_2_shape() {
     assert!(yaml.contains("strip_ansi: true"), "yaml:\n{yaml}");
     // Headroom + central settings shape.
     assert!(yaml.contains("compression: true"), "yaml:\n{yaml}");
-    // Central defaults to the `jbcentral` external binary (spec 5.2).
-    assert!(yaml.contains("executable: jbcentral"), "yaml:\n{yaml}");
+    // Central defaults to the external `central` binary, found on PATH (#34).
+    assert!(yaml.contains("executable: central"), "yaml:\n{yaml}");
+    // The dead `pinned_version` key is never written back (#34).
+    assert!(!yaml.contains("pinned_version"), "yaml:\n{yaml}");
     // central's fields round-trip; re-parsing yields the canonical default.
     let back: Config = serde_yaml::from_str(&yaml).unwrap();
     assert_eq!(back, Config::default_all_disabled());
@@ -866,7 +865,6 @@ fn with_overrides_applies_central_override() {
     let ov = Overrides {
         central: CentralOverride {
             port: Some(9000),
-            pinned_version: Some("1.2.3".into()),
             executable: None,
         },
         ..Default::default()
@@ -877,8 +875,8 @@ fn with_overrides_applies_central_override() {
         central.settings,
         ProxySettings::Central(CentralSettings {
             port: Some(9000),
-            pinned_version: Some("1.2.3".into()),
-            executable: Some("jbcentral".to_string()),
+            pinned_version: None,
+            executable: Some("central".to_string()),
         })
     );
     // pino is unaffected by a central-only override.
@@ -1019,4 +1017,29 @@ fn entries_for_chain_forces_central_last_even_if_in_chain_middle() {
     let entries = cfg.entries_for_chain(&chain);
     assert_eq!(entries.last().unwrap().name, ProxyName::Central);
     assert!(entries.last().unwrap().enabled);
+}
+
+// #34: `pinned_version` is retained ONLY so an existing config still parses under
+// `deny_unknown_fields`. It is inert: never read for resolution, never written back.
+
+#[test]
+fn config_with_legacy_pinned_version_still_loads() {
+    let s: ProxySettings = serde_yaml::from_str("port: null\npinned_version: 0.2.9\nexecutable: central\n").unwrap();
+    let c = central_of(&s);
+    assert_eq!(c.executable.as_deref(), Some("central"));
+    assert_eq!(c.pinned_version.as_deref(), Some("0.2.9"));
+}
+
+#[test]
+fn pinned_version_is_not_written_back() {
+    let s = ProxySettings::Central(CentralSettings {
+        port: None,
+        pinned_version: Some("0.2.9".to_string()),
+        executable: Some("central".to_string()),
+    });
+    let yaml = serde_yaml::to_string(&s).unwrap();
+    assert!(
+        !yaml.contains("pinned_version"),
+        "a dead key must not be re-emitted into the user's config: {yaml}"
+    );
 }

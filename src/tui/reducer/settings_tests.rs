@@ -30,7 +30,7 @@ fn settings_of_lists_fields_in_fixed_order() {
     assert_eq!(settings_of(ProxyName::Headroom), &[SettingId::Compression]);
     assert_eq!(
         settings_of(ProxyName::Central),
-        &[SettingId::Port, SettingId::PinnedVersion, SettingId::Executable]
+        &[SettingId::Port, SettingId::Executable]
     );
 }
 #[test]

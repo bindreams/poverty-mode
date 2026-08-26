@@ -64,7 +64,6 @@ impl HeadroomOverride {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CentralOverride {
     pub port: Option<u16>,
-    pub pinned_version: Option<String>,
     pub executable: Option<String>,
 }
 impl CentralOverride {
@@ -72,10 +71,7 @@ impl CentralOverride {
         if let Some(v) = self.port {
             base.port = Some(v);
         }
-        if let Some(v) = &self.pinned_version {
-            base.pinned_version = Some(v.clone());
-        }
-        // Unlike port/pinned_version (where Some always sets), an empty or
+        // Unlike port (where Some always sets), an empty or
         // whitespace-only executable is a deliberate, explicit clear to Download mode.
         if let Some(v) = &self.executable {
             base.executable = if v.trim().is_empty() { None } else { Some(v.clone()) };

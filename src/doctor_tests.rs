@@ -159,7 +159,10 @@ fn assemble_findings_merges_toolchain_and_central() {
         &[],
         "windows",
         "aarch64",
-        Ok(Some(missing.to_string_lossy().into_owned())),
+        Ok(CentralConfig {
+            executable: Some(missing.to_string_lossy().into_owned()),
+            pinned_version: None,
+        }),
     );
     assert!(findings
         .iter()
@@ -172,7 +175,15 @@ fn assemble_findings_resolvable_central_adds_no_central_warning() {
     // On the windows/aarch64 hole the unsupported-target finding still surfaces, but a resolvable
     // central contributes nothing.
     let exe = resolvable_executable();
-    let findings = assemble_findings(&[], "windows", "aarch64", Ok(Some(exe.to_string_lossy().into_owned())));
+    let findings = assemble_findings(
+        &[],
+        "windows",
+        "aarch64",
+        Ok(CentralConfig {
+            executable: Some(exe.to_string_lossy().into_owned()),
+            pinned_version: None,
+        }),
+    );
     assert!(findings
         .iter()
         .any(|f| f.severity == Severity::Error && f.message.to_lowercase().contains("unsupported")));
@@ -291,4 +302,36 @@ fn doctor_is_silent_when_central_resolves() {
     let exe = dir.path().join("central");
     std::fs::write(&exe, "x").unwrap();
     assert!(analyze_central(Some(exe.to_str().unwrap())).is_empty());
+}
+
+// #34: an inert key must be surfaced, not silently discarded.
+#[test]
+fn doctor_warns_that_pinned_version_is_ignored() {
+    let exe = resolvable_executable();
+    let findings = assemble_findings(
+        &[],
+        "linux",
+        "x86_64",
+        Ok(CentralConfig {
+            executable: Some(exe.to_string_lossy().into_owned()),
+            pinned_version: Some("0.2.9".to_string()),
+        }),
+    );
+    let pinned: Vec<_> = findings
+        .iter()
+        .filter(|f| f.message.contains("pinned_version"))
+        .collect();
+    assert_eq!(pinned.len(), 1, "{findings:?}");
+    assert_eq!(pinned[0].severity, Severity::Warn);
+
+    let quiet = assemble_findings(
+        &[],
+        "linux",
+        "x86_64",
+        Ok(CentralConfig {
+            executable: Some(exe.to_string_lossy().into_owned()),
+            pinned_version: None,
+        }),
+    );
+    assert!(!quiet.iter().any(|f| f.message.contains("pinned_version")), "{quiet:?}");
 }

@@ -2,8 +2,8 @@
 
 Run an AI coding agent (`claude` or `codex`) behind a user-chosen, ordered chain of
 local HTTP proxies — pino + headroom compiled into the binary, JB Central an
-installed `jbcentral` by default (configurable) or an unpinned download — wiring
-each proxy's inbound port to the next hop's outbound upstream.
+externally installed `central` found on your `PATH` — wiring each proxy's inbound
+port to the next hop's outbound upstream.
 
 `codex` is routed by injecting a `-c` model-provider override (the codex analog of
 Claude's inline `--settings`) that points it at the chain head. Because its
@@ -28,17 +28,21 @@ cargo install --path .
 ```
 
 This installs a single self-contained `poverty-mode` binary. The first-party `pino`
-and `headroom` proxies are compiled in. The `central` proxy runs `jbcentral` (see
-below): assumed logged in, with poverty-mode never writing central's config or
-driving login.
+and `headroom` proxies are compiled in. The `central` proxy runs `central` (see
+below): you install it yourself, and poverty-mode assumes you are logged in — it
+never writes central's config or drives login.
 
 ## Central executable
 
-When you enable the `central` proxy, the binary it runs is the `central.executable`
-config setting (default `jbcentral`). A set value (a path or a `PATH` name) is used
-as-is. Empty or unset falls back to downloading the latest `jbcentral` (unpinned)
-into poverty-mode's cache. Override per run with `--central-executable <PATH>` (an
-empty value forces the download fallback).
+Central is an external tool: **you install it**, poverty-mode never downloads it.
+The binary it runs is the `central.executable` config setting (default `central`) —
+a path, or a bare name resolved on your `PATH`. If it cannot be found, the run fails
+with an error naming what it looked for. Override per run with
+`--central-executable <PATH>`; an empty value selects the `central` default.
+
+`central.pinned_version` is accepted but ignored (auto-download was removed in
+[#34](https://github.com/bindreams/poverty-mode/issues/34)); `doctor` warns if your
+config still sets it, and it is dropped the next time poverty-mode writes the file.
 
 ## Testing
 
