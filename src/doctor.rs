@@ -242,24 +242,29 @@ pub fn analyze_dead_config_keys(pinned_version: Option<&str>) -> Vec<Finding> {
     }
 }
 
-/// Central readiness: verify the configured (or default `central`) executable resolves, on `PATH`
-/// or as an explicit path. One `Warn` finding when it does not; `FindingDomain::Toolchain`,
-/// `layer: None`. Never an Error — `doctor` reports, it does not gate.
+/// Central readiness: can the configured (or default `central`) executable actually be spawned?
+///
+/// Uses the same `central::probe_presence` spawn as `status` and the run, so `doctor` cannot report
+/// a central that a run then fails on — the failure mode of any second, `is_file`-based check.
+/// One `Warn` when it cannot run, carrying the reason; `FindingDomain::Toolchain`, `layer: None`.
+/// Never an Error — `doctor` reports, it does not gate.
+///
+/// Spawns a child process (R5): call from the blocking side.
 pub fn analyze_central(executable: Option<&str>) -> Vec<Finding> {
     let exe = crate::central::central_executable(executable);
-    if crate::central::locate_executable(&exe).is_some() {
-        return Vec::new();
+    match crate::central::probe_presence(&exe) {
+        crate::central::Presence::Present { .. } => Vec::new(),
+        crate::central::Presence::Unavailable { reason } => vec![Finding {
+            domain: FindingDomain::Toolchain,
+            layer: None,
+            severity: Severity::Warn,
+            message: format!(
+                "central executable `{}` cannot be run ({reason}); install JetBrains Central",
+                exe.display()
+            ),
+            found_value: None,
+        }],
     }
-    vec![Finding {
-        domain: FindingDomain::Toolchain,
-        layer: None,
-        severity: Severity::Warn,
-        message: format!(
-            "central executable `{}` not found on PATH or filesystem; install JetBrains Central",
-            exe.display()
-        ),
-        found_value: None,
-    }]
 }
 
 /// Render findings, errors first then warnings; pure.

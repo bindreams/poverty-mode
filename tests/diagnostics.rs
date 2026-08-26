@@ -69,14 +69,14 @@ fn seed_central_config(home: &TempDir, settings_body: &str) {
 fn status_runs_and_reports_no_runs_on_clean_machine() {
     let home = TempDir::new().unwrap();
     // `executable: null` falls back to the `central` default, which is not on the hermetic PATH,
-    // so a clean machine reads "not found".
+    // so a clean machine reads "unavailable".
     seed_central_config(&home, "    executable: null\n");
     pm(&home)
         .arg("status")
         .assert()
         .success()
         .stdout(predicate::str::contains("pino (built-in)"))
-        .stdout(predicate::str::contains("central: not found"))
+        .stdout(predicate::str::contains("central: unavailable"))
         .stdout(predicate::str::contains("no live runs"));
 }
 
@@ -95,7 +95,7 @@ fn status_reports_configured_external_central() {
         .assert()
         .success()
         .stdout(predicate::str::contains("central: jbcentral 9.9.9 (fake)"))
-        .stdout(predicate::str::contains("not found").not());
+        .stdout(predicate::str::contains("unavailable").not());
 }
 
 #[test]

@@ -119,17 +119,16 @@ fn unsupported_targets_are_rejected() {
     assert!(!target_is_supported("linux", "riscv64"));
 }
 
-/// An absolute path guaranteed to exist and be executable on every platform: the
-/// running test binary itself. `central::locate_executable` resolves an explicit path verbatim when
-/// it is a file, so this is a hermetic stand-in for a resolvable central binary (no dependency on
-/// ambient `$PATH`).
+/// A real, runnable fake central: `doctor` now SPAWNS `<exe> --version`, so a stand-in must
+/// actually execute. Built by `build.rs` (never written here — that races exec with `ETXTBSY`).
+/// Hermetic: an explicit path, so it never depends on ambient `$PATH`.
 fn resolvable_executable() -> std::path::PathBuf {
-    std::env::current_exe().expect("test binary path")
+    std::path::PathBuf::from(env!("PM_FAKE_JBCENTRAL_VERSION"))
 }
 
 #[test]
 fn resolvable_central_is_quiet_on_every_target() {
-    // Central readiness is a PATH lookup now, so it no longer varies by target.
+    // Central readiness is a spawn now, so it no longer varies by target.
     let exe = resolvable_executable();
     let findings = analyze_central(Some(exe.to_str().unwrap()));
     assert!(findings.is_empty(), "a resolvable central is quiet: {findings:?}");
@@ -146,7 +145,8 @@ fn external_mode_warns_when_executable_unresolvable() {
     assert_eq!(findings[0].domain, FindingDomain::Toolchain);
     assert!(findings[0].layer.is_none());
     assert_eq!(findings[0].severity, Severity::Warn);
-    assert!(findings[0].message.contains("not found on PATH or filesystem"));
+    assert!(findings[0].message.contains("cannot be run"), "{findings:?}");
+    assert!(findings[0].message.contains("does not exist"), "{findings:?}");
 }
 
 #[test]
@@ -167,7 +167,7 @@ fn assemble_findings_merges_toolchain_and_central() {
     assert!(findings
         .iter()
         .any(|f| f.severity == Severity::Error && f.message.to_lowercase().contains("unsupported")));
-    assert!(findings.iter().any(|f| f.message.contains("not found on PATH")));
+    assert!(findings.iter().any(|f| f.message.contains("cannot be run")));
 }
 
 #[test]
@@ -187,7 +187,7 @@ fn assemble_findings_resolvable_central_adds_no_central_warning() {
     assert!(findings
         .iter()
         .any(|f| f.severity == Severity::Error && f.message.to_lowercase().contains("unsupported")));
-    assert!(!findings.iter().any(|f| f.message.contains("not found on PATH")));
+    assert!(!findings.iter().any(|f| f.message.contains("cannot be run")));
 }
 
 #[test]
@@ -297,11 +297,25 @@ fn doctor_warns_once_when_central_is_missing() {
 
 #[test]
 fn doctor_is_silent_when_central_resolves() {
-    // An explicit path is checked on disk, so this needs no PATH manipulation.
-    let dir = tempfile::tempdir().unwrap();
-    let exe = dir.path().join("central");
-    std::fs::write(&exe, "x").unwrap();
+    // A runnable central: silence. Note this must be a REAL executable — `doctor` spawns it.
+    let exe = resolvable_executable();
     assert!(analyze_central(Some(exe.to_str().unwrap())).is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_warns_when_central_exists_but_cannot_be_executed() {
+    // The case an `is_file` check called ready: present on disk, no execute bit. `doctor` must warn,
+    // because a run would fail.
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let noexec = dir.path().join("central");
+    std::fs::write(&noexec, "#!/bin/sh\ntrue\n").unwrap();
+    std::fs::set_permissions(&noexec, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let findings = analyze_central(Some(noexec.to_str().unwrap()));
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert!(findings[0].message.contains("not executable"), "{findings:?}");
 }
 
 // an inert key must be surfaced, not silently discarded.

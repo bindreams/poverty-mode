@@ -296,7 +296,9 @@ fn clean_reports_absence_without_aborting_the_filesystem_side() {
         || Ok(PathBuf::from("poverty-mode-no-such-central-xyz")),
         |_bin| {
             *stopped.borrow_mut() = true;
-            Ok(crate::central::StopOutcome::NotInstalled)
+            Ok(crate::central::StopOutcome::Unavailable {
+                reason: "not found on PATH".to_string(),
+            })
         },
     )
     .unwrap();
@@ -305,4 +307,28 @@ fn clean_reports_absence_without_aborting_the_filesystem_side() {
         stopped.into_inner(),
         "stop is always attempted: only the OS can say whether central is spawnable"
     );
+}
+
+// A genuine stop failure must abort BEFORE the filesystem side: the daemon the user asked to stop is
+// still running, so deleting their runs and cache anyway would compound the problem.
+#[test]
+fn a_failed_stop_aborts_without_deleting_anything() {
+    let tmp = tempfile::tempdir().unwrap();
+    let runs = tmp.path().join("runs");
+    let doomed = runs.join("01HXXXXXXXXXXXXXXXXXXXXXXA");
+    std::fs::create_dir_all(&doomed).unwrap();
+    let cache = tmp.path().join("cache");
+    std::fs::create_dir_all(&cache).unwrap();
+
+    let plan = build_clean_plan(&runs, &cache, 0, true, true).unwrap();
+    let err = execute_confirmed_clean(
+        &plan,
+        || Ok(PathBuf::from("central")),
+        |_bin| Ok(crate::central::StopOutcome::Failed { code: Some(7) }),
+    )
+    .unwrap_err();
+
+    assert!(format!("{err:#}").contains("nothing was deleted"), "{err:#}");
+    assert!(doomed.is_dir(), "run dir must survive a failed stop");
+    assert!(cache.is_dir(), "cache must survive a failed stop");
 }

@@ -141,8 +141,8 @@ pub enum CentralInstall {
     /// central resolved; `display` is a best-effort human label (its `--version` first line,
     /// falling back to the path).
     Found { display: String },
-    /// central could not be located; `looked_for` is the executable name that was tried.
-    NotFound { looked_for: String },
+    /// central could not be run; `looked_for` is the name tried and `reason` says why.
+    NotFound { looked_for: String, reason: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -211,8 +211,8 @@ pub fn render_status(report: &StatusReport) -> String {
         CentralInstall::Found { display } => {
             let _ = writeln!(out, "  central: {display}");
         }
-        CentralInstall::NotFound { looked_for } => {
-            let _ = writeln!(out, "  central: not found (looked for `{looked_for}`)");
+        CentralInstall::NotFound { looked_for, reason } => {
+            let _ = writeln!(out, "  central: unavailable (`{looked_for}`: {reason})");
         }
     }
 
@@ -251,16 +251,15 @@ pub struct WireConfig {
     pub port: Option<u16>,
 }
 
-/// Build a Download-mode `CentralProbe` from the independent sources (pure).
+/// Build a `CentralProbe` from the independent sources (pure).
 ///
-/// - `install`: the cache-scanned install state (`NotInstalled` or `Installed`).
+/// - `install`: whether central could be spawned (`Found` or `NotFound`).
 /// - `wire`: the parsed central `config.json`, if any.
-/// - `login`: the tri-state parsed from `jbcentral status` (Unknown if not probed).
+/// - `login`: the tri-state parsed from `central status` (Unknown if not probed).
 ///
-/// `running` is left `false` here; the caller flips it to the real `/health` result
-/// for the carried port (see `run_status`). With `NotInstalled` we emit a fully dead
-/// probe so login is forced Unknown by `build_status_report`. External mode does not
-/// use this helper — `run_status` builds its probe directly.
+/// `running` is left `false` here; the caller flips it to the real `/health` result for the carried
+/// port (see `run_status`). The port is carried even for `NotFound`: a daemon started earlier can
+/// still be live after its binary moves, so run-state is independent of presence.
 pub fn assemble_probe(install: CentralInstall, wire: Option<WireConfig>, login: CentralLogin) -> CentralProbe {
     // A missing binary makes login unknowable, but says nothing about the daemon: one started
     // earlier can still be live, so the wire port is carried through and `/health` still decides.
@@ -334,7 +333,7 @@ fn configured_central_executable() -> Result<Option<String>> {
 /// `executable`.
 ///
 /// Presence comes from `central::probe_presence`, i.e. an actual spawn — NOT from
-/// `central::locate_executable`, whose `is_file` walk can disagree with what a run does. Login is
+/// any `is_file` lookup, which can disagree with what a run does. Login is
 /// classified by running `<exe> status` with the SAME unresolved name the run would spawn. Run-state
 /// (`/health` on the wire-config port) is independent of both: a daemon can be up even when the
 /// binary has since been moved. Called via `spawn_blocking` from `run_status`.
@@ -344,17 +343,24 @@ fn probe_central() -> Result<CentralProbe> {
     let wire = read_wire_config();
 
     let install = match crate::central::probe_presence(&exe) {
-        crate::central::Presence::Absent => CentralInstall::NotFound {
+        crate::central::Presence::Unavailable { reason } => CentralInstall::NotFound {
             looked_for: exe.display().to_string(),
+            reason,
         },
         crate::central::Presence::Present { display } => CentralInstall::Found { display },
     };
     // Login truth from `<exe> status` (R20/R23c), only worth asking when central is present.
     let login = match &install {
         CentralInstall::NotFound { .. } => CentralLogin::Unknown,
-        CentralInstall::Found { .. } => crate::central::run_status_classified(&exe)
-            .map(CentralLogin::from)
-            .unwrap_or(CentralLogin::Unknown),
+        CentralInstall::Found { .. } => match crate::central::run_status_classified(&exe) {
+            Ok(state) => CentralLogin::from(state),
+            // central spawned for `--version` but not for `status`: surface it rather than let a
+            // bare "unknown" imply nothing went wrong.
+            Err(e) => {
+                eprintln!("warning: could not determine central login state: {e:#}");
+                CentralLogin::Unknown
+            }
+        },
     };
 
     let mut probe = assemble_probe(install, wire, login);

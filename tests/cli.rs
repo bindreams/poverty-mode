@@ -34,7 +34,7 @@ fn library_dispatch_is_reachable_for_config_subcommand() {
 
 /// End-to-end `status`, fully hermetic: an isolated `XDG_CONFIG_HOME` leaves `executable` unset so
 /// the `central` default is used, and `PATH` is pinned to an empty dir so the spawn reports absence
-/// and "not found" renders without running any external binary. `HOME`/`USERPROFILE` point at the
+/// and "unavailable" renders without running any external binary. `HOME`/`USERPROFILE` point at the
 /// temp dir so the probe's read of central's `config.json` finds nothing (no real port, no real
 /// `/health` call). An empty `POVERTY_LOG_DIR` yields "no live runs".
 ///
@@ -75,7 +75,7 @@ fn status_subcommand_runs_and_renders() {
         .success()
         .stdout(contains("pino (built-in)"))
         .stdout(contains("headroom (built-in)"))
-        .stdout(contains("central: not found"))
+        .stdout(contains("central: unavailable"))
         .stdout(contains("no live runs"));
 }
 

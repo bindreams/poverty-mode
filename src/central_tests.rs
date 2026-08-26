@@ -381,7 +381,7 @@ fn start_reuse_keeps_live_daemon_port() {
 
 // central executable resolution =======================================================================================
 // central is an external tool found on PATH. `central_executable` yields the NAME to spawn (execvp
-// does the lookup); `locate_executable*` is ADVISORY reporting only and must never gate a run.
+// does the lookup); `probe_presence` is the single presence check, and it spawns.
 
 #[test]
 fn central_executable_defaults_to_central() {
@@ -399,105 +399,101 @@ fn missing_central_error_names_the_executable() {
 }
 
 #[test]
-fn explicit_path_is_never_searched_on_path() {
-    // A name carrying a separator is a path: it resolves only if it is a file on disk, and a
-    // same-named file sitting on PATH must not satisfy it.
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("central"), "x").unwrap();
-    let path_var = std::ffi::OsString::from(dir.path());
-
-    let explicit = std::path::Path::new("nested/central");
-    assert_eq!(locate_executable_in(explicit, Some(&path_var)), None);
-
-    let real = dir.path().join("central");
-    assert_eq!(locate_executable_in(&real, Some(&path_var)), Some(real.clone()));
-}
-
-#[test]
-fn bare_name_is_found_across_path_entries() {
-    let first = tempfile::tempdir().unwrap();
-    let second = tempfile::tempdir().unwrap();
-    // The fixture must carry the platform's executable suffix: on Windows a dotless bare name is
-    // probed ONLY as `<name>.exe`, so an extensionless file is (correctly) not a candidate.
-    let found = second.path().join(format!("central{}", std::env::consts::EXE_SUFFIX));
-    std::fs::write(&found, "x").unwrap();
-
-    let path_var = std::env::join_paths([first.path(), second.path()]).unwrap();
-    assert_eq!(
-        locate_executable_in(std::path::Path::new("central"), Some(&path_var)),
-        Some(found)
-    );
-}
-
-#[test]
-fn absent_name_and_absent_path_var_resolve_to_nothing() {
-    let dir = tempfile::tempdir().unwrap();
-    let path_var = std::ffi::OsString::from(dir.path());
-    assert_eq!(
-        locate_executable_in(std::path::Path::new("central"), Some(&path_var)),
-        None
-    );
-    assert_eq!(locate_executable_in(std::path::Path::new("central"), None), None);
-}
-
-#[cfg(windows)]
-#[test]
-fn bare_name_exe_probing_matches_std() {
-    // std's rule (`sys::process::windows::resolve_exe`) is "any dot means it already has an
-    // extension": a dotted bare name is NOT given `.exe`. Probing `central-0.6.0.exe` here would
-    // report a binary `Command` cannot spawn.
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("central-0.6.0.exe"), "x").unwrap();
-    let path_var = std::ffi::OsString::from(dir.path());
-    assert_eq!(
-        locate_executable_in(std::path::Path::new("central-0.6.0"), Some(&path_var)),
-        None,
-        "std would not append .exe to a dotted bare name"
-    );
-
-    // A dotless bare name is probed ONLY as `<name>.exe`: std calls `set_extension`, so an
-    // extensionless file on PATH is not a candidate and must not be reported.
-    let extensionless = dir.path().join("plaincentral");
-    std::fs::write(&extensionless, "x").unwrap();
-    assert_eq!(
-        locate_executable_in(std::path::Path::new("plaincentral"), Some(&path_var)),
-        None,
-        "std probes only plaincentral.exe, which does not exist"
-    );
-
-    let found = dir.path().join("central.exe");
-    std::fs::write(&found, "x").unwrap();
-    assert_eq!(
-        locate_executable_in(std::path::Path::new("central"), Some(&path_var)),
-        Some(found)
-    );
-}
-
-#[cfg(windows)]
-#[test]
-fn explicit_path_gets_the_exe_suffix_like_std() {
-    // For an explicit path std DOES append `.exe`; not probing it would warn about a central that
-    // actually runs.
-    let dir = tempfile::tempdir().unwrap();
-    let with_exe = dir.path().join("central.exe");
-    std::fs::write(&with_exe, "x").unwrap();
-    let explicit = dir.path().join("central"); // no `.exe`, does not exist as-is
-    assert_eq!(locate_executable_in(&explicit, None), Some(with_exe));
-}
-
-#[test]
 fn absence_is_reported_by_the_os_not_a_pre_check() {
-    // A bare name that nothing on PATH satisfies. `stop` reports it as NotInstalled (there is
+    // A bare name that nothing on PATH satisfies. `stop` reports it as Unavailable (there is
     // nothing to stop, which is not a failure); `run_status_classified` errors, naming the binary
     // and PATH so the user knows where it was looked for.
     let missing = std::path::Path::new("poverty-mode-no-such-central-xyz");
 
-    assert_eq!(stop(missing).unwrap(), StopOutcome::NotInstalled);
+    assert_eq!(
+        stop(missing).unwrap(),
+        StopOutcome::Unavailable {
+            reason: "not found on PATH".to_string()
+        }
+    );
 
     let status_err = format!("{:#}", run_status_classified(missing).unwrap_err());
     assert!(status_err.contains("no-such-central-xyz"), "{status_err}");
     assert!(status_err.contains("PATH"), "{status_err}");
 
     // And presence is answered by an actual spawn, never by an is_file walk.
-    assert_eq!(probe_presence(missing), Presence::Absent);
+    assert!(matches!(probe_presence(missing), Presence::Unavailable { .. }));
+}
+
+#[test]
+fn presence_comes_from_a_real_spawn() {
+    // Absent: nothing on PATH satisfies the name.
+    let missing = std::path::Path::new("poverty-mode-no-such-central-xyz");
+    assert_eq!(
+        probe_presence(missing),
+        Presence::Unavailable {
+            reason: "not found on PATH".to_string()
+        }
+    );
+
+    // An explicit path that does not exist says so, without claiming PATH was searched.
+    let dir = tempfile::tempdir().unwrap();
+    let gone = dir.path().join("central");
+    assert_eq!(
+        probe_presence(&gone),
+        Presence::Unavailable {
+            reason: "does not exist".to_string()
+        }
+    );
+
+    // Present: the label is `--version`'s first NON-EMPTY line, so a leading blank is skipped.
+    let blank_first = std::path::Path::new(env!("PM_FAKE_CENTRAL_BLANK_FIRST"));
+    assert_eq!(
+        probe_presence(blank_first),
+        Presence::Present {
+            display: "central 1.2.3 (fake)".to_string()
+        }
+    );
+
+    // Present but uninformative: `--version` failed, so the label falls back to the path.
+    let fails = std::path::Path::new(env!("PM_FAKE_CENTRAL_VERSION_FAILS"));
+    assert_eq!(
+        probe_presence(fails),
+        Presence::Present {
+            display: fails.display().to_string()
+        }
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_non_executable_file_is_unavailable_not_present() {
+    // The defect an `is_file` lookup cannot avoid: a file that exists but cannot be exec'd fails
+    // with PermissionDenied, NOT NotFound. Reporting it present would make `status` and `doctor`
+    // disagree with every run.
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let noexec = dir.path().join("central");
+    std::fs::write(&noexec, "#!/bin/sh\ntrue\n").unwrap();
+    std::fs::set_permissions(&noexec, std::fs::Permissions::from_mode(0o000)).unwrap();
+    assert_eq!(
+        probe_presence(&noexec),
+        Presence::Unavailable {
+            reason: "not executable".to_string()
+        }
+    );
+
+    // Same for a directory, which also reports PermissionDenied rather than NotFound.
+    assert_eq!(
+        probe_presence(dir.path()),
+        Presence::Unavailable {
+            reason: "not executable".to_string()
+        }
+    );
+}
+
+#[test]
+fn explicit_path_wording_never_claims_path_was_searched() {
+    let bare = format!("{:#}", missing_central_error(std::path::Path::new("central")));
+    assert!(bare.contains("on PATH"), "{bare}");
+
+    for p in ["/opt/jb/central", "sub/central", "central/"] {
+        let msg = format!("{:#}", missing_central_error(std::path::Path::new(p)));
+        assert!(!msg.contains("on PATH"), "`{p}` is never searched on PATH: {msg}");
+    }
 }

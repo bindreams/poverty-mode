@@ -806,7 +806,7 @@ fn ensure_central_started(chain: &[ResolvedProxy]) -> anyhow::Result<CentralInfo
 /// Drive the central-tail pipeline through a [`CentralOps`] seam (R5). The binary is the trailing
 /// Central entry's `executable`, or `central` by default, handed to `start` UNRESOLVED so its
 /// `execvp` lookup decides — pre-resolving here would diverge from what actually executes (see
-/// `central::locate_executable_in`). Then `start` runs at the entry's requested port and
+/// `central::probe_presence`). Then `start` runs at the entry's requested port and
 /// health-checks the LIVE daemon's port (fail-closed if it never reports healthy). Login is assumed.
 fn ensure_central_started_with(chain: &[ResolvedProxy], ops: &dyn CentralOps) -> anyhow::Result<CentralInfo> {
     // Caller invariant: only reached when central is the tail (see `run_command`).

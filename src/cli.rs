@@ -549,9 +549,9 @@ pub fn dispatch(cli: Cli, run_id: Option<String>) -> anyhow::Result<()> {
             rt.block_on(crate::status::run_status())
         }
         Command::Doctor => {
-            // R23g: MODIFY the M3 NotImplemented arm. `run_doctor` is synchronous
-            // (pure file/settings + toolchain checks); it returns `Ok(false)` when
-            // any Error-severity finding exists, which we map to a non-zero exit.
+            // `run_doctor` is synchronous and blocking (it reads settings files AND spawns
+            // `<central> --version` for the readiness check), which is fine here: `dispatch` is not
+            // async. It returns `Ok(false)` when any Error-severity finding exists -> non-zero exit.
             if !crate::doctor::run_doctor()? {
                 std::process::exit(1);
             }

@@ -58,6 +58,32 @@ fn write_versioned(dir: &Path, stem: &str, version_line: &str, other_code: i32) 
     }
 }
 
+/// A fake central whose `--version` prints a LEADING BLANK LINE then `version_line` — so the
+/// first-non-empty-line pick in `central::version_line` is actually exercised, not just the
+/// single-line happy path.
+fn write_blank_first(dir: &Path, stem: &str, version_line: &str) -> PathBuf {
+    if cfg!(windows) {
+        let body = format!("@echo off\r\necho.\r\necho {version_line}\r\nexit /b 0\r\n");
+        write_exe(dir, &format!("{stem}.bat"), &body)
+    } else {
+        write_exe(
+            dir,
+            stem,
+            &format!("#!/bin/sh\necho ''\necho '{version_line}'\nexit 0\n"),
+        )
+    }
+}
+
+/// A fake central that exists and runs but whose `--version` FAILS (exit 3, no stdout) — the
+/// "present but uninformative" case, where the label must fall back to the path.
+fn write_version_fails(dir: &Path, stem: &str) -> PathBuf {
+    if cfg!(windows) {
+        write_exe(dir, &format!("{stem}.bat"), "@echo off\r\nexit /b 3\r\n")
+    } else {
+        write_exe(dir, stem, "#!/bin/sh\nexit 3\n")
+    }
+}
+
 fn main() {
     let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR set by cargo"));
 
@@ -74,6 +100,15 @@ fn main() {
 
     println!("cargo:rustc-env=PM_FAKE_JBCENTRAL_LOGGED_IN={}", logged_in.display());
     println!("cargo:rustc-env=PM_FAKE_JBCENTRAL_LOGGED_OUT={}", logged_out.display());
+    // `probe_presence` label tests (src/central_tests.rs).
+    let blank_first = write_blank_first(&out, "fake-central-blank-first", "central 1.2.3 (fake)");
+    let version_fails = write_version_fails(&out, "fake-central-version-fails");
+
     println!("cargo:rustc-env=PM_FAKE_JBCENTRAL_VERSION={}", version.display());
+    println!("cargo:rustc-env=PM_FAKE_CENTRAL_BLANK_FIRST={}", blank_first.display());
+    println!(
+        "cargo:rustc-env=PM_FAKE_CENTRAL_VERSION_FAILS={}",
+        version_fails.display()
+    );
     println!("cargo:rerun-if-changed=build.rs");
 }

@@ -120,6 +120,7 @@ fn probe(found: bool, running: bool, login: CentralLogin, port: Option<u16>) -> 
     } else {
         CentralInstall::NotFound {
             looked_for: "central".to_string(),
+            reason: "not found on PATH".to_string(),
         }
     };
     probe_with_install(running, login, port, install)
@@ -192,7 +193,8 @@ fn central_login_is_unknown_when_not_found_regardless_of_probe() {
     assert_eq!(
         report.central.install,
         CentralInstall::NotFound {
-            looked_for: "central".to_string()
+            looked_for: "central".to_string(),
+            reason: "not found on PATH".to_string()
         }
     );
     assert_eq!(report.central.login, CentralLogin::Unknown);
@@ -256,12 +258,13 @@ fn render_status_lists_components_central_and_runs() {
 }
 
 #[test]
-fn render_status_handles_not_found_and_no_runs() {
+fn render_status_handles_unavailable_central_and_no_runs() {
     let report = StatusReport {
         first_party: vec!["pino".to_string(), "headroom".to_string()],
         central: CentralStatus {
             install: CentralInstall::NotFound {
                 looked_for: "central".to_string(),
+                reason: "not found on PATH".to_string(),
             },
             run: CentralRun::Stopped,
             login: CentralLogin::Unknown,
@@ -269,7 +272,10 @@ fn render_status_handles_not_found_and_no_runs() {
         runs: vec![],
     };
     let out = render_status(&report);
-    assert!(out.contains("central: not found (looked for `central`)"), "got: {out}");
+    assert!(
+        out.contains("central: unavailable (`central`: not found on PATH)"),
+        "got: {out}"
+    );
     assert!(out.contains("no live runs"), "got: {out}");
 }
 
@@ -343,6 +349,7 @@ fn assemble_probe_keeps_the_port_when_the_binary_is_absent() {
     let wire = WireConfig { port: Some(53117) };
     let absent = CentralInstall::NotFound {
         looked_for: "central".to_string(),
+        reason: "not found on PATH".to_string(),
     };
     let probe = assemble_probe(absent.clone(), Some(wire), CentralLogin::LoggedIn);
     assert_eq!(probe.port, Some(53117), "the wire port must survive an absent binary");
@@ -429,6 +436,7 @@ fn assemble_probe_forces_unknown_login_when_the_binary_is_absent() {
     let probe = assemble_probe(
         CentralInstall::NotFound {
             looked_for: "central".to_string(),
+            reason: "not found on PATH".to_string(),
         },
         Some(WireConfig { port: Some(19516) }),
         CentralLogin::LoggedIn,
@@ -442,18 +450,19 @@ fn assemble_probe_forces_unknown_login_when_the_binary_is_absent() {
 }
 
 #[test]
-fn render_names_what_it_looked_for_when_central_is_absent() {
+fn render_names_what_it_tried_and_why_when_central_is_unavailable() {
     let out = render_status(&StatusReport {
         first_party: vec![],
         central: CentralStatus {
             install: CentralInstall::NotFound {
                 looked_for: "central".to_string(),
+                reason: "not found on PATH".to_string(),
             },
             run: CentralRun::Stopped,
             login: CentralLogin::Unknown,
         },
         runs: vec![],
     });
-    assert!(out.contains("not found"), "{out}");
+    assert!(out.contains("unavailable"), "{out}");
     assert!(out.contains("central"), "{out}");
 }

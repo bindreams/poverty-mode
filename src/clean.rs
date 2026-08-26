@@ -164,8 +164,13 @@ fn execute_confirmed_clean(
         let bin = resolve_bin()?;
         match stop(&bin)? {
             crate::central::StopOutcome::Stopped => {}
-            crate::central::StopOutcome::NotInstalled => {
-                println!("central not installed; nothing to stop");
+            crate::central::StopOutcome::Unavailable { reason } => {
+                println!("central cannot be run ({reason}); nothing to stop");
+            }
+            // A genuine stop failure aborts: the daemon the user asked to stop is still up, so
+            // deleting their runs and cache anyway would compound the problem.
+            crate::central::StopOutcome::Failed { code } => {
+                anyhow::bail!("`central proxy stop` failed (exit {code:?}); nothing was deleted");
             }
         }
     }
