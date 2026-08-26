@@ -122,6 +122,73 @@ pub fn parse_wire_config(contents: &str) -> anyhow::Result<CentralInfo> {
     Ok(CentralInfo { port, secret })
 }
 
+/// The executable name poverty-mode spawns when the config does not name one.
+///
+/// `jbcentral` survives only as a pre-1.0 compat symlink, so a fresh install may not have it.
+pub const DEFAULT_CENTRAL_EXECUTABLE: &str = "central";
+
+/// The executable to spawn for central: trimmed-non-empty `configured`, else
+/// [`DEFAULT_CENTRAL_EXECUTABLE`]. Blank/unset is the default, not an error.
+///
+/// A bare name is returned AS a bare name on purpose: `Command` resolves it through `execvp`, whose
+/// lookup is the authority. Pre-resolving it here would diverge (see [`locate_executable_in`]).
+pub fn central_executable(configured: Option<&str>) -> PathBuf {
+    match configured.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(exe) => PathBuf::from(exe),
+        None => PathBuf::from(DEFAULT_CENTRAL_EXECUTABLE),
+    }
+}
+
+/// The shared "central is not installed" error, naming what was looked for.
+pub fn missing_central_error(exe: &Path) -> anyhow::Error {
+    anyhow!(
+        "central executable `{}` not found on PATH — install JetBrains Central and make sure `{}` is on your PATH",
+        exe.display(),
+        DEFAULT_CENTRAL_EXECUTABLE
+    )
+}
+
+/// Locate `exe` for REPORTING ONLY — `status` labels, `doctor` findings.
+///
+/// **Never gate a run on this.** `is_file()` is not executability: a `chmod 000` file earlier on
+/// PATH satisfies it, while `execvp` skips such a file and keeps searching. Deciding from here would
+/// fail a setup that actually works. The run path spawns the name and maps `NotFound` instead.
+pub fn locate_executable(exe: &Path) -> Option<PathBuf> {
+    locate_executable_in(exe, std::env::var_os("PATH").as_deref())
+}
+
+/// [`locate_executable`] against an explicit `path_var`, so PATH semantics are testable without
+/// mutating the process environment.
+///
+/// An explicit path (absolute, or carrying any separator) is checked on disk and NEVER searched on
+/// PATH. A bare name is searched across `path_var`, skipping empty entries: POSIX reads an empty
+/// entry as the current directory, which would let the caller's CWD decide which central is
+/// reported. On Windows the `.exe` suffix is APPENDED (`OsString::push`), never applied via
+/// `Path::with_extension`, which truncates at the last dot (`central-0.6.0` -> `central-0.6.exe`).
+pub fn locate_executable_in(exe: &Path, path_var: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
+    let has_separator = exe.components().count() > 1 || exe.is_absolute();
+    if has_separator {
+        return exe.is_file().then(|| exe.to_path_buf());
+    }
+    let path_var = path_var?;
+    std::env::split_paths(path_var)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .flat_map(|dir| candidates_in(&dir, exe))
+        .find(|candidate| candidate.is_file())
+}
+
+/// The filenames to probe for a bare `exe` inside `dir`: the name itself, plus `<name>.exe` on
+/// Windows.
+fn candidates_in(dir: &Path, exe: &Path) -> Vec<PathBuf> {
+    let plain = dir.join(exe);
+    if !cfg!(windows) {
+        return vec![plain];
+    }
+    let mut with_exe = plain.clone().into_os_string();
+    with_exe.push(".exe");
+    vec![plain, PathBuf::from(with_exe)]
+}
+
 /// The directory name central keeps its state in, under `$HOME`.
 ///
 /// central moved here from `~/.wire` when it was renamed from `jbcentral` at 1.0. The legacy

@@ -226,20 +226,6 @@ pub fn analyze_toolchain(os: &str, arch: &str) -> Vec<Finding> {
 /// file. An explicit path (absolute or with a directory component) must exist as a
 /// file; a bare name is searched on `PATH` (plus the `.exe` form for Windows).
 /// Std-only and intentionally lenient — `doctor` only warns, it does not gate.
-fn executable_resolves(exe: &std::path::Path) -> bool {
-    let is_explicit_path = exe.is_absolute() || exe.parent().is_some_and(|p| !p.as_os_str().is_empty());
-    if is_explicit_path {
-        return exe.is_file();
-    }
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|dir| {
-        let candidate = dir.join(exe);
-        candidate.is_file() || candidate.with_extension("exe").is_file()
-    })
-}
-
 /// Central readiness, honoring the configured source. External: verify the
 /// executable resolves (on PATH or as a path). Download: verify a jbcentral asset
 /// exists for this target. All findings are `FindingDomain::Toolchain` with
@@ -249,7 +235,7 @@ pub fn analyze_central(source: crate::central::CentralSource, os: &str, arch: &s
     match source {
         crate::central::CentralSource::External(exe) => {
             // Resolve bare PATH names and explicit paths (std-only; no `which` dep).
-            if !executable_resolves(&exe) {
+            if crate::central::locate_executable(&exe).is_none() {
                 findings.push(Finding {
                     domain: FindingDomain::Toolchain,
                     layer: None,

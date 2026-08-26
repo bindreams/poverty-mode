@@ -508,3 +508,76 @@ fn start_reuse_keeps_live_daemon_port() {
     // No existing config => no reuse.
     assert_eq!(reuse_decision(None, true), None);
 }
+
+// central executable resolution (#34) =================================================================================
+// central is an external tool found on PATH. `central_executable` yields the NAME to spawn (execvp
+// does the lookup); `locate_executable*` is ADVISORY reporting only and must never gate a run.
+
+#[test]
+fn central_executable_defaults_to_central() {
+    assert_eq!(central_executable(None), std::path::Path::new("central"));
+    assert_eq!(central_executable(Some("")), std::path::Path::new("central"));
+    assert_eq!(central_executable(Some("   ")), std::path::Path::new("central"));
+    assert_eq!(central_executable(Some(" mine ")), std::path::Path::new("mine"));
+}
+
+#[test]
+fn missing_central_error_names_the_executable() {
+    let msg = format!("{:#}", missing_central_error(std::path::Path::new("central")));
+    assert!(msg.contains("central"), "{msg}");
+    assert!(msg.contains("PATH"), "{msg}");
+}
+
+#[test]
+fn explicit_path_is_never_searched_on_path() {
+    // A name carrying a separator is a path: it resolves only if it is a file on disk, and a
+    // same-named file sitting on PATH must not satisfy it.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("central"), "x").unwrap();
+    let path_var = std::ffi::OsString::from(dir.path());
+
+    let explicit = std::path::Path::new("nested/central");
+    assert_eq!(locate_executable_in(explicit, Some(&path_var)), None);
+
+    let real = dir.path().join("central");
+    assert_eq!(locate_executable_in(&real, Some(&path_var)), Some(real.clone()));
+}
+
+#[test]
+fn bare_name_is_found_across_path_entries() {
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    let found = second.path().join("central");
+    std::fs::write(&found, "x").unwrap();
+
+    let path_var = std::env::join_paths([first.path(), second.path()]).unwrap();
+    assert_eq!(
+        locate_executable_in(std::path::Path::new("central"), Some(&path_var)),
+        Some(found)
+    );
+}
+
+#[test]
+fn absent_name_and_absent_path_var_resolve_to_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path_var = std::ffi::OsString::from(dir.path());
+    assert_eq!(
+        locate_executable_in(std::path::Path::new("central"), Some(&path_var)),
+        None
+    );
+    assert_eq!(locate_executable_in(std::path::Path::new("central"), None), None);
+}
+
+#[cfg(windows)]
+#[test]
+fn dotted_names_keep_their_suffix_when_probing_exe() {
+    // `Path::with_extension` would truncate at the last dot and probe `central-0.6.exe`.
+    let dir = tempfile::tempdir().unwrap();
+    let found = dir.path().join("central-0.6.0.exe");
+    std::fs::write(&found, "x").unwrap();
+    let path_var = std::ffi::OsString::from(dir.path());
+    assert_eq!(
+        locate_executable_in(std::path::Path::new("central-0.6.0"), Some(&path_var)),
+        Some(found)
+    );
+}
