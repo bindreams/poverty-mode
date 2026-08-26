@@ -453,7 +453,16 @@ fn bare_name_exe_probing_matches_std() {
         "std would not append .exe to a dotted bare name"
     );
 
-    // A dotless bare name DOES get `.exe`.
+    // A dotless bare name is probed ONLY as `<name>.exe`: std calls `set_extension`, so an
+    // extensionless file on PATH is not a candidate and must not be reported.
+    let extensionless = dir.path().join("plaincentral");
+    std::fs::write(&extensionless, "x").unwrap();
+    assert_eq!(
+        locate_executable_in(std::path::Path::new("plaincentral"), Some(&path_var)),
+        None,
+        "std probes only plaincentral.exe, which does not exist"
+    );
+
     let found = dir.path().join("central.exe");
     std::fs::write(&found, "x").unwrap();
     assert_eq!(

@@ -229,22 +229,30 @@ pub fn locate_executable(exe: &Path) -> Option<PathBuf> {
 /// would let the caller's CWD decide which central is reported.
 pub fn locate_executable_in(exe: &Path, path_var: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
     if is_explicit_path(exe) {
-        return candidates_for(exe).into_iter().find(|c| c.is_file());
+        return candidates_for(exe, false).into_iter().find(|c| c.is_file());
     }
     let path_var = path_var?;
     std::env::split_paths(path_var)
         .filter(|dir| !dir.as_os_str().is_empty())
-        .flat_map(|dir| candidates_for(&dir.join(exe)))
+        .flat_map(|dir| candidates_for(&dir.join(exe), true))
         .find(|candidate| candidate.is_file())
 }
 
 /// The on-disk candidates for `candidate`, in the order std would try them.
 ///
-/// Non-Windows: just the path. Windows: `.exe` is appended only when std would append it — never
-/// when the file name already contains a dot, since std's rule is "no dot at all means no
-/// extension". Appending is done with `OsString::push`, never `Path::with_extension`, which
-/// truncates at the last dot (`central-0.6.0` -> `central-0.6.exe`).
-fn candidates_for(candidate: &Path) -> Vec<PathBuf> {
+/// `bare_name` says whether the ORIGINAL request was a bare file name; it cannot be re-derived from
+/// `candidate`, which by then has a search directory joined onto it and so always looks like a path.
+///
+/// Non-Windows: just the path. Windows follows std's `resolve_exe`:
+/// - an explicit path gets `.exe` appended and tried FIRST, then the bare path;
+/// - a bare name whose file name contains no dot is probed ONLY as `<name>.exe` (std calls
+///   `set_extension`, so the extensionless file is never a candidate);
+/// - a bare name that already contains a dot is probed as-is, since std treats any dot as
+///   "already has an extension".
+///
+/// Appending uses `OsString::push`, never `Path::with_extension`, which truncates at the last dot
+/// (`central-0.6.0` -> `central-0.6.exe`).
+fn candidates_for(candidate: &Path, bare_name: bool) -> Vec<PathBuf> {
     if !cfg!(windows) {
         return vec![candidate.to_path_buf()];
     }
@@ -256,18 +264,17 @@ fn candidates_for(candidate: &Path) -> Vec<PathBuf> {
     if name.ends_with(".exe") {
         return vec![candidate.to_path_buf()];
     }
-    let mut with_exe = candidate.to_path_buf().into_os_string();
-    with_exe.push(".exe");
-    let with_exe = PathBuf::from(with_exe);
-    // An explicit path tries `.exe` first (std does), then the bare path. A bare name only gets the
-    // `.exe` form when it has no dot at all.
-    if is_explicit_path(candidate) {
+    let mut pushed = candidate.to_path_buf().into_os_string();
+    pushed.push(".exe");
+    let with_exe = PathBuf::from(pushed);
+
+    if !bare_name {
         return vec![with_exe, candidate.to_path_buf()];
     }
     if name.contains('.') {
         return vec![candidate.to_path_buf()];
     }
-    vec![candidate.to_path_buf(), with_exe]
+    vec![with_exe]
 }
 
 /// The directory name central keeps its state in, under `$HOME`.
