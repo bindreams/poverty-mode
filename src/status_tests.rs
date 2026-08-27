@@ -165,7 +165,7 @@ fn central_run_and_login_state_come_from_probe() {
 #[test]
 fn central_login_logged_out_is_preserved_when_found() {
     // A daemon can be running while the OAuth session is expired/logged-out.
-    // The probe (from `jbcentral status`) carries LoggedOut and we must report it
+    // The probe (from `central status`) carries LoggedOut and we must report it
     // faithfully -- no "secret present => logged in" heuristic.
     let tmp = tempfile::tempdir().unwrap();
     let cache = tmp.path().join("cache");

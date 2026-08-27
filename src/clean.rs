@@ -149,26 +149,35 @@ fn confirm(prompt: &str) -> Result<bool> {
 /// filesystem side. `resolve_bin` and `stop` are injected so tests can drive the
 /// stop path without a real central binary or process.
 ///
-/// **Ordering is load-bearing**, though no longer because of the binary: central is external and
-/// lives on `PATH`, so `--clear-cache` cannot delete it. Stopping first means a stop failure aborts
-/// BEFORE any filesystem mutation, leaving the user's runs and cache untouched. Stop errors are
-/// surfaced (central::stop normalizes "not running" to Ok, so any Err is a real failure).
+/// **Ordering is load-bearing.** The stop is attempted BEFORE any filesystem mutation, so every
+/// way it can go wrong — a non-zero exit, or an unspawnable central with a live daemon — aborts with
+/// the user's runs and cache untouched. `central::stop` reports rather than erroring, so the arms
+/// below, not `?`, are what decide.
 fn execute_confirmed_clean(
     plan: &CleanPlan,
     resolve_bin: impl FnOnce() -> Result<PathBuf>,
     stop: impl FnOnce(&Path) -> Result<crate::central::StopOutcome>,
+    daemon_is_live: impl FnOnce() -> bool,
 ) -> Result<()> {
-    // Central stop, only if opted in, and BEFORE the filesystem side so a stop failure aborts
-    // without having touched the user's runs or cache.
+    // Central stop, only if opted in, and BEFORE the filesystem side so any failure aborts without
+    // having touched the user's runs or cache.
     if plan.stop_central {
         let bin = resolve_bin()?;
         match stop(&bin)? {
             crate::central::StopOutcome::Stopped => {}
+            // Unspawnable is only harmless if there is nothing running. A daemon started by an
+            // earlier install can still be live after its binary moves — deleting the user's state
+            // while the daemon they asked to stop keeps serving is the worst of both outcomes.
             crate::central::StopOutcome::Unavailable { reason } => {
+                if daemon_is_live() {
+                    anyhow::bail!(
+                        "central is still running but cannot be run to stop it ({reason}); \
+                         nothing was deleted — stop it manually, or drop --stop-central"
+                    );
+                }
                 println!("central cannot be run ({reason}); nothing to stop");
             }
-            // A genuine stop failure aborts: the daemon the user asked to stop is still up, so
-            // deleting their runs and cache anyway would compound the problem.
+            // A genuine stop failure aborts for the same reason.
             crate::central::StopOutcome::Failed { code } => {
                 anyhow::bail!("`central proxy stop` failed (exit {code:?}); nothing was deleted");
             }
@@ -179,9 +188,23 @@ fn execute_confirmed_clean(
     Ok(())
 }
 
-/// Gather real inputs, preview, confirm (unless `assume_yes`), then execute. Central
-/// stop happens only when `stop_central` is set AND the user confirms, AFTER the
-/// emptiness check -- never on a no-op or aborted clean (R20). Stop errors propagate.
+/// True iff central's `config.json` names a port whose `/health` answers — i.e. a daemon is live
+/// regardless of whether any binary can be found to stop it.
+fn central_daemon_is_live() -> bool {
+    let Ok(home) = crate::central::home_dir() else {
+        return false;
+    };
+    match crate::central::existing_config_in(&home) {
+        Ok(Some(info)) => crate::central::health(info.port),
+        // A missing or unreadable config is not evidence of a live daemon.
+        _ => false,
+    }
+}
+
+/// Gather real inputs, preview, confirm (unless `assume_yes`), then execute. Central stop happens
+/// only when `stop_central` is set AND the user confirms, AFTER the emptiness check — never on a
+/// no-op or aborted clean (R20). A stop that fails, or that cannot run while a daemon is live,
+/// aborts before anything is deleted.
 pub fn run_clean(keep: usize, clear_cache: bool, stop_central: bool, assume_yes: bool) -> Result<()> {
     let cache = crate::paths::cache_dir()?;
     let runs_root = crate::paths::log_dir()?;
@@ -205,7 +228,7 @@ pub fn run_clean(keep: usize, clear_cache: bool, stop_central: bool, assume_yes:
         let executable = crate::config::Config::load_or_default()?.central_executable();
         Ok(central_stop_target(executable.as_deref()))
     };
-    execute_confirmed_clean(&plan, resolve_bin, crate::central::stop)?;
+    execute_confirmed_clean(&plan, resolve_bin, crate::central::stop, central_daemon_is_live)?;
 
     println!("clean complete");
     Ok(())

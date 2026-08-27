@@ -22,5 +22,10 @@ fn login_start_health_stop_round_trip() {
     let up = central::central_wire_upstream(&info).expect("wire upstream");
     assert_eq!(up.host_header(), format!("127.0.0.1:{}", info.port));
 
-    central::stop(&bin).expect("stop central daemon");
+    // Assert the OUTCOME: `stop` reports rather than erroring, so `.expect()` alone could never
+    // catch a failed or unspawnable stop.
+    assert_eq!(
+        central::stop(&bin).expect("spawn central proxy stop"),
+        central::StopOutcome::Stopped
+    );
 }

@@ -90,7 +90,19 @@ fn status_subcommand_runs_and_renders() {
 fn doctor_subcommand_runs_and_renders() {
     let tmp = tempfile::tempdir().unwrap();
     let mut cmd = Command::cargo_bin("poverty-mode").unwrap();
-    let output = cmd.arg("doctor").current_dir(tmp.path()).output().unwrap();
+    let output = cmd
+        .arg("doctor")
+        .current_dir(tmp.path())
+        // `doctor` spawns `<central> --version` for its readiness check, so PATH/HOME/config must be
+        // pinned: otherwise this runs the developer's real central against their real home, and the
+        // result depends on whether the machine has central installed.
+        .env("PATH", tmp.path())
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+        .env("POVERTY_MANAGED_SETTINGS", tmp.path().join("managed-settings.json"))
+        .output()
+        .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     // Real diagnostics, not the old NotImplemented stub.
     let stderr = String::from_utf8_lossy(&output.stderr);

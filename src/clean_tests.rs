@@ -200,6 +200,7 @@ fn stop_central_uses_external_executable_when_resolver_returns_it() {
             *stopped.borrow_mut() = Some(bin.to_path_buf());
             Ok(crate::central::StopOutcome::Stopped)
         },
+        || false,
     )
     .unwrap();
 
@@ -229,6 +230,7 @@ fn confirmed_clean_without_stop_central_never_resolves_or_stops() {
         &plan,
         || panic!("resolver must not run when stop_central is false"),
         |_| panic!("stop must not run when stop_central is false"),
+        || false,
     )
     .unwrap();
 
@@ -300,6 +302,7 @@ fn clean_reports_absence_without_aborting_the_filesystem_side() {
                 reason: "not found on PATH".to_string(),
             })
         },
+        || false,
     )
     .unwrap();
 
@@ -325,10 +328,66 @@ fn a_failed_stop_aborts_without_deleting_anything() {
         &plan,
         || Ok(PathBuf::from("central")),
         |_bin| Ok(crate::central::StopOutcome::Failed { code: Some(7) }),
+        || false,
     )
     .unwrap_err();
 
     assert!(format!("{err:#}").contains("nothing was deleted"), "{err:#}");
     assert!(doomed.is_dir(), "run dir must survive a failed stop");
     assert!(cache.is_dir(), "cache must survive a failed stop");
+}
+
+// An unspawnable central with a LIVE daemon must abort: deleting the user's state while the daemon
+// they asked to stop keeps serving is the worst of both outcomes.
+#[test]
+fn unspawnable_central_with_a_live_daemon_aborts_without_deleting() {
+    let tmp = tempfile::tempdir().unwrap();
+    let runs = tmp.path().join("runs");
+    let doomed = runs.join("01HXXXXXXXXXXXXXXXXXXXXXXA");
+    std::fs::create_dir_all(&doomed).unwrap();
+    let cache = tmp.path().join("cache");
+    std::fs::create_dir_all(&cache).unwrap();
+
+    let plan = build_clean_plan(&runs, &cache, 0, true, true).unwrap();
+    let err = execute_confirmed_clean(
+        &plan,
+        || Ok(PathBuf::from("central")),
+        |_bin| {
+            Ok(crate::central::StopOutcome::Unavailable {
+                reason: "not found on PATH".to_string(),
+            })
+        },
+        || true, // a daemon IS live
+    )
+    .unwrap_err();
+
+    assert!(format!("{err:#}").contains("nothing was deleted"), "{err:#}");
+    assert!(doomed.is_dir(), "run dir must survive");
+    assert!(cache.is_dir(), "cache must survive");
+}
+
+// With no daemon live, an unspawnable central is genuinely nothing to stop: the clean proceeds.
+#[test]
+fn unspawnable_central_with_no_daemon_proceeds() {
+    let tmp = tempfile::tempdir().unwrap();
+    let runs = tmp.path().join("runs");
+    let doomed = runs.join("01HXXXXXXXXXXXXXXXXXXXXXXA");
+    std::fs::create_dir_all(&doomed).unwrap();
+    let cache = tmp.path().join("cache");
+    std::fs::create_dir_all(&cache).unwrap();
+
+    let plan = build_clean_plan(&runs, &cache, 0, true, true).unwrap();
+    execute_confirmed_clean(
+        &plan,
+        || Ok(PathBuf::from("central")),
+        |_bin| {
+            Ok(crate::central::StopOutcome::Unavailable {
+                reason: "not found on PATH".to_string(),
+            })
+        },
+        || false,
+    )
+    .unwrap();
+
+    assert!(!doomed.is_dir(), "run dir should have been pruned");
 }

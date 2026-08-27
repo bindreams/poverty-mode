@@ -542,7 +542,7 @@ pub fn dispatch(cli: Cli, run_id: Option<String>) -> anyhow::Result<()> {
         Command::Config { action } => dispatch_config(action),
         Command::Status => {
             // `dispatch` is synchronous; `run_status` is async (R5: its blocking
-            // central health/`jbcentral status` probes run off the executor via
+            // central health/`central status` probes run off the executor via
             // `spawn_blocking`). Drive it on a fresh multi-thread runtime, mirroring
             // the `run`/`proxy` arms (R23g: MODIFY the M3 NotImplemented arm).
             let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;

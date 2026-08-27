@@ -119,20 +119,18 @@ impl From<crate::central::CentralLoginState> for CentralLogin {
     }
 }
 
-/// Result of probing the central singleton, supplied by the caller so the report
-/// builder stays pure and headless-testable. Not `Copy`: `install` carries owned
-/// strings (the External display / Download versions) resolved in the probe.
+/// Result of probing the central singleton, supplied by the caller so the report builder stays pure
+/// and headless-testable. Not `Copy`: `install` carries owned strings resolved in the probe.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CentralProbe {
     /// `/health` on the configured port returned 200.
     pub running: bool,
-    /// Login state parsed from `jbcentral status`.
+    /// Login state parsed from `central status`.
     pub login: CentralLogin,
     /// The configured/actual proxy port, if known.
     pub port: Option<u16>,
-    /// Resolved install state. Computed in the blocking probe (it may spawn
-    /// `<exe> --version` for External, or scan the cache for Download) so the
-    /// report builder stays pure.
+    /// Whether central could be spawned. Decided in the blocking probe (which spawns
+    /// `<exe> --version`) so the report builder stays pure.
     pub install: CentralInstall,
 }
 
@@ -309,8 +307,18 @@ pub(crate) fn wire_config_port() -> Option<u16> {
 /// [`wire_config_port`] against an explicit `home`, so the resolution status actually uses is
 /// testable without touching the real `$HOME` (which resolves either layout via a compat symlink).
 pub(crate) fn wire_config_port_in(home: &std::path::Path) -> Option<u16> {
-    let text = std::fs::read_to_string(crate::central::wire_config_path_in(home)).ok()?;
-    parse_wire_config_port(&text)
+    let path = crate::central::wire_config_path_in(home);
+    let text = std::fs::read_to_string(&path).ok()?;
+    let port = parse_wire_config_port(&text);
+    if port.is_none() {
+        // The file exists but yields no port. Silence here would render as "stopped", which is a
+        // claim we cannot support — say so instead.
+        eprintln!(
+            "warning: {} exists but has no usable proxy_port; central run-state is unknown",
+            path.display()
+        );
+    }
+    port
 }
 
 /// Read central's `config.json` for the live central probe. Missing/invalid -> port None.
@@ -350,16 +358,26 @@ fn probe_central() -> Result<CentralProbe> {
         crate::central::Presence::Present { display } => CentralInstall::Found { display },
     };
     // Login truth from `<exe> status` (R20/R23c), only worth asking when central is present.
-    let login = match &install {
-        CentralInstall::NotFound { .. } => CentralLogin::Unknown,
+    // Login needs a SECOND spawn, so the two can disagree if the binary changes underneath. If the
+    // login spawn cannot run central at all, downgrade the presence verdict to match: a report that
+    // says both "found" and "could not run it" is incoherent.
+    let (install, login) = match install {
+        CentralInstall::NotFound { .. } => (install, CentralLogin::Unknown),
         CentralInstall::Found { .. } => match crate::central::run_status_classified(&exe) {
-            Ok(state) => CentralLogin::from(state),
-            // central spawned for `--version` but not for `status`: surface it rather than let a
-            // bare "unknown" imply nothing went wrong.
-            Err(e) => {
-                eprintln!("warning: could not determine central login state: {e:#}");
-                CentralLogin::Unknown
-            }
+            Ok(state) => (install, CentralLogin::from(state)),
+            Err(e) => match crate::central::probe_presence(&exe) {
+                crate::central::Presence::Unavailable { reason } => (
+                    CentralInstall::NotFound {
+                        looked_for: exe.display().to_string(),
+                        reason,
+                    },
+                    CentralLogin::Unknown,
+                ),
+                crate::central::Presence::Present { .. } => {
+                    eprintln!("warning: could not determine central login state: {e:#}");
+                    (install, CentralLogin::Unknown)
+                }
+            },
         },
     };
 
@@ -372,7 +390,7 @@ fn probe_central() -> Result<CentralProbe> {
 
 /// Gather real inputs and print the status report. Side-effecting async entry point.
 ///
-/// All blocking work (`central::health`, `jbcentral status` parsing) runs via
+/// All blocking work (`central::health`, `central status` parsing) runs via
 /// `spawn_blocking` so the tokio executor is never blocked (R5).
 ///
 /// Note: `central`'s `/health` carries no identity (unlike the first-party
@@ -383,7 +401,7 @@ pub async fn run_status() -> Result<()> {
     let runs_root = crate::paths::log_dir()?;
 
     // Off-runtime: config load, install scan / `<exe> --version`, wire-config read,
-    // jbcentral status parse, health. Resolution honors the configured `executable`
+    // central status parse, health. Resolution honors the configured `executable`
     // (External-by-default), not just the managed download cache.
     let probe = tokio::task::spawn_blocking(probe_central).await??;
 

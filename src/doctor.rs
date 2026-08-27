@@ -214,9 +214,6 @@ pub fn analyze_toolchain(os: &str, arch: &str) -> Vec<Finding> {
 }
 
 /// Best-effort check that a configured central `executable` resolves to a runnable
-/// file. An explicit path (absolute or with a directory component) must exist as a
-/// file; a bare name is searched on `PATH` (plus the `.exe` form for Windows).
-/// Std-only and intentionally lenient — `doctor` only warns, it does not gate.
 /// The central config `doctor` inspects: the executable to look for, plus the dead `pinned_version`
 /// key so its presence can be surfaced instead of silently ignored.
 #[derive(Clone, Debug, PartialEq, Eq)]

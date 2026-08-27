@@ -166,9 +166,8 @@ pub enum Presence {
     Present { display: String },
     /// The process could NOT be created. `reason` says why, in the user's terms.
     ///
-    /// Not only "missing": a directory, or a file without the execute bit, fails with
-    /// `PermissionDenied` rather than `NotFound`. Reporting those as present would be the same
-    /// defect as an `is_file` lookup — `status` would say found while every run fails.
+    /// Not only "missing": a directory or a file without the execute bit fails `PermissionDenied`,
+    /// not `NotFound`. Calling those present would make `status` disagree with every run.
     Unavailable { reason: String },
 }
 
@@ -223,11 +222,9 @@ pub enum StopOutcome {
     Stopped,
     /// central could not be spawned at all, so there was nothing to stop. `reason` says why.
     Unavailable { reason: String },
-    /// central ran but reported failure. The exit code is passed through UNINTERPRETED.
-    ///
-    /// No specific code is folded into "already stopped": which code central uses for a not-running
-    /// daemon is unverified against the real tool, and guessing would silently swallow a genuine
-    /// stop failure. Callers must treat this as a failure.
+    /// central ran but reported failure. The exit code is passed through UNINTERPRETED: which code
+    /// central uses for a not-running daemon is unverified, and guessing would swallow a genuine
+    /// stop failure.
     Failed { code: Option<i32> },
 }
 

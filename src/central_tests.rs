@@ -180,7 +180,7 @@ fn login_state_unknown_on_killed_process() {
 
 #[test]
 fn run_status_classified_reports_logged_in_when_status_exits_zero() {
-    // Genuine wiring test (R20): the real exit code from `jbcentral status` must reach the
+    // Genuine wiring test (R20): the real exit code from `central status` must reach the
     // classifier. A logged-in central exits 0 with a "Logged in" banner and must classify as
     // LoggedIn -- NOT Unknown (which is what dropping the exit code would yield).
     let bin = std::path::Path::new(env!("PM_FAKE_JBCENTRAL_LOGGED_IN"));
@@ -496,4 +496,32 @@ fn explicit_path_wording_never_claims_path_was_searched() {
         let msg = format!("{:#}", missing_central_error(std::path::Path::new(p)));
         assert!(!msg.contains("on PATH"), "`{p}` is never searched on PATH: {msg}");
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_non_notfound_spawn_failure_keeps_its_own_cause() {
+    // Only NotFound means "central is not installed". A different failure (here: no execute bit)
+    // must NOT be relabelled as missing — that would send the user hunting for an install they have.
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let noexec = dir.path().join("central");
+    std::fs::write(&noexec, "#!/bin/sh\ntrue\n").unwrap();
+    std::fs::set_permissions(&noexec, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let err = format!("{:#}", run_status_classified(&noexec).unwrap_err());
+    assert!(err.contains("central"), "{err}");
+    assert!(
+        !err.contains("does not exist") && !err.contains("not found"),
+        "a permission failure must not be reported as missing: {err}"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_backslash_counts_as_an_explicit_path() {
+    // `\` is a separator on Windows, so such a name is never searched on PATH and the error must
+    // not claim it was.
+    let msg = format!("{:#}", missing_central_error(std::path::Path::new("sub\\central")));
+    assert!(!msg.contains("on PATH"), "{msg}");
 }
