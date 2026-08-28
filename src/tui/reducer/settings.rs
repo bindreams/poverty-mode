@@ -9,6 +9,9 @@ use crate::config::ProxySettings;
 use crate::proxy::pino::CacheTtl;
 use crate::proxy::ProxyName;
 
+/// Shown for an unset `central.executable`: the name that will actually be spawned.
+const DEFAULT_PLACEHOLDER: &str = "(central)";
+
 #[cfg(test)]
 #[path = "settings_tests.rs"]
 mod settings_tests;
@@ -28,7 +31,6 @@ pub enum SettingId {
     Compression,
     // central
     Port,
-    PinnedVersion,
     Executable,
 }
 
@@ -56,7 +58,7 @@ const PINO_SETTINGS: &[SettingId] = &[
     SettingId::ModelOverride,
 ];
 const HEADROOM_SETTINGS: &[SettingId] = &[SettingId::Compression];
-const CENTRAL_SETTINGS: &[SettingId] = &[SettingId::Port, SettingId::PinnedVersion, SettingId::Executable];
+const CENTRAL_SETTINGS: &[SettingId] = &[SettingId::Port, SettingId::Executable];
 
 /// The fixed, ordered list of editable settings for a proxy.
 pub fn settings_of(name: ProxyName) -> &'static [SettingId] {
@@ -80,7 +82,6 @@ impl SettingId {
             SettingId::ModelOverride => "model",
             SettingId::Compression => "compression",
             SettingId::Port => "port",
-            SettingId::PinnedVersion => "version",
             SettingId::Executable => "executable",
         }
     }
@@ -91,7 +92,7 @@ impl SettingId {
             SettingId::AutoCache | SettingId::StripAnsi | SettingId::Compression => SettingKind::Bool,
             SettingId::MainTtl | SettingId::SubTtl => SettingKind::Enum,
             SettingId::DropTools => SettingKind::List,
-            SettingId::ModelOverride | SettingId::PinnedVersion | SettingId::Executable => SettingKind::Text,
+            SettingId::ModelOverride | SettingId::Executable => SettingKind::Text,
             SettingId::Port => SettingKind::Number,
         }
     }
@@ -136,7 +137,6 @@ impl SettingId {
             (SettingId::ModelOverride, ProxySettings::Pino(p)) => p.model_override.clone().unwrap_or_default(),
             (SettingId::DropTools, ProxySettings::Pino(p)) => p.drop_tools.join(","),
             (SettingId::Port, ProxySettings::Central(c)) => c.port.map(|n| n.to_string()).unwrap_or_default(),
-            (SettingId::PinnedVersion, ProxySettings::Central(c)) => c.pinned_version.clone().unwrap_or_default(),
             (SettingId::Executable, ProxySettings::Central(c)) => c.executable.clone().unwrap_or_default(),
             _ => String::new(),
         }
@@ -149,9 +149,6 @@ impl SettingId {
         match (self, s) {
             (SettingId::ModelOverride, ProxySettings::Pino(p)) => {
                 p.model_override = text_to_option(buf);
-            }
-            (SettingId::PinnedVersion, ProxySettings::Central(c)) => {
-                c.pinned_version = text_to_option(buf);
             }
             (SettingId::Executable, ProxySettings::Central(c)) => {
                 c.executable = text_to_option(buf);
@@ -227,11 +224,8 @@ pub fn render_value(s: &ProxySettings, id: SettingId) -> String {
             (SettingId::ModelOverride, ProxySettings::Pino(p)) => {
                 p.model_override.clone().unwrap_or_else(|| "(default)".to_string())
             }
-            (SettingId::PinnedVersion, ProxySettings::Central(c)) => {
-                c.pinned_version.clone().unwrap_or_else(|| "(default)".to_string())
-            }
             (SettingId::Executable, ProxySettings::Central(c)) => {
-                c.executable.clone().unwrap_or_else(|| "(download)".to_string())
+                c.executable.clone().unwrap_or_else(|| DEFAULT_PLACEHOLDER.to_string())
             }
             _ => "(default)".to_string(),
         },

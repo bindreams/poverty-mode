@@ -1,6 +1,6 @@
-//! JB Central: the shared singleton that always runs last in the chain (an
-//! externally-installed `jbcentral` by default, or an unpinned download). M8 fills
-//! install / start / health / stop (login is assumed, not driven); this module currently
+//! JB Central: the shared singleton that always runs last in the chain, always an externally
+//! installed `central` found on `PATH`. This module covers resolve / start / health / stop
+//! (login is assumed, not driven); it currently
 //! provides the items the orchestrator (M6) consumes — the started `CentralInfo`
 //! (port + wire secret) and `central_wire_upstream`, which renders the JetBrains
 //! wire URL the pre-central hop (or a central-only agent) targets — plus the M8.5
@@ -16,15 +16,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context};
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 
-use crate::download;
-use crate::paths;
 use crate::proxy::Upstream;
-
-/// The default jbcentral version this build manages (R4). Single source of truth.
-pub const DEFAULT_JBCENTRAL_VERSION: &str = "0.2.9";
-
-/// The install-dir name under `<cache>/bin/` (R4). Shared with M10 status/clean — never `central`.
-pub const INSTALL_TOOL_DIR: &str = "jbcentral";
 
 /// Characters that must be percent-encoded so the wire secret stays a single,
 /// faithful path segment (R20). Beyond the C0 controls, this encodes the path
@@ -94,7 +86,7 @@ pub fn central_wire_upstream(info: &CentralInfo) -> anyhow::Result<Upstream> {
 /// Fails closed (error, never a default) when the file is unparseable or missing fields, so the
 /// caller never silently bypasses wire. The error message never echoes the raw JSON (it may carry the
 /// secret): on a parse failure we emit a fixed string and do NOT interpolate the serde error, which
-/// could contain a fragment of the input. Some jbcentral builds write `proxy_port` as a string, so a
+/// could contain a fragment of the input. Some central builds write `proxy_port` as a string, so a
 /// numeric-string port is coerced.
 pub fn parse_wire_config(contents: &str) -> anyhow::Result<CentralInfo> {
     let value: serde_json::Value =
@@ -122,12 +114,135 @@ pub fn parse_wire_config(contents: &str) -> anyhow::Result<CentralInfo> {
     Ok(CentralInfo { port, secret })
 }
 
+/// The executable name poverty-mode spawns when the config does not name one.
+///
+/// `jbcentral` survives only as a pre-1.0 compat symlink, so a fresh install may not have it.
+pub const DEFAULT_CENTRAL_EXECUTABLE: &str = "central";
+
+/// The executable to spawn for central: trimmed-non-empty `configured`, else
+/// [`DEFAULT_CENTRAL_EXECUTABLE`]. Blank/unset is the default, not an error.
+///
+/// A bare name is returned AS a bare name on purpose: `Command` resolves it through `execvp`, whose
+/// lookup is the authority. Pre-resolving it here would diverge from what actually executes.
+pub fn central_executable(configured: Option<&str>) -> PathBuf {
+    match configured.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(exe) => PathBuf::from(exe),
+        None => PathBuf::from(DEFAULT_CENTRAL_EXECUTABLE),
+    }
+}
+
+/// The shared "central is not installed" error, naming what was looked for.
+pub fn missing_central_error(exe: &Path) -> anyhow::Error {
+    if is_explicit_path(exe) {
+        return anyhow!(
+            "configured central executable `{}` does not exist — install JetBrains Central or fix `central.executable`",
+            exe.display()
+        );
+    }
+    anyhow!(
+        "central executable `{}` not found on PATH — install JetBrains Central and make sure it is on your PATH",
+        exe.display()
+    )
+}
+
+/// True when `exe` is a path rather than a bare file name, i.e. `Command` will NOT search `PATH`
+/// for it. Used only to word errors correctly.
+fn is_explicit_path(exe: &Path) -> bool {
+    if exe.is_absolute() {
+        return true;
+    }
+    // Checked on the raw string, not via `components()`: `Path::new("central/").components()`
+    // yields one component, so a count would call a trailing-slash name bare when the OS will
+    // not search PATH for it.
+    let raw = exe.as_os_str().to_string_lossy();
+    raw.contains('/') || (cfg!(windows) && raw.contains('\\'))
+}
+
+/// Whether a central binary can actually be spawned, and how to label it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Presence {
+    /// The process was created. `display` is `--version`'s first non-empty stdout line, or the path
+    /// when it ran but printed nothing usable.
+    Present { display: String },
+    /// The process could NOT be created. `reason` says why, in the user's terms.
+    ///
+    /// Not only "missing": a directory or a file without the execute bit fails `PermissionDenied`,
+    /// not `NotFound`. Calling those present would make `status` disagree with every run.
+    Unavailable { reason: String },
+}
+
+/// Ask the OS whether central can be run, by spawning `<bin> --version`.
+///
+/// The ONLY presence check in this crate. There is deliberately no second mechanism: an `is_file`
+/// walk cannot reproduce `execvp`/`CreateProcessW` (it matches a non-executable file that `execvp`
+/// skips, and its `.exe` rules differ), so any such check drifts from what a run does. Everything
+/// that reports on central — `status`, `doctor` — goes through here.
+///
+/// **R5 contract:** spawns a child process — call via `spawn_blocking` from async code.
+pub fn probe_presence(bin: &Path) -> Presence {
+    match std::process::Command::new(bin).arg("--version").output() {
+        Err(e) => Presence::Unavailable {
+            reason: unspawnable_reason(bin, &e),
+        },
+        Ok(output) => Presence::Present {
+            display: version_line(bin, &output),
+        },
+    }
+}
+
+/// Why `bin` could not be spawned, phrased for a human.
+fn unspawnable_reason(bin: &Path, e: &std::io::Error) -> String {
+    match e.kind() {
+        std::io::ErrorKind::NotFound if is_explicit_path(bin) => "does not exist".to_string(),
+        std::io::ErrorKind::NotFound => "not found on PATH".to_string(),
+        std::io::ErrorKind::PermissionDenied => "not executable".to_string(),
+        _ => e.to_string(),
+    }
+}
+
+/// `--version`'s first non-empty stdout line, falling back to the path when the binary ran but said
+/// nothing usable (or exited non-zero).
+fn version_line(bin: &Path, output: &std::process::Output) -> String {
+    let fallback = || bin.display().to_string();
+    if !output.status.success() {
+        return fallback();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(fallback)
+}
+
+/// What [`stop`] did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StopOutcome {
+    /// `central proxy stop` ran and reported success.
+    Stopped,
+    /// central could not be spawned at all, so there was nothing to stop. `reason` says why.
+    Unavailable { reason: String },
+    /// central ran but reported failure. The exit code is passed through UNINTERPRETED: which code
+    /// central uses for a not-running daemon is unverified, and guessing would swallow a genuine
+    /// stop failure.
+    Failed { code: Option<i32> },
+}
+
+/// Map a failure to SPAWN `bin` into a useful error: a `NotFound` means central is not installed,
+/// which gets [`missing_central_error`]; anything else (permissions, a broken interpreter) is
+/// reported as-is, since it is a real problem with a binary that DOES exist.
+fn spawn_error(bin: &Path, e: std::io::Error, subcommand: &str) -> anyhow::Error {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        return missing_central_error(bin);
+    }
+    anyhow::Error::new(e).context(format!("running {} {subcommand}", bin.display()))
+}
+
 /// The directory name central keeps its state in, under `$HOME`.
 ///
 /// central moved here from `~/.wire` when it was renamed from `jbcentral` at 1.0. The legacy
-/// directory is never consulted: a compat install symlinks this name to it, and an external
-/// central 1.0+ writes here directly. A DOWNLOADED central is 0.x and writes `~/.wire` only,
-/// so Download mode cannot be read — see #34, which removes it.
+/// directory is never consulted: a compat install symlinks this name to it, and central 1.0+
+/// writes here directly.
 pub const STATE_DIR: &str = ".jetbrains-central";
 
 /// `$HOME`, or an error naming the failure (never a guess).
@@ -181,181 +296,11 @@ pub fn existing_config_in(home: &Path) -> anyhow::Result<Option<CentralInfo>> {
     }
 }
 
-/// `…/jbcentral/latest/version.txt` — where the live latest version is published (R4).
-pub fn latest_version_url() -> String {
-    format!("{}/jbcentral/latest/version.txt", crate::download::JBCENTRAL_S3_BASE)
-}
-
-/// Pure config-or-default version resolver (no network, R4): the trimmed `cfg_pinned` if non-blank,
-/// else `DEFAULT_JBCENTRAL_VERSION`.
-pub fn pinned_version(cfg_pinned: Option<&str>) -> String {
-    match cfg_pinned.map(str::trim) {
-        Some(v) if !v.is_empty() => v.to_string(),
-        _ => DEFAULT_JBCENTRAL_VERSION.to_string(),
-    }
-}
-
-/// Which binary backs central: an external executable (use-as-is) or the managed
-/// download. The single decision point for External-vs-Download — `executable`
-/// trimmed-non-empty ⇒ External, else Download.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CentralSource {
-    External(PathBuf),
-    Download,
-}
-
-/// Resolve the central source from the configured `executable`.
-pub fn central_source(executable: Option<&str>) -> CentralSource {
-    match executable.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(exe) => CentralSource::External(PathBuf::from(exe)),
-        None => CentralSource::Download,
-    }
-}
-
-/// Parse a `version.txt` body: the first non-blank, trimmed line, which must look like a dotted
-/// version (digits and dots, at least one dot). Anything else is an error so the caller falls back.
-pub fn parse_version_txt(body: &str) -> anyhow::Result<String> {
-    let line = body
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .ok_or_else(|| anyhow!("version.txt is empty"))?;
-    let looks_versiony = line.contains('.') && line.chars().all(|c| c.is_ascii_digit() || c == '.');
-    if !looks_versiony {
-        bail!("version.txt does not contain a dotted version: {line:?}");
-    }
-    Ok(line.to_string())
-}
-
-/// Resolve the jbcentral version to use (R4). If `cfg_pinned` is set (non-blank), use it. Otherwise
-/// GET `<base>/jbcentral/latest/version.txt`, parse the first dotted-version line, and fall back to
-/// `DEFAULT_JBCENTRAL_VERSION` on ANY failure (network, status, parse). `base` is parameterized for
-/// testing; production calls [`resolve_version`].
-///
-/// **R5 contract:** synchronous `reqwest::blocking` GET — call via `spawn_blocking` from async code.
-pub fn resolve_version_from(cfg_pinned: Option<&str>, base: &str) -> String {
-    if let Some(v) = cfg_pinned.map(str::trim) {
-        if !v.is_empty() {
-            return v.to_string();
-        }
-    }
-    let url = format!("{base}/jbcentral/latest/version.txt");
-    let fetch = || -> anyhow::Result<String> {
-        let client = reqwest::blocking::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .context("building reqwest blocking client")?;
-        let body = client
-            .get(&url)
-            .send()
-            .with_context(|| format!("GET {url}"))?
-            .error_for_status()
-            .with_context(|| format!("non-success status from {url}"))?
-            .text()
-            .with_context(|| format!("reading body of {url}"))?;
-        parse_version_txt(&body)
-    };
-    fetch().unwrap_or_else(|_| DEFAULT_JBCENTRAL_VERSION.to_string())
-}
-
-/// Production version resolver: [`resolve_version_from`] against JetBrains' real S3 base.
-///
-/// **R5 contract:** synchronous — call via `spawn_blocking` from async code.
-pub fn resolve_version(cfg_pinned: Option<&str>) -> String {
-    resolve_version_from(cfg_pinned, crate::download::JBCENTRAL_S3_BASE)
-}
-
 // install layout ======================================================================================================
-
-/// The on-disk name of the jbcentral binary for the host OS.
-pub fn jbcentral_binary_name() -> &'static str {
-    if cfg!(windows) {
-        "jbcentral.exe"
-    } else {
-        "jbcentral"
-    }
-}
-
-/// `<cache_root>/bin/{INSTALL_TOOL_DIR}/<version>` — the directory an asset extracts into (R4).
-pub fn install_dir_in(cache_root: &Path, version: &str) -> PathBuf {
-    cache_root.join("bin").join(INSTALL_TOOL_DIR).join(version)
-}
-
-/// Recursively find the jbcentral binary under `dir`. Handles assets that nest the binary one or more
-/// levels deep. Deterministic: directory entries are sorted before descent so the result is stable.
-pub fn find_binary_under(dir: &Path) -> Option<PathBuf> {
-    let target = jbcentral_binary_name();
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(d) = stack.pop() {
-        let mut entries: Vec<PathBuf> = match std::fs::read_dir(&d) {
-            Ok(rd) => rd.flatten().map(|e| e.path()).collect(),
-            Err(_) => continue,
-        };
-        entries.sort();
-        for path in entries {
-            if path.is_dir() {
-                stack.push(path);
-            } else if path.file_name().and_then(|s| s.to_str()) == Some(target) {
-                return Some(path);
-            }
-        }
-    }
-    None
-}
-
-/// Resolve the installed jbcentral binary path for `version` under `cache_root`, scanning the version
-/// dir so BOTH flat (`<dir>/jbcentral`) and nested (`<dir>/jbcentral-<ver>/jbcentral`) layouts return
-/// the real path. `None` if the version dir does not contain the binary. This is the canonical
-/// resolver shared with M10 status/clean.
-pub fn installed_binary_path_in(cache_root: &Path, version: &str) -> Option<PathBuf> {
-    let dir = install_dir_in(cache_root, version);
-    if !dir.is_dir() {
-        return None;
-    }
-    find_binary_under(&dir)
-}
-
-/// True iff the jbcentral binary for `version` is installed under `cache_root` (flat or nested).
-pub fn is_installed_in(cache_root: &Path, version: &str) -> bool {
-    installed_binary_path_in(cache_root, version).is_some()
-}
-
-/// Ensure `jbcentral` of `version` is installed in the managed bin cache; return the path to the
-/// binary. Idempotent: if already present (flat or nested), returns its resolved path without
-/// downloading.
-///
-/// **R5 contract:** synchronous (network + filesystem). Call via `spawn_blocking` from async code.
-pub fn ensure_installed(version: &str) -> anyhow::Result<PathBuf> {
-    let cache_root = paths::cache_dir().context("resolving cache dir")?;
-    if let Some(bin) = installed_binary_path_in(&cache_root, version) {
-        return Ok(bin);
-    }
-
-    let os = download::host_os()?;
-    let arch = download::host_arch()?;
-    let url = download::jbcentral_asset_url(version, os, arch)?;
-
-    let dest = install_dir_in(&cache_root, version);
-    download::download_verify_extract(&url, &dest)
-        .with_context(|| format!("downloading jbcentral {version} for {os}/{arch}"))?;
-
-    let bin = installed_binary_path_in(&cache_root, version)
-        .ok_or_else(|| anyhow!("jbcentral binary not found after extracting {url}"))?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&bin)?.permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&bin, perms)?;
-    }
-
-    Ok(bin)
-}
 
 // login state =========================================================================================================
 
-/// Result of inspecting `jbcentral status` (R20: login truth from status parsing, not "secret present").
+/// Result of inspecting `central status` (R20: login truth from status parsing, not "secret present").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CentralLoginState {
     LoggedIn,
@@ -363,7 +308,7 @@ pub enum CentralLoginState {
     Unknown,
 }
 
-/// Classify a `jbcentral status` run. `code` is the process exit code (`None` if the process was
+/// Classify a `central status` run. `code` is the process exit code (`None` if the process was
 /// killed by a signal). Logged-out is detected by a non-zero exit OR by an authentication-negative
 /// phrase in the output, so we never silently route to Anthropic when login is actually required.
 pub fn classify_login_status(code: Option<i32>, stdout: &str, stderr: &str) -> CentralLoginState {
@@ -393,7 +338,7 @@ pub fn run_status_classified(bin: &Path) -> anyhow::Result<CentralLoginState> {
     let output = std::process::Command::new(bin)
         .arg("status")
         .output()
-        .with_context(|| format!("running {} status", bin.display()))?;
+        .map_err(|e| spawn_error(bin, e, "status"))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     Ok(classify_login_status(output.status.code(), &stdout, &stderr))
@@ -412,7 +357,7 @@ pub fn proxy_stop_argv() -> Vec<String> {
 }
 
 /// Environment overlay for the start command. When a port is requested we set `WIRE_PROXY_PORT` so
-/// jbcentral binds it; otherwise we leave it to jbcentral's default/config.
+/// central binds it; otherwise we leave it to central's default/config.
 pub fn start_env(port: Option<u16>) -> Vec<(String, String)> {
     match port {
         Some(p) => vec![("WIRE_PROXY_PORT".to_string(), p.to_string())],
@@ -513,11 +458,9 @@ pub fn start(bin: &Path, port: Option<u16>) -> anyhow::Result<CentralInfo> {
     for (k, v) in start_env(port) {
         cmd.env(k, v);
     }
-    let status = cmd
-        .status()
-        .with_context(|| format!("running {} proxy start", bin.display()))?;
+    let status = cmd.status().map_err(|e| spawn_error(bin, e, "proxy start"))?;
     if !status.success() {
-        bail!("`jbcentral proxy start` failed (exit {:?})", status.code());
+        bail!("`central proxy start` failed (exit {:?})", status.code());
     }
 
     // central writes the actual port+secret here after the daemon binds; read it (do not guess).
@@ -525,17 +468,21 @@ pub fn start(bin: &Path, port: Option<u16>) -> anyhow::Result<CentralInfo> {
     Ok(info)
 }
 
-/// Stop the central singleton daemon (`jbcentral proxy stop`). Best-effort: a not-running daemon is
-/// treated as already stopped (jbcentral returns non-zero in that case, which is still "stopped").
+/// Stop the central singleton daemon (`central proxy stop`).
+///
+/// Reports what happened rather than deciding: an unspawnable central is `Unavailable` (nothing to
+/// stop), a non-zero exit is `Failed` with the code passed through. central's stderr is inherited,
+/// so its own message reaches the user either way.
 ///
 /// **R5 contract:** synchronous (spawns a child process). Call via `spawn_blocking` from async code.
-pub fn stop(bin: &Path) -> anyhow::Result<()> {
-    let status = std::process::Command::new(bin)
-        .args(proxy_stop_argv())
-        .status()
-        .with_context(|| format!("running {} proxy stop", bin.display()))?;
-    let _ = status;
-    Ok(())
+pub fn stop(bin: &Path) -> anyhow::Result<StopOutcome> {
+    match std::process::Command::new(bin).args(proxy_stop_argv()).status() {
+        Err(e) => Ok(StopOutcome::Unavailable {
+            reason: unspawnable_reason(bin, &e),
+        }),
+        Ok(status) if status.success() => Ok(StopOutcome::Stopped),
+        Ok(status) => Ok(StopOutcome::Failed { code: status.code() }),
+    }
 }
 
 #[cfg(test)]

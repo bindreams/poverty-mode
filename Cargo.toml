@@ -39,7 +39,6 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-
 url = { version = "2.5", features = ["serde"] }
 percent-encoding = "2.3"
 directories = "6.0"
-fs2 = "0.4"
 ulid = "1.2"
 jiff = "0.2"
 regex = "1.12"
@@ -49,9 +48,6 @@ anyhow = "1.0"
 thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-flate2 = "1.1"
-tar = "0.4"
-zip = "8.6"
 tempfile = "3.27"
 headroom-core = { path = "vendor/headroom-core", default-features = false, features = ["transforms-min"] }
 

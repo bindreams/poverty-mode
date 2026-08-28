@@ -677,12 +677,8 @@ use std::path::Path;
 /// asserts the call order, the resolved version, and the port handed to `start`.
 struct FakeCentralOps {
     calls: RefCell<Vec<String>>,
-    /// What `resolve_version` returns (and records the `cfg_pinned` it saw).
-    resolved_version: String,
-    /// Captured `cfg_pinned` passed to `resolve_version`.
-    seen_pinned: RefCell<Option<Option<String>>>,
-    /// Captured `version` passed to `ensure_installed`.
-    seen_install_version: RefCell<Option<String>>,
+    /// Captured `bin` passed to `start` — the guard that the run never pre-resolves it.
+    seen_start_bin: RefCell<Option<PathBuf>>,
     /// Captured `port` passed to `start`.
     seen_start: RefCell<Option<Option<u16>>>,
     /// Captured `port` passed to `health`.
@@ -694,14 +690,12 @@ struct FakeCentralOps {
 }
 
 impl FakeCentralOps {
-    /// A fake scripted with `resolved_version`, the `CentralInfo` `start` returns,
-    /// and whether `health` reports OK. All capture slots start empty.
-    fn new(resolved_version: &str, start_info: CentralInfo, health_ok: bool) -> Self {
+    /// A fake scripted with the `CentralInfo` `start` returns and whether `health` reports OK.
+    /// All capture slots start empty.
+    fn new(start_info: CentralInfo, health_ok: bool) -> Self {
         FakeCentralOps {
             calls: RefCell::new(Vec::new()),
-            resolved_version: resolved_version.to_string(),
-            seen_pinned: RefCell::new(None),
-            seen_install_version: RefCell::new(None),
+            seen_start_bin: RefCell::new(None),
             seen_start: RefCell::new(None),
             seen_health_port: RefCell::new(None),
             start_info,
@@ -711,18 +705,9 @@ impl FakeCentralOps {
 }
 
 impl CentralOps for FakeCentralOps {
-    fn resolve_version(&self, cfg_pinned: Option<&str>) -> String {
-        self.calls.borrow_mut().push("resolve_version".to_string());
-        *self.seen_pinned.borrow_mut() = Some(cfg_pinned.map(str::to_string));
-        self.resolved_version.clone()
-    }
-    fn ensure_installed(&self, version: &str) -> anyhow::Result<PathBuf> {
-        self.calls.borrow_mut().push("ensure_installed".to_string());
-        *self.seen_install_version.borrow_mut() = Some(version.to_string());
-        Ok(PathBuf::from("/fake/jbcentral"))
-    }
-    fn start(&self, _bin: &Path, port: Option<u16>) -> anyhow::Result<CentralInfo> {
+    fn start(&self, bin: &Path, port: Option<u16>) -> anyhow::Result<CentralInfo> {
         self.calls.borrow_mut().push("start".to_string());
+        *self.seen_start_bin.borrow_mut() = Some(bin.to_path_buf());
         *self.seen_start.borrow_mut() = Some(port);
         Ok(self.start_info.clone())
     }
@@ -751,7 +736,6 @@ fn central_rp_full(port: Option<u16>, pinned: Option<&str>, executable: Option<&
 #[test]
 fn ensure_central_started_drives_real_central_pipeline_in_order() {
     let ops = FakeCentralOps::new(
-        "0.2.9",
         CentralInfo {
             port: 41733,
             secret: "s3cr3t".to_string(),
@@ -770,16 +754,9 @@ fn ensure_central_started_drives_real_central_pipeline_in_order() {
             secret: "s3cr3t".to_string()
         }
     );
-    // It drove the real pipeline (NOT the removed M8 bail), in order. Login is no
-    // longer in the run path (assumed); `config set` is gone with `start`.
-    assert_eq!(
-        *ops.calls.borrow(),
-        vec!["resolve_version", "ensure_installed", "start", "health"]
-    );
-    // R4: version is resolved from the entry's pinned_version (live-or-fallback),
-    // then threaded unchanged into install (start no longer takes a version).
-    assert_eq!(ops.seen_pinned.borrow().clone(), Some(Some("9.9.9".to_string())));
-    assert_eq!(ops.seen_install_version.borrow().clone(), Some("0.2.9".to_string()));
+    // It drove the real pipeline, in order. There is no version resolution or install step: central
+    // is external-only, so the configured name goes straight to `start`.
+    assert_eq!(*ops.calls.borrow(), vec!["start", "health"]);
     // The Central entry's port is threaded into `start`; health probes the
     // LIVE daemon's port from the returned CentralInfo (not the requested one).
     assert_eq!(ops.seen_start.borrow().clone(), Some(Some(20000)));
@@ -789,26 +766,27 @@ fn ensure_central_started_drives_real_central_pipeline_in_order() {
 #[test]
 fn ensure_central_started_threads_default_when_unpinned_and_no_port() {
     let ops = FakeCentralOps::new(
-        "0.2.9",
         CentralInfo {
             port: 19516,
             secret: "x".to_string(),
         },
         true,
     );
-    // central-only chain, port: None, pinned_version: None.
+    // central-only chain, port: None, executable unset -> the `central` default.
     let chain = vec![central_rp_with(None, None)];
 
     ensure_central_started_with(&chain, &ops).unwrap();
 
-    assert_eq!(ops.seen_pinned.borrow().clone(), Some(None));
+    assert_eq!(
+        ops.seen_start_bin.borrow().clone(),
+        Some(std::path::PathBuf::from("central"))
+    );
     assert_eq!(ops.seen_start.borrow().clone(), Some(None));
 }
 
 #[test]
 fn ensure_central_started_fails_closed_when_unhealthy() {
     let ops = FakeCentralOps::new(
-        "0.2.9",
         CentralInfo {
             port: 5,
             secret: "x".to_string(),
@@ -837,7 +815,6 @@ fn ensure_central_started_fails_closed_when_unhealthy() {
 #[test]
 fn external_mode_skips_resolve_install_and_login() {
     let ops = FakeCentralOps::new(
-        "0.2.9",
         CentralInfo {
             port: 41733,
             secret: "s".to_string(),
@@ -851,55 +828,6 @@ fn external_mode_skips_resolve_install_and_login() {
 
     // External mode never resolves a version, never installs, never logs in.
     assert_eq!(*ops.calls.borrow(), vec!["start", "health"]);
-}
-
-#[test]
-fn download_mode_resolves_and_installs_but_never_logs_in() {
-    let ops = FakeCentralOps::new(
-        "0.2.9",
-        CentralInfo {
-            port: 41733,
-            secret: "s".to_string(),
-        },
-        true,
-    );
-    // executable unset => Download source: resolve + install, then start.
-    let chain = vec![central_rp_full(None, None, None)];
-
-    ensure_central_started_with(&chain, &ops).expect("download-mode start must succeed");
-
-    let calls = ops.calls.borrow();
-    assert!(calls.contains(&"resolve_version".to_string()), "{calls:?}");
-    assert!(calls.contains(&"ensure_installed".to_string()), "{calls:?}");
-    assert!(calls.contains(&"start".to_string()), "{calls:?}");
-    assert!(calls.contains(&"health".to_string()), "{calls:?}");
-    // Login is assumed; the run path never logs in.
-    assert!(
-        !calls.contains(&"ensure_logged_in".to_string()),
-        "run path must never log in: {calls:?}"
-    );
-}
-
-#[test]
-fn external_mode_ignores_pinned_version() {
-    let ops = FakeCentralOps::new(
-        "0.2.9",
-        CentralInfo {
-            port: 41733,
-            secret: "s".to_string(),
-        },
-        true,
-    );
-    // External AND pinned: the pinned version is ignored (no version resolution).
-    let chain = vec![central_rp_full(None, Some("9.9.9"), Some("jbcentral"))];
-
-    ensure_central_started_with(&chain, &ops).expect("external-mode start must succeed");
-
-    assert!(
-        !ops.calls.borrow().contains(&"resolve_version".to_string()),
-        "External mode must ignore pinned_version: {:?}",
-        ops.calls.borrow()
-    );
 }
 
 // agent_base_for (C1 wire-client composition) =========================================================================
@@ -972,5 +900,26 @@ async fn sigterm_handler_armed_before_agent_spawn() {
     assert!(
         arm < spawn,
         "SIGTERM handler must be armed (tick {arm}) before the agent is spawned (tick {spawn})"
+    );
+}
+
+// the run path must NOT pre-resolve the binary. `Path::is_file()` is not executability, so a
+// resolved-then-spawned path can pick a non-executable file that execvp would have skipped.
+#[test]
+fn run_never_pre_resolves_the_binary() {
+    let chain = vec![central_rp_full(None, None, None)];
+    let ops = FakeCentralOps::new(
+        CentralInfo {
+            port: 19516,
+            secret: "s".to_string(),
+        },
+        true,
+    );
+    ensure_central_started_with(&chain, &ops).unwrap();
+
+    assert_eq!(
+        ops.seen_start_bin.into_inner().as_deref(),
+        Some(std::path::Path::new("central")),
+        "the configured name must reach start verbatim, unresolved"
     );
 }

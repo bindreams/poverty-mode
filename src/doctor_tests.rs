@@ -119,90 +119,75 @@ fn unsupported_targets_are_rejected() {
     assert!(!target_is_supported("linux", "riscv64"));
 }
 
-#[test]
-fn central_asset_available_excludes_windows_arm64() {
-    assert!(central_asset_available("windows", "x86_64"));
-    assert!(central_asset_available("macos", "aarch64"));
-    assert!(central_asset_available("linux", "aarch64"));
-    // The one documented hole.
-    assert!(!central_asset_available("windows", "aarch64"));
-}
-
-/// An absolute path guaranteed to exist and be executable on every platform: the
-/// running test binary itself. `which::which` resolves an explicit path verbatim
-/// when it exists and is executable, so this is a fully hermetic stand-in for a
-/// resolvable external central binary (no dependency on ambient `$PATH`).
+/// A real, runnable fake central: `doctor` now SPAWNS `<exe> --version`, so a stand-in must
+/// actually execute. Built by `build.rs` (never written here — that races exec with `ETXTBSY`).
+/// Hermetic: an explicit path, so it never depends on ambient `$PATH`.
 fn resolvable_executable() -> std::path::PathBuf {
-    std::env::current_exe().expect("test binary path")
+    std::path::PathBuf::from(env!("PM_FAKE_JBCENTRAL_VERSION"))
 }
 
 #[test]
-fn external_mode_skips_asset_warning() {
-    // A resolvable external binary means External mode emits no asset warning
-    // regardless of target.
-    let findings = analyze_central(
-        crate::central::CentralSource::External(resolvable_executable()),
-        "windows",
-        "aarch64",
-    );
-    assert!(!findings.iter().any(|f| f.message.contains("no jbcentral asset")));
-    assert!(findings.is_empty(), "resolvable external binary is quiet: {findings:?}");
+fn resolvable_central_is_quiet_on_every_target() {
+    // Central readiness is a spawn now, so it no longer varies by target.
+    let exe = resolvable_executable();
+    let findings = analyze_central(Some(exe.to_str().unwrap()));
+    assert!(findings.is_empty(), "a resolvable central is quiet: {findings:?}");
 }
 
 #[test]
 fn external_mode_warns_when_executable_unresolvable() {
-    // An external binary that resolves on neither PATH nor the filesystem warns,
-    // but never with the download-path "no jbcentral asset" message.
-    // Use an explicit non-existent path so the test never depends on ambient $PATH.
+    // A binary that resolves on neither PATH nor the filesystem warns. Use an explicit
+    // non-existent path so the test never depends on ambient $PATH.
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("nonexistent-central");
-    let findings = analyze_central(crate::central::CentralSource::External(missing), "linux", "x86_64");
+    let findings = analyze_central(Some(missing.to_str().unwrap()));
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].domain, FindingDomain::Toolchain);
     assert!(findings[0].layer.is_none());
     assert_eq!(findings[0].severity, Severity::Warn);
-    assert!(findings[0].message.contains("not found on PATH or filesystem"));
-    assert!(!findings[0].message.contains("no jbcentral asset"));
-}
-
-#[test]
-fn download_mode_warns_on_missing_asset() {
-    let findings = analyze_central(crate::central::CentralSource::Download, "windows", "aarch64");
-    assert!(findings.iter().any(|f| f.message.contains("no jbcentral asset")));
-}
-
-#[test]
-fn download_mode_quiet_when_asset_available() {
-    let findings = analyze_central(crate::central::CentralSource::Download, "linux", "x86_64");
-    assert!(findings.is_empty(), "got: {findings:?}");
+    assert!(findings[0].message.contains("cannot be run"), "{findings:?}");
+    assert!(findings[0].message.contains("does not exist"), "{findings:?}");
 }
 
 #[test]
 fn assemble_findings_merges_toolchain_and_central() {
-    // The pure assembly seam used by `run_doctor`: no settings layers, an
-    // unsupported target, and Download central on a target with no asset ->
-    // both the unsupported-target Error and the no-asset Warn surface.
-    let findings = assemble_findings(&[], "windows", "aarch64", Ok(crate::central::CentralSource::Download));
-    assert!(findings
-        .iter()
-        .any(|f| f.severity == Severity::Error && f.message.to_lowercase().contains("unsupported")));
-    assert!(findings.iter().any(|f| f.message.contains("no jbcentral asset")));
-}
-
-#[test]
-fn assemble_findings_external_central_no_asset_warning() {
-    // External mode on the windows/aarch64 hole: the unsupported-target finding
-    // still surfaces, but the central asset warning does NOT (External skips it).
+    // The pure assembly seam used by `run_doctor`: no settings layers, an unsupported target, and
+    // an unresolvable central -> both the unsupported-target Error and the central Warn surface.
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("nonexistent-central");
     let findings = assemble_findings(
         &[],
         "windows",
         "aarch64",
-        Ok(crate::central::CentralSource::External(resolvable_executable())),
+        Ok(CentralConfig {
+            executable: Some(missing.to_string_lossy().into_owned()),
+            pinned_version: None,
+        }),
     );
     assert!(findings
         .iter()
         .any(|f| f.severity == Severity::Error && f.message.to_lowercase().contains("unsupported")));
-    assert!(!findings.iter().any(|f| f.message.contains("no jbcentral asset")));
+    assert!(findings.iter().any(|f| f.message.contains("cannot be run")));
+}
+
+#[test]
+fn assemble_findings_resolvable_central_adds_no_central_warning() {
+    // On the windows/aarch64 hole the unsupported-target finding still surfaces, but a resolvable
+    // central contributes nothing.
+    let exe = resolvable_executable();
+    let findings = assemble_findings(
+        &[],
+        "windows",
+        "aarch64",
+        Ok(CentralConfig {
+            executable: Some(exe.to_string_lossy().into_owned()),
+            pinned_version: None,
+        }),
+    );
+    assert!(findings
+        .iter()
+        .any(|f| f.severity == Severity::Error && f.message.to_lowercase().contains("unsupported")));
+    assert!(!findings.iter().any(|f| f.message.contains("cannot be run")));
 }
 
 #[test]
@@ -271,18 +256,6 @@ fn toolchain_finding_empty_for_supported_target_with_asset() {
 }
 
 #[test]
-fn central_finding_for_windows_arm64_download_is_warn_only() {
-    // The central-asset hole (windows/aarch64, no jbcentral asset) now surfaces via
-    // `analyze_central` in Download mode: exactly one Warn finding, no Error.
-    let findings = analyze_central(crate::central::CentralSource::Download, "windows", "aarch64");
-    assert_eq!(findings.len(), 1);
-    assert_eq!(findings[0].severity, Severity::Warn);
-    assert_eq!(findings[0].domain, FindingDomain::Toolchain);
-    assert!(findings[0].layer.is_none());
-    assert!(findings[0].message.contains("no jbcentral asset"));
-}
-
-#[test]
 fn render_findings_groups_errors_before_warnings_and_reports_ok() {
     let none: Vec<Finding> = vec![];
     let out = render_findings(&none);
@@ -310,4 +283,69 @@ fn render_findings_groups_errors_before_warnings_and_reports_ok() {
     assert!(err_pos < warn_pos, "errors must come first: {out}");
     assert!(out.contains("ERROR"));
     assert!(out.contains("WARN"));
+}
+
+// central readiness is a PATH lookup, not an asset check.
+#[test]
+fn doctor_warns_once_when_central_is_missing() {
+    let findings = analyze_central(Some("poverty-mode-no-such-central-xyz"));
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].severity, Severity::Warn);
+    assert_eq!(findings[0].domain, FindingDomain::Toolchain);
+    assert!(findings[0].message.contains("no-such-central-xyz"), "{findings:?}");
+}
+
+#[test]
+fn doctor_is_silent_when_central_resolves() {
+    // A runnable central: silence. Note this must be a REAL executable — `doctor` spawns it.
+    let exe = resolvable_executable();
+    assert!(analyze_central(Some(exe.to_str().unwrap())).is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_warns_when_central_exists_but_cannot_be_executed() {
+    // The case an `is_file` check called ready: present on disk, no execute bit. `doctor` must warn,
+    // because a run would fail.
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let noexec = dir.path().join("central");
+    std::fs::write(&noexec, "#!/bin/sh\ntrue\n").unwrap();
+    std::fs::set_permissions(&noexec, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let findings = analyze_central(Some(noexec.to_str().unwrap()));
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert!(findings[0].message.contains("not executable"), "{findings:?}");
+}
+
+// an inert key must be surfaced, not silently discarded.
+#[test]
+fn doctor_warns_that_pinned_version_is_ignored() {
+    let exe = resolvable_executable();
+    let findings = assemble_findings(
+        &[],
+        "linux",
+        "x86_64",
+        Ok(CentralConfig {
+            executable: Some(exe.to_string_lossy().into_owned()),
+            pinned_version: Some("0.2.9".to_string()),
+        }),
+    );
+    let pinned: Vec<_> = findings
+        .iter()
+        .filter(|f| f.message.contains("pinned_version"))
+        .collect();
+    assert_eq!(pinned.len(), 1, "{findings:?}");
+    assert_eq!(pinned[0].severity, Severity::Warn);
+
+    let quiet = assemble_findings(
+        &[],
+        "linux",
+        "x86_64",
+        Ok(CentralConfig {
+            executable: Some(exe.to_string_lossy().into_owned()),
+            pinned_version: None,
+        }),
+    );
+    assert!(!quiet.iter().any(|f| f.message.contains("pinned_version")), "{quiet:?}");
 }

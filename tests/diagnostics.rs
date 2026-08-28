@@ -13,9 +13,13 @@ fn pm(home: &TempDir) -> Command {
         // Point managed-settings detection at a hermetic (absent) path so a real
         // system managed-settings.json never bleeds into doctor.
         .env("POVERTY_MANAGED_SETTINGS", p.join("managed-settings.json"))
-        // Neutralize a real ~/.claude and ~/.wire bleeding into doctor/status.
+        // Neutralize a real ~/.claude and central state dir bleeding into doctor/status.
         .env("HOME", p)
-        .env("USERPROFILE", p);
+        .env("USERPROFILE", p)
+        // Central is found on PATH, so PATH must be hermetic too: an inherited PATH would make
+        // every central-line assertion depend on whether the machine has central installed.
+        // Tests that need a resolvable central pass an explicit path, which bypasses PATH.
+        .env("PATH", p.join("no-such-bin"));
     cmd
 }
 
@@ -64,23 +68,22 @@ fn seed_central_config(home: &TempDir, settings_body: &str) {
 #[test]
 fn status_runs_and_reports_no_runs_on_clean_machine() {
     let home = TempDir::new().unwrap();
-    // Download-mode config (`executable: null`): status scans the (empty) managed cache
-    // rather than probing an external binary, so a clean machine reads "not installed".
+    // `executable: null` falls back to the `central` default, which is not on the hermetic PATH,
+    // so a clean machine reads "unavailable".
     seed_central_config(&home, "    executable: null\n");
     pm(&home)
         .arg("status")
         .assert()
         .success()
         .stdout(predicate::str::contains("pino (built-in)"))
-        .stdout(predicate::str::contains("central: not installed"))
+        .stdout(predicate::str::contains("central: unavailable"))
         .stdout(predicate::str::contains("no live runs"));
 }
 
 #[test]
 fn status_reports_configured_external_central() {
-    // External-by-default: with `executable` set, status reports the binary's
-    // `--version` first line, not the managed cache. A fake jbcentral keeps this
-    // deterministic regardless of what (if anything) is on the runner's PATH.
+    // With `executable` set to an explicit path, status reports that binary's `--version` first
+    // line. A fake central keeps this deterministic regardless of the runner's PATH.
     let home = TempDir::new().unwrap();
     // `--version` => known line; `status` => exit 1 (logged out). Built once at build time
     // (build.rs) and exec'd, never written here — avoids the write-then-exec ETXTBSY race.
@@ -91,8 +94,8 @@ fn status_reports_configured_external_central() {
         .arg("status")
         .assert()
         .success()
-        .stdout(predicate::str::contains("central: external jbcentral 9.9.9 (fake)"))
-        .stdout(predicate::str::contains("not installed").not());
+        .stdout(predicate::str::contains("central: jbcentral 9.9.9 (fake)"))
+        .stdout(predicate::str::contains("unavailable").not());
 }
 
 #[test]

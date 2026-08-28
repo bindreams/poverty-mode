@@ -166,157 +166,25 @@ fn execute_clean_plan_tolerates_already_absent_paths() {
 }
 
 #[test]
-fn newest_central_binary_resolves_flat_layout() {
-    // Flat layout: <cache>/bin/jbcentral/<ver>/jbcentral.
-    let tmp = tempfile::tempdir().unwrap();
-    let cache = tmp.path().join("cache");
-    let dir = cache.join("bin").join("jbcentral").join("0.2.9");
-    fs::create_dir_all(&dir).unwrap();
-    let flat = dir.join(crate::central::jbcentral_binary_name());
-    fs::write(&flat, b"fake").unwrap();
-
-    assert_eq!(newest_central_binary(&cache).unwrap(), Some(flat));
-}
-
-#[test]
-fn newest_central_binary_resolves_nested_layout() {
-    // Nested layout: <cache>/bin/jbcentral/<ver>/jbcentral-<ver>/jbcentral. A flat-only
-    // lookup misses this, so `clean --stop-central` would falsely report "not installed"
-    // and leave the running singleton up — exactly what the user asked to stop. The
-    // resolver must agree with status (both delegate to central::installed_binary_path_in).
-    let tmp = tempfile::tempdir().unwrap();
-    let cache = tmp.path().join("cache");
-    let nested = cache
-        .join("bin")
-        .join("jbcentral")
-        .join("0.2.9")
-        .join("jbcentral-0.2.9");
-    fs::create_dir_all(&nested).unwrap();
-    let bin = nested.join(crate::central::jbcentral_binary_name());
-    fs::write(&bin, b"fake").unwrap();
-
-    assert_eq!(newest_central_binary(&cache).unwrap(), Some(bin));
-}
-
-#[test]
-fn newest_central_binary_picks_newest_version_semantically() {
-    // 0.2.10 is newer than 0.2.9 — a lexical sort would wrongly pick 0.2.9.
-    let tmp = tempfile::tempdir().unwrap();
-    let cache = tmp.path().join("cache");
-    for ver in ["0.2.9", "0.2.10"] {
-        let dir = cache.join("bin").join("jbcentral").join(ver);
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join(crate::central::jbcentral_binary_name()), b"fake").unwrap();
-    }
-
-    let resolved = newest_central_binary(&cache).unwrap().unwrap();
-    assert!(
-        resolved.to_string_lossy().contains("0.2.10"),
-        "expected newest (0.2.10), got: {}",
-        resolved.display()
-    );
-}
-
-#[test]
-fn newest_central_binary_none_when_not_installed() {
-    let tmp = tempfile::tempdir().unwrap();
-    // No <cache>/bin/jbcentral at all.
-    assert_eq!(newest_central_binary(&tmp.path().join("cache")).unwrap(), None);
-}
-
-#[test]
-fn confirmed_clean_stops_central_even_when_clearing_the_cache() {
-    // R20 regression: `--clear-cache --stop-central` must stop the running daemon.
-    // The central binary lives under the cache; execute_clean_plan wipes the cache.
-    // If the stop step ran AFTER the wipe it would resolve nothing and silently leave
-    // the daemon up. Assert the binary is resolved + stop is invoked BEFORE the wipe,
-    // even though both --clear-cache and --stop-central are set.
-    let tmp = tempfile::tempdir().unwrap();
-    let cache = tmp.path().join("cache");
-    // Seed the central binary inside the cache that --clear-cache will delete.
-    let bindir = cache.join("bin").join("jbcentral").join("0.2.9");
-    fs::create_dir_all(&bindir).unwrap();
-    let binpath = bindir.join(crate::central::jbcentral_binary_name());
-    fs::write(&binpath, b"fake").unwrap();
-
-    let plan = CleanPlan {
-        run_dirs_to_delete: vec![],
-        cache_dir_to_clear: Some(cache.clone()),
-        stop_central: true,
-    };
-
-    let stopped: std::cell::RefCell<Option<PathBuf>> = std::cell::RefCell::new(None);
-    execute_confirmed_clean(
-        &plan,
-        // Real resolver: must find the binary because the cache is still intact here.
-        || newest_central_binary(&cache),
-        |bin| {
-            *stopped.borrow_mut() = Some(bin.to_path_buf());
-            Ok(())
-        },
-    )
-    .unwrap();
-
-    // stop() was called with the resolved binary path...
+fn central_stop_target_is_the_configured_name_unresolved() {
+    // Never a lookup: resolving here would diverge from what actually spawns, and a shadowed
+    // non-executable file on PATH would turn `clean` into a hard failure.
     assert_eq!(
-        stopped.into_inner().as_deref(),
-        Some(binpath.as_path()),
-        "central::stop must be invoked even when --clear-cache also clears the cache"
+        central_stop_target(Some("/opt/jb/central")),
+        PathBuf::from("/opt/jb/central")
     );
-    // ...and only AFTER stop did execute_clean_plan wipe the cache contents.
-    assert!(cache.is_dir(), "cache dir recreated empty");
-    assert!(!binpath.exists(), "cache contents (incl. the binary) cleared");
-}
-
-#[test]
-fn resolve_central_bin_uses_external_executable_verbatim() {
-    // External-by-default regression: with an external central configured, the resolver
-    // returns THAT binary verbatim and never consults the cache. The cache is left empty
-    // on purpose — a cache lookup here would (wrongly) return None and the running external
-    // singleton would be reported "not installed; nothing to stop".
-    let tmp = tempfile::tempdir().unwrap();
-    let cache = tmp.path().join("cache"); // never populated — an external central lives elsewhere
-
-    let resolved = resolve_central_bin(Some("/opt/jb/jbcentral"), &cache).unwrap();
-    assert_eq!(resolved, Some(PathBuf::from("/opt/jb/jbcentral")));
-}
-
-#[test]
-fn resolve_central_bin_falls_back_to_cache_in_download_mode() {
-    // No external executable (Download mode) -> resolve from the managed cache, agreeing
-    // with `status` (both via newest_central_binary). A blank executable is also Download.
-    let tmp = tempfile::tempdir().unwrap();
-    let cache = tmp.path().join("cache");
-    let dir = cache.join("bin").join("jbcentral").join("0.2.9");
-    fs::create_dir_all(&dir).unwrap();
-    let binpath = dir.join(crate::central::jbcentral_binary_name());
-    fs::write(&binpath, b"fake").unwrap();
-
-    for executable in [None, Some(""), Some("   ")] {
-        assert_eq!(
-            resolve_central_bin(executable, &cache).unwrap(),
-            Some(binpath.clone()),
-            "Download mode (executable={executable:?}) must resolve from the cache"
-        );
-    }
-}
-
-#[test]
-fn resolve_central_bin_download_mode_none_when_cache_empty() {
-    // Download mode with nothing installed -> None (the "nothing to stop" case).
-    let tmp = tempfile::tempdir().unwrap();
-    let cache = tmp.path().join("cache");
-    assert_eq!(resolve_central_bin(None, &cache).unwrap(), None);
+    assert_eq!(central_stop_target(Some("  ")), PathBuf::from("central"));
+    assert_eq!(central_stop_target(None), PathBuf::from("central"));
 }
 
 #[test]
 fn stop_central_uses_external_executable_when_resolver_returns_it() {
     // External-by-default regression: with an external central configured, `--stop-central`
     // must stop THAT binary, not a cache lookup. The resolver yields the external path
-    // (skipping the cache entirely), and stop is invoked with it.
+    // verbatim, and stop is invoked with it.
     let tmp = tempfile::tempdir().unwrap();
-    let cache = tmp.path().join("cache"); // never populated — an external central lives elsewhere
-    let external = PathBuf::from("/opt/jb/jbcentral");
+    let external = tmp.path().join("central");
+    std::fs::write(&external, "x").unwrap();
 
     let plan = CleanPlan {
         run_dirs_to_delete: vec![],
@@ -327,18 +195,19 @@ fn stop_central_uses_external_executable_when_resolver_returns_it() {
     let stopped: std::cell::RefCell<Option<PathBuf>> = std::cell::RefCell::new(None);
     execute_confirmed_clean(
         &plan,
-        || resolve_central_bin(Some(external.to_str().unwrap()), &cache),
+        || Ok(central_stop_target(Some(external.to_str().unwrap()))),
         |bin| {
             *stopped.borrow_mut() = Some(bin.to_path_buf());
-            Ok(())
+            Ok(crate::central::StopOutcome::Stopped)
         },
+        || false,
     )
     .unwrap();
 
     assert_eq!(
         stopped.into_inner().as_deref(),
         Some(external.as_path()),
-        "central::stop must be invoked with the external executable, not a cache lookup"
+        "central::stop must be invoked with the explicitly configured executable"
     );
 }
 
@@ -361,6 +230,7 @@ fn confirmed_clean_without_stop_central_never_resolves_or_stops() {
         &plan,
         || panic!("resolver must not run when stop_central is false"),
         |_| panic!("stop must not run when stop_central is false"),
+        || false,
     )
     .unwrap();
 
@@ -409,4 +279,115 @@ fn render_clean_plan_empty_says_nothing_to_do() {
     };
     let out = render_clean_plan(&plan);
     assert!(out.contains("nothing to clean"), "got: {out}");
+}
+
+// `clean --stop-central` reports an unspawnable central instead of failing the whole clean.
+#[test]
+fn clean_reports_absence_without_aborting_the_filesystem_side() {
+    let tmp = tempfile::tempdir().unwrap();
+    let runs = tmp.path().join("runs");
+    std::fs::create_dir_all(&runs).unwrap();
+    let cache = tmp.path().join("cache");
+    std::fs::create_dir_all(&cache).unwrap();
+
+    let plan = build_clean_plan(&runs, &cache, 0, false, true).unwrap();
+    let stopped = std::cell::RefCell::new(false);
+
+    execute_confirmed_clean(
+        &plan,
+        || Ok(PathBuf::from("poverty-mode-no-such-central-xyz")),
+        |_bin| {
+            *stopped.borrow_mut() = true;
+            Ok(crate::central::StopOutcome::Unavailable {
+                reason: "not found on PATH".to_string(),
+            })
+        },
+        || false,
+    )
+    .unwrap();
+
+    assert!(
+        stopped.into_inner(),
+        "stop is always attempted: only the OS can say whether central is spawnable"
+    );
+}
+
+// A genuine stop failure must abort BEFORE the filesystem side: the daemon the user asked to stop is
+// still running, so deleting their runs and cache anyway would compound the problem.
+#[test]
+fn a_failed_stop_aborts_without_deleting_anything() {
+    let tmp = tempfile::tempdir().unwrap();
+    let runs = tmp.path().join("runs");
+    let doomed = runs.join("01HXXXXXXXXXXXXXXXXXXXXXXA");
+    std::fs::create_dir_all(&doomed).unwrap();
+    let cache = tmp.path().join("cache");
+    std::fs::create_dir_all(&cache).unwrap();
+
+    let plan = build_clean_plan(&runs, &cache, 0, true, true).unwrap();
+    let err = execute_confirmed_clean(
+        &plan,
+        || Ok(PathBuf::from("central")),
+        |_bin| Ok(crate::central::StopOutcome::Failed { code: Some(7) }),
+        || false,
+    )
+    .unwrap_err();
+
+    assert!(format!("{err:#}").contains("nothing was deleted"), "{err:#}");
+    assert!(doomed.is_dir(), "run dir must survive a failed stop");
+    assert!(cache.is_dir(), "cache must survive a failed stop");
+}
+
+// An unspawnable central with a LIVE daemon must abort: deleting the user's state while the daemon
+// they asked to stop keeps serving is the worst of both outcomes.
+#[test]
+fn unspawnable_central_with_a_live_daemon_aborts_without_deleting() {
+    let tmp = tempfile::tempdir().unwrap();
+    let runs = tmp.path().join("runs");
+    let doomed = runs.join("01HXXXXXXXXXXXXXXXXXXXXXXA");
+    std::fs::create_dir_all(&doomed).unwrap();
+    let cache = tmp.path().join("cache");
+    std::fs::create_dir_all(&cache).unwrap();
+
+    let plan = build_clean_plan(&runs, &cache, 0, true, true).unwrap();
+    let err = execute_confirmed_clean(
+        &plan,
+        || Ok(PathBuf::from("central")),
+        |_bin| {
+            Ok(crate::central::StopOutcome::Unavailable {
+                reason: "not found on PATH".to_string(),
+            })
+        },
+        || true, // a daemon IS live
+    )
+    .unwrap_err();
+
+    assert!(format!("{err:#}").contains("nothing was deleted"), "{err:#}");
+    assert!(doomed.is_dir(), "run dir must survive");
+    assert!(cache.is_dir(), "cache must survive");
+}
+
+// With no daemon live, an unspawnable central is genuinely nothing to stop: the clean proceeds.
+#[test]
+fn unspawnable_central_with_no_daemon_proceeds() {
+    let tmp = tempfile::tempdir().unwrap();
+    let runs = tmp.path().join("runs");
+    let doomed = runs.join("01HXXXXXXXXXXXXXXXXXXXXXXA");
+    std::fs::create_dir_all(&doomed).unwrap();
+    let cache = tmp.path().join("cache");
+    std::fs::create_dir_all(&cache).unwrap();
+
+    let plan = build_clean_plan(&runs, &cache, 0, true, true).unwrap();
+    execute_confirmed_clean(
+        &plan,
+        || Ok(PathBuf::from("central")),
+        |_bin| {
+            Ok(crate::central::StopOutcome::Unavailable {
+                reason: "not found on PATH".to_string(),
+            })
+        },
+        || false,
+    )
+    .unwrap();
+
+    assert!(!doomed.is_dir(), "run dir should have been pruned");
 }

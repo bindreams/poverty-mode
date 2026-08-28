@@ -11,9 +11,13 @@ cargo build
 cargo test
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all --check
+prek run --all-files
 ```
 
-`cargo test` runs ~500 tests. Tests marked `#[ignore]` are live/empirical gates that need provisioned dependencies (a logged-in `jbcentral`, an installed `claude`) — they are excluded by default and **not** run in CI. To run them with deps in place: `cargo test -- --ignored`. See [tests/EMPIRICAL_GATES.md](tests/EMPIRICAL_GATES.md) for the protocol and recorded results.
+`prek` runs the repo's pre-commit hooks and is part of the gate, not an optional extra: CI's `Lint`
+job runs them, so the four cargo commands can all be green while CI is red.
+
+`cargo test` runs ~640 tests. Tests marked `#[ignore]` are live/empirical gates that need provisioned dependencies (a logged-in `central`, an installed `claude`) — they are excluded by default and **not** run in CI. To run them with deps in place: `cargo test -- --ignored`. See [tests/EMPIRICAL_GATES.md](tests/EMPIRICAL_GATES.md) for the protocol and recorded results.
 
 ## Architecture
 
@@ -28,7 +32,7 @@ src/proxy.rs          the shared async reverse-proxy engine (forward, /__pm/heal
   proxy/pino.rs       transform: prompt-cache breakpoint injection, drop-tools, etc.
   proxy/headroom.rs   transform: context compression via the vendored headroom-core
 src/agent.rs          Agent trait (generic over the wrapped tool); agent/claude.rs is v1
-src/central.rs        JB Central (jbcentral): external-vs-download source, daemon lifecycle; download.rs is generic
+src/central.rs        JB Central: PATH resolution of the external `central`, daemon lifecycle, wire config
 src/config.rs         the $XDG_CONFIG_HOME/poverty-mode.yaml model + chain resolution
 src/paths.rs          dirs, run-ids, atomic writes, advisory file locks
 src/tui.rs            interactive picker; tui/reducer.rs is the pure, headless-tested state
@@ -38,7 +42,7 @@ vendor/headroom-core  vendored, feature-trimmed copy of hybloid/headroom (Apache
 
 **How a chain works.** Each proxy is `(inbound 127.0.0.1 port) + (outbound upstream URL)`. The orchestrator allocates a port per hop and wires `upstream[i] → 127.0.0.1:port[i+1]`; the agent points at the head. The two first-party proxies are the *same* engine differing only in their body transform — adding a v2 proxy means adding a transform, not a server.
 
-**Central.** When `central` is the (always-last) hop, the binary it runs is the `central.executable` setting (default `jbcentral`), resolved through `central::central_source` — the single External-vs-Download decision point. A non-blank value is used as-is (no download, no version resolution); blank/unset downloads the latest `jbcentral` unpinned into the cache — which is currently broken, since that channel serves a 0.x central whose state lives in `~/.wire` and is no longer read (#34 removes the download path in favour of a `PATH` lookup). Either way poverty-mode assumes the user is logged in: it never runs `central config set`, never writes central's config (`~/.jetbrains-central/config.json`), and never drives login. `status`, `doctor`, and `clean --stop-central` all route their binary choice through `central_source` so they agree with the run.
+**Central.** When `central` is the (always-last) hop, the binary it runs is the `central.executable` setting (default `central`), from `central::central_executable`. Central is external-only — poverty-mode never downloads it. The configured name reaches `Command` **unresolved**, so `execvp`/`CreateProcessW` performs the lookup; a `NotFound` spawn error becomes `central::missing_central_error`. **There is exactly one presence check, `central::probe_presence`, and it spawns** (`<exe> --version`). Do not add a second: an `is_file` walk cannot reproduce the OS lookup (it matches a `chmod 000` file that `execvp` skips, and its `.exe` rules differ from std's), and a directory or non-executable file fails with `PermissionDenied` rather than `NotFound`, so anything that treats "not NotFound" as present will report a central that every run then fails on. `status` and `doctor` both go through `probe_presence`. poverty-mode assumes the user is logged in: it never runs `central config set`, never writes central's config (`~/.jetbrains-central/config.json`), and never drives login. `central.pinned_version` is a dead key kept only so an existing config still parses under `deny_unknown_fields`; it is never serialized back, and `doctor` warns when it is set.
 
 ## Conventions
 

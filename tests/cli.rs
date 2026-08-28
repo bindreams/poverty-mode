@@ -32,15 +32,13 @@ fn library_dispatch_is_reachable_for_config_subcommand() {
 // M1.6. They lock in the stub contract so a later milestone wiring a real
 // handler gets an immediate failing test. Not a red->green cycle. ----
 
-/// M10.3 wired `status` to the real handler (R23g): the M3 NotImplemented arm is
-/// gone, so the end-to-end `status` invocation now succeeds. Fully hermetic: an
-/// isolated `XDG_CONFIG_HOME` carries a Download-mode config (`executable: null`) so
-/// status scans the empty `POVERTY_CACHE_DIR` and renders "not installed" without
-/// spawning any external binary; `HOME`/`USERPROFILE` are pinned to the temp dir so
-/// the probe's `~/.wire/config.json` read finds nothing (no real port, no real
+/// End-to-end `status`, fully hermetic: an isolated `XDG_CONFIG_HOME` leaves `executable` unset so
+/// the `central` default is used, and `PATH` is pinned to an empty dir so the spawn reports absence
+/// and "unavailable" renders without running any external binary. `HOME`/`USERPROFILE` point at the
+/// temp dir so the probe's read of central's `config.json` finds nothing (no real port, no real
 /// `/health` call). An empty `POVERTY_LOG_DIR` yields "no live runs".
 ///
-/// The configured-External path is covered hermetically and cross-platform by
+/// The present-central path is covered hermetically and cross-platform by
 /// `tests/diagnostics.rs::status_reports_configured_external_central`.
 #[test]
 fn status_subcommand_runs_and_renders() {
@@ -67,14 +65,17 @@ fn status_subcommand_runs_and_renders() {
         .env("XDG_CONFIG_HOME", &config_home)
         .env("POVERTY_CACHE_DIR", tmp.path().join("cache"))
         .env("POVERTY_LOG_DIR", tmp.path().join("logs"))
-        // Isolate the probe's `~/.wire/config.json` read from the real home.
+        // Isolate the probe's read of central's `config.json` from the real home.
         .env("HOME", tmp.path())
         .env("USERPROFILE", tmp.path())
+        // Central is found on PATH now, so the lookup must be pinned to an empty dir — otherwise
+        // this asserts "not found" only on machines that happen not to have central installed.
+        .env("PATH", tmp.path())
         .assert()
         .success()
         .stdout(contains("pino (built-in)"))
         .stdout(contains("headroom (built-in)"))
-        .stdout(contains("central: not installed"))
+        .stdout(contains("central: unavailable"))
         .stdout(contains("no live runs"));
 }
 
@@ -89,7 +90,19 @@ fn status_subcommand_runs_and_renders() {
 fn doctor_subcommand_runs_and_renders() {
     let tmp = tempfile::tempdir().unwrap();
     let mut cmd = Command::cargo_bin("poverty-mode").unwrap();
-    let output = cmd.arg("doctor").current_dir(tmp.path()).output().unwrap();
+    let output = cmd
+        .arg("doctor")
+        .current_dir(tmp.path())
+        // `doctor` spawns `<central> --version` for its readiness check, so PATH/HOME/config must be
+        // pinned: otherwise this runs the developer's real central against their real home, and the
+        // result depends on whether the machine has central installed.
+        .env("PATH", tmp.path())
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+        .env("POVERTY_MANAGED_SETTINGS", tmp.path().join("managed-settings.json"))
+        .output()
+        .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     // Real diagnostics, not the old NotImplemented stub.
     let stderr = String::from_utf8_lossy(&output.stderr);

@@ -65,8 +65,6 @@ fn run_parses_prefixed_setting_flags_into_overrides() {
         "--headroom-no-compression",
         "--central-port",
         "9000",
-        "--central-pinned-version",
-        "1.2.3",
         "--",
         "claude",
     ])
@@ -82,7 +80,6 @@ fn run_parses_prefixed_setting_flags_into_overrides() {
     assert_eq!(ov.pino.model_override.as_deref(), Some("claude-opus-4-8"));
     assert_eq!(ov.headroom.compression, Some(false));
     assert_eq!(ov.central.port, Some(9000));
-    assert_eq!(ov.central.pinned_version.as_deref(), Some("1.2.3"));
     assert_eq!(ov.pino.strip_ansi, None);
 }
 
@@ -490,7 +487,7 @@ fn proxy_transform_kind_matches_chosen_proxy() {
 // These exercise the safe, hermetic arms of the new dispatch handlers. The env
 // guards (`crate::test_support`) serialize and isolate the config/cache roots so
 // the tests never touch the real user dirs (R13/R23j). The live central paths
-// (daemon start/health/stop against a real `jbcentral`) are covered by `#[ignore]`
+// (daemon start/health/stop against a real `central`) are covered by `#[ignore]`
 // live tests below.
 
 #[test]

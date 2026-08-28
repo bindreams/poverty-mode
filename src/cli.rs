@@ -99,7 +99,7 @@ pub enum Command {
         /// Number of newest run directories to keep.
         #[arg(long, default_value_t = crate::clean::DEFAULT_KEEP_RUNS)]
         keep: usize,
-        /// Also clear the downloaded-binary cache.
+        /// Also clear the cache dir (only holds leftovers from the removed auto-download).
         #[arg(long)]
         clear_cache: bool,
         /// Stop the shared central singleton (disrupts other live sessions; off by default).
@@ -325,9 +325,8 @@ pub struct RunSettingsArgs {
     pub headroom_no_compression: bool,
     #[arg(long = "central-port", value_name = "PORT")]
     pub central_port: Option<u16>,
-    #[arg(long = "central-pinned-version", value_name = "VERSION")]
-    pub central_pinned_version: Option<String>,
-    /// External jbcentral binary to use (path or PATH name). Empty value forces the download fallback.
+    /// The central binary to use: a path, or a bare name resolved on PATH. Empty selects the
+    /// `central` default.
     #[arg(long = "central-executable", value_name = "PATH")]
     pub central_executable: Option<String>,
 }
@@ -368,7 +367,6 @@ impl RunSettingsArgs {
             },
             central: CentralOverride {
                 port: self.central_port,
-                pinned_version: self.central_pinned_version.clone(),
                 executable: self.central_executable.clone(),
             },
         }
@@ -544,16 +542,16 @@ pub fn dispatch(cli: Cli, run_id: Option<String>) -> anyhow::Result<()> {
         Command::Config { action } => dispatch_config(action),
         Command::Status => {
             // `dispatch` is synchronous; `run_status` is async (R5: its blocking
-            // central health/`jbcentral status` probes run off the executor via
+            // central health/`central status` probes run off the executor via
             // `spawn_blocking`). Drive it on a fresh multi-thread runtime, mirroring
             // the `run`/`proxy` arms (R23g: MODIFY the M3 NotImplemented arm).
             let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
             rt.block_on(crate::status::run_status())
         }
         Command::Doctor => {
-            // R23g: MODIFY the M3 NotImplemented arm. `run_doctor` is synchronous
-            // (pure file/settings + toolchain checks); it returns `Ok(false)` when
-            // any Error-severity finding exists, which we map to a non-zero exit.
+            // `run_doctor` is synchronous and blocking (it reads settings files AND spawns
+            // `<central> --version` for the readiness check), which is fine here: `dispatch` is not
+            // async. It returns `Ok(false)` when any Error-severity finding exists -> non-zero exit.
             if !crate::doctor::run_doctor()? {
                 std::process::exit(1);
             }

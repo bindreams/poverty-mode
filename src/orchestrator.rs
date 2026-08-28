@@ -774,11 +774,6 @@ pub async fn run_command(
 /// network, and does blocking health GETs — callers run the whole pipeline via
 /// `tokio::task::spawn_blocking` (see `run_command`).
 trait CentralOps {
-    /// Resolve the jbcentral version to use (R4): the entry's pinned version if
-    /// set, else the live `latest/version.txt` with fallback to the default.
-    fn resolve_version(&self, cfg_pinned: Option<&str>) -> String;
-    /// Ensure `version` is installed; return the binary path.
-    fn ensure_installed(&self, version: &str) -> anyhow::Result<PathBuf>;
     /// Start (or reuse) the daemon, requesting `port`; return the live `CentralInfo`.
     fn start(&self, bin: &std::path::Path, port: Option<u16>) -> anyhow::Result<CentralInfo>;
     /// True iff the daemon at `port` answers `/health`.
@@ -789,12 +784,6 @@ trait CentralOps {
 struct RealCentral;
 
 impl CentralOps for RealCentral {
-    fn resolve_version(&self, cfg_pinned: Option<&str>) -> String {
-        central::resolve_version(cfg_pinned)
-    }
-    fn ensure_installed(&self, version: &str) -> anyhow::Result<PathBuf> {
-        central::ensure_installed(version)
-    }
     fn start(&self, bin: &std::path::Path, port: Option<u16>) -> anyhow::Result<CentralInfo> {
         central::start(bin, port)
     }
@@ -814,12 +803,11 @@ fn ensure_central_started(chain: &[ResolvedProxy]) -> anyhow::Result<CentralInfo
     ensure_central_started_with(chain, &RealCentral)
 }
 
-/// Drive the central-tail pipeline through a [`CentralOps`] seam (R4/R5). The
-/// binary comes from the trailing Central entry's `executable`: an `External`
-/// path is used as-is (no version resolution or install — the pinned version is
-/// ignored), otherwise the version is resolved and the asset is downloaded. Then
-/// `start` runs at the entry's requested port and health-checks the LIVE daemon's
-/// port (fail-closed if it never reports healthy). Login is assumed.
+/// Drive the central-tail pipeline through a [`CentralOps`] seam (R5). The binary is the trailing
+/// Central entry's `executable`, or `central` by default, handed to `start` UNRESOLVED so its
+/// `execvp` lookup decides — pre-resolving here would diverge from what actually executes (see
+/// `central::probe_presence`). Then `start` runs at the entry's requested port and
+/// health-checks the LIVE daemon's port (fail-closed if it never reports healthy). Login is assumed.
 fn ensure_central_started_with(chain: &[ResolvedProxy], ops: &dyn CentralOps) -> anyhow::Result<CentralInfo> {
     // Caller invariant: only reached when central is the tail (see `run_command`).
     let central_settings = match chain.last().map(|p| &p.settings) {
@@ -830,16 +818,7 @@ fn ensure_central_started_with(chain: &[ResolvedProxy], ops: &dyn CentralOps) ->
         }
     };
     let port = central_settings.port;
-    let bin = match central::central_source(central_settings.executable.as_deref()) {
-        central::CentralSource::External(p) => p,
-        central::CentralSource::Download => {
-            // R4: resolve the version (live latest-or-fallback unless pinned), then
-            // install that exact asset. External mode never reaches here, so its
-            // pinned version is ignored by design.
-            let version = ops.resolve_version(central_settings.pinned_version.as_deref());
-            ops.ensure_installed(&version)?
-        }
-    };
+    let bin = central::central_executable(central_settings.executable.as_deref());
     let info = ops.start(&bin, port)?;
     if !ops.health(info.port) {
         anyhow::bail!("JB Central started but /health did not report healthy");

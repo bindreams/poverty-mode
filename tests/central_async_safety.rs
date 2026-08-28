@@ -5,11 +5,17 @@ use poverty_mode::central;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn blocking_surface_is_spawn_blocking_safe() {
-    // resolve_version_from: blocking GET against a dead base -> falls back to DEFAULT (no panic).
-    let v = tokio::task::spawn_blocking(|| central::resolve_version_from(None, "http://127.0.0.1:1"))
-        .await
-        .unwrap();
-    assert_eq!(v, central::DEFAULT_JBCENTRAL_VERSION);
+    // health: blocking GET against a dead port -> false, no panic on the executor.
+    let healthy = tokio::task::spawn_blocking(|| central::health(1)).await.unwrap();
+    assert!(!healthy, "nothing is listening on port 1");
+
+    // probe_presence: spawns a child process, the heaviest blocking call in the module.
+    let presence = tokio::task::spawn_blocking(|| {
+        central::probe_presence(std::path::Path::new("poverty-mode-no-such-central-xyz"))
+    })
+    .await
+    .unwrap();
+    assert!(matches!(presence, central::Presence::Unavailable { .. }));
 
     // Pure parsers/classifiers are trivially safe but are exercised through spawn_blocking too, to
     // document the uniform contract the orchestrator follows for the whole module.
