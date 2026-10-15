@@ -49,7 +49,7 @@ thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tempfile = "3.27"
-headroom-core = { path = "vendor/headroom-core", default-features = false, features = ["transforms-min"] }
+headroom-core = { git = "https://github.com/headroomlabs-ai/headroom", rev = "76133cff59b71284399bf760c5578dc373c97231", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

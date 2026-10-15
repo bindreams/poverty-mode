@@ -5,8 +5,8 @@
   "platformAutomerge": true,
   "packageRules": [
     {
-      "description": "Don't update the vendored, feature-trimmed headroom-core (must not regain ONNX/embedding deps).",
-      "matchFileNames": ["vendor/**"],
+      "description": "headroom-core is pinned by rev; bumps need a manual review of its `ml` feature gating.",
+      "matchPackageNames": ["headroom-core"],
       "enabled": false
     },
     {

@@ -30,14 +30,13 @@ src/orchestrator.rs   resolve the chain, build it back-to-front, run the agent, 
   orchestrator/teardown.rs   cross-platform child group that survives parent death (unsafe FFI)
 src/proxy.rs          the shared async reverse-proxy engine (forward, /__pm/health, drain)
   proxy/pino.rs       transform: prompt-cache breakpoint injection, drop-tools, etc.
-  proxy/headroom.rs   transform: context compression via the vendored headroom-core
+  proxy/headroom.rs   transform: context compression via headroom-core (upstream git dep)
 src/agent.rs          Agent trait (generic over the wrapped tool); agent/claude.rs is v1
 src/central.rs        JB Central: PATH resolution of the external `central`, daemon lifecycle, wire config
 src/config.rs         the $XDG_CONFIG_HOME/poverty-mode.yaml model + chain resolution
 src/paths.rs          dirs, run-ids, atomic writes, advisory file locks
 src/tui.rs            interactive picker; tui/reducer.rs is the pure, headless-tested state
 src/status.rs doctor.rs clean.rs   diagnostics/maintenance commands
-vendor/headroom-core  vendored, feature-trimmed copy of hybloid/headroom (Apache-2.0)
 ```
 
 **How a chain works.** Each proxy is `(inbound 127.0.0.1 port) + (outbound upstream URL)`. The orchestrator allocates a port per hop and wires `upstream[i] → 127.0.0.1:port[i+1]`; the agent points at the head. The two first-party proxies are the *same* engine differing only in their body transform — adding a v2 proxy means adding a transform, not a server.
@@ -51,6 +50,6 @@ vendor/headroom-core  vendored, feature-trimmed copy of hybloid/headroom (Apache
 - **No data races, no time-based synchronization.** Readiness is a blocking READY-line read plus a health probe; shutdown drains in-flight work. The only permitted numeric timeout is a human-surfaced failure bound on an external event (e.g. `READINESS_DEADLINE`).
 - **Byte-fidelity matters.** The proxy must not gratuitously re-serialize request bodies — that re-canonicalizes the cache-hot zone and defeats the prompt cache. A transform that changes nothing forwards the original bytes verbatim.
 - **Cross-platform.** Targets Windows, macOS, Linux. Some teardown/permission tests are `#[cfg(unix)]` and only run on POSIX (CI's matrix covers them). No OS service installation.
-- **License.** Dual MIT OR Apache-2.0. Keep `vendor/headroom-core`'s `LICENSE`/`NOTICE` (Apache-2.0 attribution) intact; do not pull its ONNX/embedding dependencies back in (they are feature-gated out).
+- **License.** Dual MIT OR Apache-2.0. `headroom-core` (Apache-2.0) is an upstream git dep; keep `default-features = false` so its ONNX/embedding dependencies stay out.
 
 Commit messages are single-line.

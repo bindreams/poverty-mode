@@ -2,7 +2,6 @@
 # See https://prek.j178.dev for more information.
 #:schema https://www.schemastore.org/prek.json
 
-exclude = "^vendor/"
 default_install_hook_types = ["pre-commit", "commit-msg"]
 
 # Local hooks ==========================================================================================================
