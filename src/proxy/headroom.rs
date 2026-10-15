@@ -4,6 +4,29 @@ use serde::{Deserialize, Serialize};
 
 use crate::proxy::{BodyTransform, RequestContext};
 
+/// Env var upstream headroom reads (latched at first dispatch) to disable
+/// dispatch arms by content type.
+pub const DISABLE_ARMS_ENV: &str = "HEADROOM_LIVE_ZONE_DISABLE_ARMS";
+
+/// Arm kept off: upstream's source-code arm elides function bodies with no
+/// retrieval marker, so the agent would reason over code it never saw.
+const SOURCE_CODE_ARM: &str = "source_code";
+
+/// `existing` (the inherited [`DISABLE_ARMS_ENV`] value) with the source-code arm
+/// guaranteed present; other disabled arms the user chose are kept.
+pub fn disable_arms_with_source_code(existing: Option<&str>) -> String {
+    let mut tokens: Vec<&str> = existing
+        .unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .collect();
+    if !tokens.contains(&SOURCE_CODE_ARM) {
+        tokens.push(SOURCE_CODE_ARM);
+    }
+    tokens.join(",")
+}
+
 /// headroom transform settings (config + CLI). FILLED behavior lands in M5; this
 /// shape is never redefined.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -563,3 +563,25 @@ fn transform_bytes_reads_model_from_body_for_tokenizer_gate() {
         "transform_bytes must dispatch with body[\"model\"], not DEFAULT_MODEL"
     );
 }
+
+#[test]
+fn disable_arms_adds_source_code_when_unset() {
+    assert_eq!(super::disable_arms_with_source_code(None), "source_code");
+    assert_eq!(super::disable_arms_with_source_code(Some("")), "source_code");
+}
+
+#[test]
+fn disable_arms_keeps_user_arms_and_appends_source_code() {
+    assert_eq!(
+        super::disable_arms_with_source_code(Some("plain_text, log")),
+        "plain_text,log,source_code"
+    );
+}
+
+#[test]
+fn disable_arms_is_idempotent() {
+    assert_eq!(
+        super::disable_arms_with_source_code(Some("source_code,log")),
+        "source_code,log"
+    );
+}
