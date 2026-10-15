@@ -522,6 +522,17 @@ pub fn dispatch(cli: Cli, run_id: Option<String>) -> anyhow::Result<()> {
             std::process::exit(status.code().unwrap_or(1));
         }
         Command::Proxy(args) => {
+            // Keep upstream headroom's lossy source-code arm off. The switch is read
+            // from the process env at first dispatch, so it must be set before any
+            // thread exists: nothing has spawned one yet (no runtime, no death
+            // watcher), which is what makes `set_var` sound here.
+            if args.which == ProxyName::Headroom {
+                let inherited = std::env::var(proxy::headroom::DISABLE_ARMS_ENV).ok();
+                std::env::set_var(
+                    proxy::headroom::DISABLE_ARMS_ENV,
+                    proxy::headroom::disable_arms_with_source_code(inherited.as_deref()),
+                );
+            }
             // Test-only fail-closed shim: a child whose OWN env has
             // PM_TEST_FAIL_PROXY=1 exits 1 before binding, so the orchestrator's
             // readiness path is deterministically testable. The orchestrator sets

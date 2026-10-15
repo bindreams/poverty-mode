@@ -6,7 +6,7 @@
   "packageRules": [
     {
       "description": "headroom-core is pinned by rev; bumps need a manual review of its `ml` feature gating.",
-      "matchPackageNames": ["headroom-core"],
+      "matchDepNames": ["headroom-core"],
       "enabled": false
     },
     {
