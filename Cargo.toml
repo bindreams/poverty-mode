@@ -40,7 +40,7 @@ url = { version = "2.5", features = ["serde"] }
 percent-encoding = "2.3"
 directories = "6.0"
 ulid = "1.2"
-jiff = "0.2"
+jiff = "1.0"
 regex = "1.12"
 ratatui = "0.30"
 crossterm = "0.29"
